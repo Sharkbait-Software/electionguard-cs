@@ -1,19 +1,17 @@
 using System.Numerics;
-using System.Security.Cryptography;
 
 namespace ElectionGuard.Core;
 
 /// <summary>
 /// §3.1.1 Integer mod large prime p
 /// </summary>
-public class IntegerModP
+public struct IntegerModP : IEquatable<IntegerModP>
 {
-    public IntegerModP(BigInteger i, BigInteger p)
+    public IntegerModP(BigInteger i)
     {
-        _p = p;
-        if (i > p || i < 0)
+        if (i > EGParameters.CryptographicParameters.P || i < 0)
         {
-            _i = i.Mod(p);
+            _i = i.Mod(EGParameters.CryptographicParameters.P);
         }
         else
         {
@@ -21,12 +19,23 @@ public class IntegerModP
         }
     }
 
+    public IntegerModP(byte[] bytes) : this(new BigInteger(bytes, true, true))
+    {
+
+    }
+
     private readonly BigInteger _i;
-    private readonly BigInteger _p;
 
     public byte[] ToByteArray()
     {
-        return _i.ToByteArray(true, true);
+        byte[] bytes = _i.ToByteArray(true, true);
+
+        if (bytes.Length < 512)
+        {
+            bytes = bytes.PadToLength(512);
+        }
+
+        return bytes;
     }
 
     public BigInteger ToBigInteger()
@@ -46,22 +55,57 @@ public class IntegerModP
 
     public static IntegerModP operator +(IntegerModP a, IntegerModP b)
     {
-        return new IntegerModP(a._i + b._i, a._p);
+        return new IntegerModP(a._i + b._i);
     }
 
     public static IntegerModP operator -(IntegerModP a, IntegerModP b)
     {
-        return new IntegerModP(a._i - b._i, a._p);
+        return new IntegerModP(a._i - b._i);
     }
 
     public static IntegerModP operator *(IntegerModP a, IntegerModP b)
     {
-        return new IntegerModP(a._i * b._i, a._p);
+        return new IntegerModP(a._i * b._i);
     }
 
     public static IntegerModP PowModP(IntegerModP value, IntegerModQ exponent)
     {
-        BigInteger result = BigInteger.ModPow(value, exponent, value._p);
-        return new IntegerModP(result, value._p);
+        return PowModP((BigInteger)value, exponent);
+    }
+
+    public static IntegerModP PowModP(BigInteger value, IntegerModQ exponent)
+    {
+        BigInteger result = BigInteger.ModPow(value, exponent, EGParameters.CryptographicParameters.P);
+        return new IntegerModP(result);
+    }
+
+    public override bool Equals(object? obj)
+    {
+        if (obj is IntegerModP i)
+        {
+            return Equals(i);
+        }
+
+        return false;
+    }
+
+    public override int GetHashCode()
+    {
+        return _i.GetHashCode();
+    }
+
+    public bool Equals(IntegerModP other)
+    {
+        return _i == other._i;
+    }
+
+    public static bool operator ==(IntegerModP a, IntegerModP b)
+    {
+        return a.Equals(b);
+    }
+
+    public static bool operator !=(IntegerModP a, IntegerModP b)
+    {
+        return !a.Equals(b);
     }
 }

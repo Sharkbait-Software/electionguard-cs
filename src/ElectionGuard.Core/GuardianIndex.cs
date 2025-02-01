@@ -1,5 +1,3 @@
-using System;
-
 namespace ElectionGuard.Core;
 
 public class GuardianIndex

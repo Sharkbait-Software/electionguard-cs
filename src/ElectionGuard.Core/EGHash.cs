@@ -34,23 +34,12 @@ public static class EGHash
             throw new ArgumentException("First value should always have a length of 32.", nameof(key));
         }
 
-        int bytesLength = bytes.Sum(b => b.Length);
-        byte[] concatBytes = new byte[bytesLength];
-
-        int destinationOffset = 0;
-        foreach (byte[] b in bytes)
-        {
-            Buffer.BlockCopy(b, 0, concatBytes, destinationOffset, b.Length);
-            destinationOffset += b.Length;
-        }
-
-        return HMACSHA256.HashData(key, concatBytes);
+        return HMACSHA256.HashData(key, ByteArrayExtensions.Concat(bytes));
     }
 
-    public static BigInteger HashMod(byte[] key, BigInteger mod, params byte[][] bytes)
+    public static IntegerModQ HashModQ(byte[] key, params byte[][] bytes)
     {
         byte[] b = Hash(key, bytes);
-        BigInteger bi = new BigInteger(b, true, true);
-        return bi.Mod(mod);
+        return new IntegerModQ(b);
     }
 }

@@ -39,7 +39,30 @@ public static class ByteArrayExtensions
         return new BigInteger(bytes, true, true);
     }
 
+    public static byte[] Concat(params byte[][] bytes)
+    {
+        byte[] result = new byte[bytes.Sum(b => b.Length)];
+        int resultOffset = 0;
 
+        for(int i = 0; i < bytes.Length; ++i)
+        {
+            Buffer.BlockCopy(bytes[i], 0, result, resultOffset, bytes[i].Length);
+            resultOffset += bytes[i].Length;
+        }
+        return result;
+    }
+
+    public static byte[] PadToLength(this byte[] bytes, int length)
+    {
+        if(bytes.Length > length)
+        {
+            throw new Exception("Asked to pad an array to a length less than array.");
+        }
+
+        byte[] result = new byte[length];
+        Buffer.BlockCopy(bytes, 0, result, 0, bytes.Length);
+        return result;
+    }
 }
 
 public static class IntExtensions

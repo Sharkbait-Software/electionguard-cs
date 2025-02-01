@@ -5,14 +5,13 @@ namespace ElectionGuard.Core;
 /// <summary>
 /// §3.1.1 Integer mod small prime q
 /// </summary>
-public class IntegerModQ
+public struct IntegerModQ : IEquatable<IntegerModQ>
 {
-    public IntegerModQ(BigInteger i, BigInteger q)
+    public IntegerModQ(BigInteger i)
     {
-        _q = q;
-        if (i > q || i < 0)
+        if (i > EGParameters.CryptographicParameters.Q || i < 0)
         {
-            _i = i.Mod(q);
+            _i = i.Mod(EGParameters.CryptographicParameters.Q);
         }
         else
         {
@@ -20,22 +19,23 @@ public class IntegerModQ
         }
     }
 
-    public IntegerModQ(byte[] bytes, BigInteger q)
+    public IntegerModQ(byte[] bytes) : this(new BigInteger(bytes, true, true))
     {
-        _q = q;
-        _i = new BigInteger(bytes, true, true);
-        if (_i > q || _i < 0)
-        {
-            _i = _i.Mod(q);
-        }
+
     }
 
     private readonly BigInteger _i;
-    private readonly BigInteger _q;
 
     public byte[] ToByteArray()
     {
-        return _i.ToByteArray(true, true);
+        byte[] bytes = _i.ToByteArray(true, true);
+        
+        if(bytes.Length < 32)
+        {
+            bytes = bytes.PadToLength(32);
+        }
+
+        return bytes;
     }
 
     public BigInteger ToBigInteger()
@@ -45,12 +45,12 @@ public class IntegerModQ
 
     public static IntegerModQ Pow(IntegerModQ value, int exponent)
     {
-        return new IntegerModQ(BigInteger.Pow(value, exponent), value._q);
+        return new IntegerModQ(BigInteger.Pow(value, exponent));
     }
 
-    public static IntegerModQ Pow(int value, int exponent, IntegerModQ q)
+    public static IntegerModQ Pow(int value, int exponent)
     {
-        return new IntegerModQ(BigInteger.Pow(value, exponent), q);
+        return new IntegerModQ(BigInteger.Pow(value, exponent));
     }
 
     public static implicit operator byte[](IntegerModQ i)
@@ -65,16 +65,46 @@ public class IntegerModQ
 
     public static IntegerModQ operator +(IntegerModQ a, IntegerModQ b)
     {
-        return new IntegerModQ(a._i + b._i, a._q);
+        return new IntegerModQ(a._i + b._i);
     }
 
     public static IntegerModQ operator -(IntegerModQ a, IntegerModQ b)
     {
-        return new IntegerModQ(a._i - b._i, a._q);
+        return new IntegerModQ(a._i - b._i);
     }
 
     public static IntegerModQ operator *(IntegerModQ a, IntegerModQ b)
     {
-        return new IntegerModQ(a._i * b._i, a._q);
+        return new IntegerModQ(a._i * b._i);
+    }
+
+    public override bool Equals(object? obj)
+    {
+        if (obj is IntegerModQ i)
+        {
+            return Equals(i);
+        }
+
+        return false;
+    }
+
+    public override int GetHashCode()
+    {
+        return _i.GetHashCode();
+    }
+
+    public bool Equals(IntegerModQ other)
+    {
+        return _i == other._i;
+    }
+
+    public static bool operator ==(IntegerModQ a, IntegerModQ b)
+    {
+        return a.Equals(b);
+    }
+
+    public static bool operator !=(IntegerModQ a, IntegerModQ b)
+    {
+        return !a.Equals(b);
     }
 }

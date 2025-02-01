@@ -1,87 +1,73 @@
-using System.Numerics;
-using System.Security.Cryptography;
-
 namespace ElectionGuard.Core;
 
 public class Guardian
 {
-    public Guardian(ElectionGuardCryptoFactory cryptoFactory, GuardianParameters guardianParameters, ParameterBaseHash parameterBaseHash, GuardianIndex index)
+    public Guardian(GuardianIndex index)
     {
-        _cryptoFactory = cryptoFactory;
-        _guardianParameters = guardianParameters;
-        _parameterBaseHash = parameterBaseHash;
-
-        if (index < 0 || index > guardianParameters.N)
+        if (index < 0 || index > EGParameters.GuardianParameters.N)
         {
-            throw new ArgumentOutOfRangeException(nameof(index), $"Guardian index must be between 0 and N ({guardianParameters.N}).");
+            throw new ArgumentOutOfRangeException(nameof(index), $"Guardian index must be between 0 and N ({EGParameters.GuardianParameters.N}).");
         }
 
         Index = index;
     }
 
     public GuardianIndex Index { get; }
+    private GuardianKeys? _keys = null;
 
-    private ElectionGuardCryptoFactory _cryptoFactory;
-    private GuardianParameters _guardianParameters;
-    private ParameterBaseHash _parameterBaseHash;
-
-    public List<KeyPair> _voteEncryptionKeyPairs = new List<KeyPair>();
-    public List<KeyPair> _otherBallotDataKeyPairs = new List<KeyPair>();
-    public KeyPair _communicationKeyPair;
-
-    public Proof VoteEncryptionKeyProof { get; private set; }
-    public Proof OtherDataEncryptionKeyProof { get; private set; }
-
-    public GuardianPublicView PublicDto
-    {
-        get
-        {
-            return new GuardianPublicView
-            {
-                Index = Index,
-                VoteEncryptionPublicKey = _voteEncryptionKeyPairs[0].PublicKey,
-                OtherDataEncryptionPublicKey = _otherBallotDataKeyPairs[0].PublicKey,
-                CommunicationPublicKey = _communicationKeyPair.PublicKey,
-                VoteEncryptionProof = VoteEncryptionKeyProof,
-                OtherDataEncryptionProof = OtherDataEncryptionKeyProof,
-            };
-        }
-    }
-
-    public void GenerateKeys()
+    public GuardianKeys GenerateKeys()
     {
         // The first coefficient/committment is our private / secret key for the guardian.
-        for (int i = 0; i < _guardianParameters.K; i++)
+        List<KeyPair> voteEncryptionKeyPairs = new List<KeyPair>();
+        for (int i = 0; i < EGParameters.GuardianParameters.K; i++)
         {
-            var keyPair = _cryptoFactory.GenerateKeyPair();
-            this._voteEncryptionKeyPairs.Add(keyPair);
+            var keyPair = GenerateKeyPair();
+            voteEncryptionKeyPairs.Add(keyPair);
         }
 
-        for (int i = 0; i < _guardianParameters.K; i++)
+        List<KeyPair> otherBallotDataEncryptionKeyPairs = new List<KeyPair>();
+        for (int i = 0; i < EGParameters.GuardianParameters.K; i++)
         {
-            var keyPair = _cryptoFactory.GenerateKeyPair();
-            this._otherBallotDataKeyPairs.Add(keyPair);
+            var keyPair = GenerateKeyPair();
+            otherBallotDataEncryptionKeyPairs.Add(keyPair);
         }
 
-        this._communicationKeyPair = _cryptoFactory.GenerateKeyPair();
+        var communicationKeyPair = GenerateKeyPair();
 
         // Generate a NIZK proof for voteEncryptionKeys
-        VoteEncryptionKeyProof = GenerateKeyProof(_voteEncryptionKeyPairs, _communicationKeyPair, "pk_vote");
-        OtherDataEncryptionKeyProof = GenerateKeyProof(_otherBallotDataKeyPairs, _communicationKeyPair, "pk_data");
+        var voteEncryptionKeyProof = GenerateKeyProof(voteEncryptionKeyPairs, communicationKeyPair, "pk_vote");
+        var otherBallotDataEncryptionKeyProof = GenerateKeyProof(otherBallotDataEncryptionKeyPairs, communicationKeyPair, "pk_data");
+
+        _keys = new GuardianKeys
+        {
+            Index = Index,
+            VoteEncryptionKeyPairs = voteEncryptionKeyPairs,
+            OtherBallotDataEncryptionKeyPairs = otherBallotDataEncryptionKeyPairs,
+            CommunicationKeyPair = communicationKeyPair,
+            VoteEncryptionKeyProof = voteEncryptionKeyProof,
+            OtherBallotDataEncryptionKeyProof = otherBallotDataEncryptionKeyProof,
+        };
+
+        return _keys;
     }
 
     public List<GuardianEncryptedShare> EncryptShares(List<GuardianPublicView> guardians)
     {
+        if (_keys == null)
+        {
+            throw new Exception("Keys not generated.");
+        }
+
         List<GuardianEncryptedShare> encryptedShares = new List<GuardianEncryptedShare>();
 
         foreach (var guardian in guardians)
         {
-            var keyPair = _cryptoFactory.GenerateKeyPair();
+            var keyPair = GenerateKeyPair();
             IntegerModQ nonce = keyPair.SecretKey;
             IntegerModP alpha = keyPair.PublicKey;
 
             IntegerModP beta = IntegerModP.PowModP(guardian.CommunicationPublicKey, nonce);
-            var symmetricKey = EGHash.Hash(_parameterBaseHash,
+            var symmetricKey = EGHash.Hash(EGParameters.ParameterBaseHash,
                 [0x11],
                 Index,
                 guardian.Index,
@@ -93,16 +79,14 @@ public class Guardian
             (byte[] k1, byte[] k2) = ComputeShareEncryptionKeys(symmetricKey, Index, guardian.Index);
 
             IntegerModP c0 = alpha;
-            var c1a = ComputePolynomial(_voteEncryptionKeyPairs, guardian.Index).ToByteArray().XOR(k1);
-            var c1b = ComputePolynomial(_otherBallotDataKeyPairs, guardian.Index).ToByteArray().XOR(k2);
-            var c1 = new byte[c1a.Length + c1b.Length];
-            Buffer.BlockCopy(c1a, 0, c1, 0, c1a.Length);
-            Buffer.BlockCopy(c1b, 0, c1, c1a.Length, c1b.Length);
+            var c1a = ComputePolynomial(_keys.VoteEncryptionKeyPairs, guardian.Index).ToByteArray().XOR(k1);
+            var c1b = ComputePolynomial(_keys.OtherBallotDataEncryptionKeyPairs, guardian.Index).ToByteArray().XOR(k2);
+            var c1 = ByteArrayExtensions.Concat(c1a, c1b);
 
-            var proof = _cryptoFactory.GenerateKeyPair();
+            var proof = GenerateKeyPair();
             var uBar = proof.SecretKey;
             var gamma = proof.PublicKey;
-            var challengeValue = EGHash.Hash(_parameterBaseHash,
+            var cBar = EGHash.HashModQ(EGParameters.ParameterBaseHash,
                 [0x12],
                 Index,
                 guardian.Index,
@@ -110,8 +94,7 @@ public class Guardian
                 c0,
                 c1
                 );
-            var cBar = new IntegerModQ(challengeValue, _cryptoFactory.Q);
-            var vBar = uBar - (cBar * nonce);
+            var vBar = uBar - cBar * nonce;
 
             var encryptedShareDto = new GuardianEncryptedShare
             {
@@ -128,12 +111,22 @@ public class Guardian
         return encryptedShares;
     }
 
+    public KeyPair GenerateKeyPair()
+    {
+        IntegerModQ secretKey = ElectionGuardRandom.GetIntegerModQ();
+
+        // Public key is g^secretKey mod p
+        IntegerModP publicKey = IntegerModP.PowModP(EGParameters.CryptographicParameters.G, secretKey);
+
+        return new KeyPair(secretKey, publicKey);
+    }
+
     private IntegerModQ ComputePolynomial(List<KeyPair> keyPairs, int destinationGuardianIndex)
     {
-        IntegerModQ sum = new IntegerModQ(0, _cryptoFactory.Q);
-        for (int i = 0; i < keyPairs.Count; i++)
+        IntegerModQ sum = new IntegerModQ(0);
+        for (int j = 0; j < keyPairs.Count; j++)
         {
-            sum += keyPairs[i].SecretKey * IntegerModQ.Pow(destinationGuardianIndex, i, _cryptoFactory.Q);
+            sum += keyPairs[j].SecretKey * IntegerModQ.Pow(destinationGuardianIndex, j);
         }
 
         return sum;
@@ -165,13 +158,18 @@ public class Guardian
 
     public void DecryptShares(List<GuardianEncryptedShare> encryptedShares)
     {
+        if (_keys == null)
+        {
+            throw new Exception("Keys not generated.");
+        }
+
         List<IntegerModQ> voteEncryptionPolynomials = new List<IntegerModQ>();
         List<IntegerModQ> otherDataEncryptionPolynomials = new List<IntegerModQ>();
 
         foreach (var encryptedShare in encryptedShares)
         {
-            var gamma = IntegerModP.PowModP(_cryptoFactory.G, encryptedShare.Response) * IntegerModP.PowModP(new IntegerModP(encryptedShare.C0.AsBigInteger(), _cryptoFactory.P), encryptedShare.Challenge);
-            var challengeValue = EGHash.Hash(_parameterBaseHash,
+            var gamma = IntegerModP.PowModP(EGParameters.CryptographicParameters.G, encryptedShare.Response) * IntegerModP.PowModP(new IntegerModP(encryptedShare.C0), encryptedShare.Challenge);
+            var cBar = EGHash.HashModQ(EGParameters.ParameterBaseHash,
                 [0x12],
                 encryptedShare.SourceIndex,
                 Index,
@@ -179,34 +177,33 @@ public class Guardian
                 encryptedShare.C0,
                 encryptedShare.C1
                 );
-            var cBar = new BigInteger(challengeValue, true, true).Mod(_cryptoFactory.Q);
 
             if (cBar != encryptedShare.Challenge)
             {
                 throw new InvalidOperationException($"Could not decrypt guardian {encryptedShare.SourceIndex} shares.");
             }
 
-            var k = EGHash.HashMod(_parameterBaseHash,
-                _cryptoFactory.Q,
+            var k = EGHash.HashModQ(EGParameters.ParameterBaseHash,
+                EGParameters.CryptographicParameters.Q.ToByteArray(true, true),
                 [0x11],
                 encryptedShare.SourceIndex,
                 encryptedShare.DestinationIndex,
                 gamma,
                 encryptedShare.C0,
                 encryptedShare.C1
-                ).ToByteArray(true, true);
+                ).ToByteArray();
 
             (byte[] k1, byte[] k2) = ComputeShareEncryptionKeys(k, encryptedShare.SourceIndex, encryptedShare.DestinationIndex);
             byte[] pphPolynomials = encryptedShare.C1.XOR(k1.Concat(k2).ToArray());
-            IntegerModQ p = new IntegerModQ(pphPolynomials[..32], _cryptoFactory.Q);
-            IntegerModQ pHat = new IntegerModQ(pphPolynomials[32..], _cryptoFactory.Q);
+            IntegerModQ p = new IntegerModQ(pphPolynomials[..32]);
+            IntegerModQ pHat = new IntegerModQ(pphPolynomials[32..]);
 
             voteEncryptionPolynomials.Add(p);
             otherDataEncryptionPolynomials.Add(pHat);
         }
 
-        voteEncryptionPolynomials.Add(ComputePolynomial(_voteEncryptionKeyPairs, Index));
-        otherDataEncryptionPolynomials.Add(ComputePolynomial(_otherBallotDataKeyPairs, Index));
+        voteEncryptionPolynomials.Add(ComputePolynomial(_keys.VoteEncryptionKeyPairs, Index));
+        otherDataEncryptionPolynomials.Add(ComputePolynomial(_keys.OtherBallotDataEncryptionKeyPairs, Index));
 
 
     }
@@ -214,9 +211,9 @@ public class Guardian
     private Proof GenerateKeyProof(List<KeyPair> keyPairs, KeyPair communicationKeyPair, string encryptionKeyType)
     {
         List<KeyPair> randomKeyPairs = new List<KeyPair>();
-        for (int i = 0; i <= _guardianParameters.K; i++)
+        for (int i = 0; i <= EGParameters.GuardianParameters.K; i++)
         {
-            var random = _cryptoFactory.GenerateKeyPair();
+            var random = GenerateKeyPair();
             randomKeyPairs.Add(random);
         }
 
@@ -232,24 +229,24 @@ public class Guardian
         bytesToHash.Add(communicationKeyPair.PublicKey.ToByteArray());
         bytesToHash.AddRange(randomKeyPairs.Select(x => x.PublicKey.ToByteArray()));
 
-        byte[] challengeHash = EGHash.Hash(_parameterBaseHash, bytesToHash.ToArray());
-        BigInteger challengeValue = new BigInteger(challengeHash, true, true).Mod(_cryptoFactory.Q);
+        byte[] challengeHash = EGHash.Hash(EGParameters.ParameterBaseHash, bytesToHash.ToArray());
+        IntegerModQ challengeValue = new IntegerModQ(challengeHash);
 
-        List<BigInteger> responseValues = new List<BigInteger>();
-        for (int i = 0; i < _guardianParameters.K; i++)
+        List<IntegerModQ> responseValues = new List<IntegerModQ>();
+        for (int i = 0; i < EGParameters.GuardianParameters.K; i++)
         {
-            var responseValue = (randomKeyPairs[i].SecretKey - (challengeValue * keyPairs[i].SecretKey).Mod(_cryptoFactory.Q)).Mod(_cryptoFactory.Q);
+            var responseValue = randomKeyPairs[i].SecretKey - challengeValue * keyPairs[i].SecretKey;
             responseValues.Add(responseValue);
         }
 
-        var communicationResponseValue = (randomKeyPairs[_guardianParameters.K].SecretKey - (challengeValue * communicationKeyPair.SecretKey).Mod(_cryptoFactory.Q)).Mod(_cryptoFactory.Q);
+        var communicationResponseValue = randomKeyPairs[EGParameters.GuardianParameters.K].SecretKey - challengeValue * communicationKeyPair.SecretKey;
         responseValues.Add(communicationResponseValue);
 
         var proof = new Proof
         {
             Challenge = challengeValue,
             Responses = responseValues.ToArray(),
-            RandomPublicValues = randomKeyPairs.Select(x => (BigInteger)x.PublicKey).ToArray(),
+            RandomPublicValues = randomKeyPairs.Select(x => x.PublicKey).ToArray(),
         };
 
         return proof;
@@ -258,26 +255,7 @@ public class Guardian
 
 public record Proof
 {
-    public required BigInteger Challenge { get; init; }
-    public required BigInteger[] Responses { get; init; }
-    public required BigInteger[] RandomPublicValues { get; init; }
-}
-
-public static class BigIntegerRandomNumberGenerator
-{
-    public static BigInteger GetUnsigned(this BigInteger max)
-    {
-        // Naive implementation for now. Generate a random bigint with the correct number of bytes, 
-        // and return it if it is within our requested bounds.
-        // A better implementation would probably carry over insignificant 0 bits at least.
-        while (true)
-        {
-            var randomBytes = RandomNumberGenerator.GetBytes(max.GetByteCount(true));
-            var b = new BigInteger(randomBytes, true, true);
-            if (b < max)
-            {
-                return b;
-            }
-        }
-    }
+    public required IntegerModQ Challenge { get; init; }
+    public required IntegerModQ[] Responses { get; init; }
+    public required IntegerModP[] RandomPublicValues { get; init; }
 }
