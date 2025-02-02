@@ -1,3 +1,4 @@
+using ElectionGuard.Core.Extensions;
 using System.Numerics;
 
 namespace ElectionGuard.Core;
@@ -9,7 +10,7 @@ public struct IntegerModP : IEquatable<IntegerModP>
 {
     public IntegerModP(BigInteger i)
     {
-        if (i > EGParameters.CryptographicParameters.P || i < 0)
+        if (i >= EGParameters.CryptographicParameters.P || i < 0)
         {
             _i = i.Mod(EGParameters.CryptographicParameters.P);
         }
@@ -35,12 +36,33 @@ public struct IntegerModP : IEquatable<IntegerModP>
             bytes = bytes.PadToLength(512);
         }
 
+        if(bytes.Length > 512)
+        {
+            throw new Exception($"Biginteger mod p too big! Length: {bytes.Length}");
+        }
+
         return bytes;
     }
 
     public BigInteger ToBigInteger()
     {
         return _i;
+    }
+
+    public static IntegerModP PowModP(IntegerModP value, IntegerModQ exponent)
+    {
+        return PowModP((BigInteger)value, exponent);
+    }
+
+    public static IntegerModP PowModP(BigInteger value, IntegerModQ exponent)
+    {
+        return PowModP(value, (BigInteger)exponent);
+    }
+
+    public static IntegerModP PowModP(BigInteger value, BigInteger exponent)
+    {
+        BigInteger result = BigInteger.ModPow(value, exponent, EGParameters.CryptographicParameters.P);
+        return new IntegerModP(result);
     }
 
     public static implicit operator byte[](IntegerModP i)
@@ -66,17 +88,6 @@ public struct IntegerModP : IEquatable<IntegerModP>
     public static IntegerModP operator *(IntegerModP a, IntegerModP b)
     {
         return new IntegerModP(a._i * b._i);
-    }
-
-    public static IntegerModP PowModP(IntegerModP value, IntegerModQ exponent)
-    {
-        return PowModP((BigInteger)value, exponent);
-    }
-
-    public static IntegerModP PowModP(BigInteger value, IntegerModQ exponent)
-    {
-        BigInteger result = BigInteger.ModPow(value, exponent, EGParameters.CryptographicParameters.P);
-        return new IntegerModP(result);
     }
 
     public override bool Equals(object? obj)

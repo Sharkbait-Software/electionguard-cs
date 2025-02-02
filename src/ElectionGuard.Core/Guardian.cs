@@ -1,3 +1,5 @@
+using ElectionGuard.Core.Extensions;
+
 namespace ElectionGuard.Core;
 
 public class Guardian
@@ -13,6 +15,7 @@ public class Guardian
     }
 
     public GuardianIndex Index { get; }
+
     private GuardianKeys? _keys = null;
 
     public GuardianKeys GenerateKeys()
@@ -63,10 +66,10 @@ public class Guardian
         foreach (var guardian in guardians)
         {
             var keyPair = GenerateKeyPair();
-            IntegerModQ nonce = keyPair.SecretKey;
+            IntegerModQ epsilon = keyPair.SecretKey;
             IntegerModP alpha = keyPair.PublicKey;
 
-            IntegerModP beta = IntegerModP.PowModP(guardian.CommunicationPublicKey, nonce);
+            IntegerModP beta = IntegerModP.PowModP(guardian.CommunicationPublicKey, epsilon);
             var symmetricKey = EGHash.Hash(EGParameters.ParameterBaseHash,
                 [0x11],
                 Index,
@@ -94,7 +97,7 @@ public class Guardian
                 c0,
                 c1
                 );
-            var vBar = uBar - cBar * nonce;
+            var vBar = uBar - cBar * epsilon;
 
             var encryptedShareDto = new GuardianEncryptedShare
             {
@@ -126,7 +129,7 @@ public class Guardian
         IntegerModQ sum = new IntegerModQ(0);
         for (int j = 0; j < keyPairs.Count; j++)
         {
-            sum += keyPairs[j].SecretKey * IntegerModQ.Pow(destinationGuardianIndex, j);
+            sum += keyPairs[j].SecretKey * IntegerModQ.PowModQ(destinationGuardianIndex, j);
         }
 
         return sum;
@@ -246,7 +249,6 @@ public class Guardian
         {
             Challenge = challengeValue,
             Responses = responseValues.ToArray(),
-            RandomPublicValues = randomKeyPairs.Select(x => x.PublicKey).ToArray(),
         };
 
         return proof;
@@ -257,5 +259,4 @@ public record Proof
 {
     public required IntegerModQ Challenge { get; init; }
     public required IntegerModQ[] Responses { get; init; }
-    public required IntegerModP[] RandomPublicValues { get; init; }
 }

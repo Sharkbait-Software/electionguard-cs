@@ -1,3 +1,5 @@
+using ElectionGuard.Core.Extensions;
+
 namespace ElectionGuard.Core;
 
 public class GuardianIndex

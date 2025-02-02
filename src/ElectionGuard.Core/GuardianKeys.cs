@@ -14,8 +14,8 @@ public class GuardianKeys
         return new GuardianPublicView
         {
             Index = Index,
-            VoteEncryptionPublicKey = VoteEncryptionKeyPairs[0].PublicKey,
-            OtherDataEncryptionPublicKey = OtherBallotDataEncryptionKeyPairs[0].PublicKey,
+            VoteEncryptionCommitments = VoteEncryptionKeyPairs.Select(k => k.PublicKey).ToList(),
+            OtherBallotDataEncryptionCommitments = OtherBallotDataEncryptionKeyPairs.Select(k => k.PublicKey).ToList(),
             CommunicationPublicKey = CommunicationKeyPair.PublicKey,
             VoteEncryptionProof = VoteEncryptionKeyProof,
             OtherDataEncryptionProof = OtherBallotDataEncryptionKeyProof,

@@ -1,18 +1,6 @@
-using System.Buffers.Binary;
-using System.Numerics;
+﻿using System.Numerics;
 
-namespace ElectionGuard.Core;
-
-public static class BigIntegerExtensions
-{
-    // Technically, the % operator is a remainder, not a modulo.
-    // Therefore, it doesn't handle negative numbers correctly. This does.
-    public static BigInteger Mod(this BigInteger a, BigInteger b)
-    {
-        BigInteger r = a % b;
-        return r < 0 ? r + b : r;
-    }
-}
+namespace ElectionGuard.Core.Extensions;
 
 public static class ByteArrayExtensions
 {
@@ -44,7 +32,7 @@ public static class ByteArrayExtensions
         byte[] result = new byte[bytes.Sum(b => b.Length)];
         int resultOffset = 0;
 
-        for(int i = 0; i < bytes.Length; ++i)
+        for (int i = 0; i < bytes.Length; ++i)
         {
             Buffer.BlockCopy(bytes[i], 0, result, resultOffset, bytes[i].Length);
             resultOffset += bytes[i].Length;
@@ -54,23 +42,13 @@ public static class ByteArrayExtensions
 
     public static byte[] PadToLength(this byte[] bytes, int length)
     {
-        if(bytes.Length > length)
+        if (bytes.Length > length)
         {
             throw new Exception("Asked to pad an array to a length less than array.");
         }
 
         byte[] result = new byte[length];
-        Buffer.BlockCopy(bytes, 0, result, 0, bytes.Length);
+        Buffer.BlockCopy(bytes, 0, result, length - bytes.Length, bytes.Length);
         return result;
-    }
-}
-
-public static class IntExtensions
-{
-    public static byte[] ToByteArray(this int i)
-    {
-        byte[] bytes = new byte[4];
-        BinaryPrimitives.WriteInt32BigEndian(bytes, i);
-        return bytes;
     }
 }

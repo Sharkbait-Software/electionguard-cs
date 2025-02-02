@@ -3,8 +3,8 @@ namespace ElectionGuard.Core;
 public class GuardianPublicView
 {
     public required GuardianIndex Index { get; init; }
-    public required IntegerModP VoteEncryptionPublicKey { get; init; }
-    public required IntegerModP OtherDataEncryptionPublicKey { get; init; }
+    public required List<IntegerModP> VoteEncryptionCommitments { get; init; }
+    public required List<IntegerModP> OtherBallotDataEncryptionCommitments { get; init; }
     public required IntegerModP CommunicationPublicKey { get; init; }
     public required Proof VoteEncryptionProof { get; init; }
     public required Proof OtherDataEncryptionProof { get; init; }

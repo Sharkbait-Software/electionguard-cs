@@ -1,3 +1,4 @@
+using ElectionGuard.Core.Extensions;
 using System.Numerics;
 
 namespace ElectionGuard.Core;
@@ -9,7 +10,7 @@ public struct IntegerModQ : IEquatable<IntegerModQ>
 {
     public IntegerModQ(BigInteger i)
     {
-        if (i > EGParameters.CryptographicParameters.Q || i < 0)
+        if (i >= EGParameters.CryptographicParameters.Q || i < 0)
         {
             _i = i.Mod(EGParameters.CryptographicParameters.Q);
         }
@@ -35,6 +36,11 @@ public struct IntegerModQ : IEquatable<IntegerModQ>
             bytes = bytes.PadToLength(32);
         }
 
+        if (bytes.Length > 32)
+        {
+            throw new Exception($"Biginteger mod q too big! Length: {bytes.Length}");
+        }
+
         return bytes;
     }
 
@@ -43,12 +49,12 @@ public struct IntegerModQ : IEquatable<IntegerModQ>
         return _i;
     }
 
-    public static IntegerModQ Pow(IntegerModQ value, int exponent)
+    public static IntegerModQ PowModQ(IntegerModQ value, int exponent)
     {
         return new IntegerModQ(BigInteger.Pow(value, exponent));
     }
 
-    public static IntegerModQ Pow(int value, int exponent)
+    public static IntegerModQ PowModQ(int value, int exponent)
     {
         return new IntegerModQ(BigInteger.Pow(value, exponent));
     }

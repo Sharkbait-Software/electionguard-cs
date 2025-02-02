@@ -1,3 +1,4 @@
+using ElectionGuard.Core.Extensions;
 using System.Numerics;
 using System.Security.Cryptography;
 
