@@ -1,4 +1,4 @@
-namespace ElectionGuard.Core;
+namespace ElectionGuard.Core.KeyGeneration;
 
 public class GuardianKeys
 {
@@ -6,8 +6,8 @@ public class GuardianKeys
     public required List<KeyPair> VoteEncryptionKeyPairs { get; init; }
     public required List<KeyPair> OtherBallotDataEncryptionKeyPairs { get; init; }
     public required KeyPair CommunicationKeyPair { get; init; }
-    public required Proof VoteEncryptionKeyProof { get; init; }
-    public required Proof OtherBallotDataEncryptionKeyProof { get; init; }
+    public required SchnorrProof VoteEncryptionKeyProof { get; init; }
+    public required SchnorrProof OtherBallotDataEncryptionKeyProof { get; init; }
 
     public GuardianPublicView ToPublicView()
     {

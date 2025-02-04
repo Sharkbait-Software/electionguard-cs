@@ -1,4 +1,6 @@
-namespace ElectionGuard.Core;
+using ElectionGuard.Core.Crypto;
+
+namespace ElectionGuard.Core.KeyGeneration;
 
 public class GuardianPublicView
 {
@@ -6,8 +8,8 @@ public class GuardianPublicView
     public required List<IntegerModP> VoteEncryptionCommitments { get; init; }
     public required List<IntegerModP> OtherBallotDataEncryptionCommitments { get; init; }
     public required IntegerModP CommunicationPublicKey { get; init; }
-    public required Proof VoteEncryptionProof { get; init; }
-    public required Proof OtherDataEncryptionProof { get; init; }
+    public required SchnorrProof VoteEncryptionProof { get; init; }
+    public required SchnorrProof OtherDataEncryptionProof { get; init; }
 }
 
 public class GuardianEncryptedShare
@@ -22,4 +24,10 @@ public class GuardianEncryptedShare
 
     // VBar
     public required IntegerModQ Response { get; init; }
+}
+
+public class GuardianSecretShares
+{
+    public required IntegerModQ VoteEncryptionKeyShare { get; init; }
+    public required IntegerModQ OtherBallotDataEncryptionKeyShare { get; init; }
 }

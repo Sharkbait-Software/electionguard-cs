@@ -1,4 +1,4 @@
-namespace ElectionGuard.Core;
+namespace ElectionGuard.Core.Models;
 
 public record Manifest
 {

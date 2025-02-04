@@ -2,7 +2,7 @@ using ElectionGuard.Core.Extensions;
 using System.Numerics;
 using System.Security.Cryptography;
 
-namespace ElectionGuard.Core;
+namespace ElectionGuard.Core.Crypto;
 
 public static class EGHash
 {

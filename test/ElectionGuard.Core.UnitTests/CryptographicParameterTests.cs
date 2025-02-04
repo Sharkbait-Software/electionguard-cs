@@ -1,4 +1,7 @@
-﻿using System.Numerics;
+﻿using ElectionGuard.Core.Extensions;
+using ElectionGuard.Core.KeyGeneration;
+using ElectionGuard.Core.Models;
+using System.Numerics;
 
 namespace ElectionGuard.Core.UnitTests;
 

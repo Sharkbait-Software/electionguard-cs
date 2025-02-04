@@ -1,11 +1,14 @@
 using ElectionGuard.Core.Extensions;
+using ElectionGuard.Core.Models;
+using System.Diagnostics;
 using System.Numerics;
 
-namespace ElectionGuard.Core;
+namespace ElectionGuard.Core.Crypto;
 
 /// <summary>
 /// §3.1.1 Integer mod small prime q
 /// </summary>
+[DebuggerDisplay("{_i}")]
 public struct IntegerModQ : IEquatable<IntegerModQ>
 {
     public IntegerModQ(BigInteger i)
@@ -30,8 +33,8 @@ public struct IntegerModQ : IEquatable<IntegerModQ>
     public byte[] ToByteArray()
     {
         byte[] bytes = _i.ToByteArray(true, true);
-        
-        if(bytes.Length < 32)
+
+        if (bytes.Length < 32)
         {
             bytes = bytes.PadToLength(32);
         }

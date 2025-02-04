@@ -1,7 +1,8 @@
+using ElectionGuard.Core.Models;
 using System.Numerics;
 using System.Security.Cryptography;
 
-namespace ElectionGuard.Core;
+namespace ElectionGuard.Core.Crypto;
 
 public static class ElectionGuardRandom
 {

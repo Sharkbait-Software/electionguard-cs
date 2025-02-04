@@ -1,11 +1,14 @@
 using ElectionGuard.Core.Extensions;
+using ElectionGuard.Core.Models;
+using System.Diagnostics;
 using System.Numerics;
 
-namespace ElectionGuard.Core;
+namespace ElectionGuard.Core.Crypto;
 
 /// <summary>
 /// §3.1.1 Integer mod large prime p
 /// </summary>
+[DebuggerDisplay("{_i}")]
 public struct IntegerModP : IEquatable<IntegerModP>
 {
     public IntegerModP(BigInteger i)
@@ -36,7 +39,7 @@ public struct IntegerModP : IEquatable<IntegerModP>
             bytes = bytes.PadToLength(512);
         }
 
-        if(bytes.Length > 512)
+        if (bytes.Length > 512)
         {
             throw new Exception($"Biginteger mod p too big! Length: {bytes.Length}");
         }

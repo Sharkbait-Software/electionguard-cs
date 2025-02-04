@@ -1,4 +1,6 @@
-namespace ElectionGuard.Core;
+using ElectionGuard.Core.Crypto;
+
+namespace ElectionGuard.Core.KeyGeneration;
 
 public class KeyPair
 {
