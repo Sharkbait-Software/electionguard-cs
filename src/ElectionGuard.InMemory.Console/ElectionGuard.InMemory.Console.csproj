@@ -8,7 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\src\ElectionGuard.Core\ElectionGuard.Core.csproj" />
+    <ProjectReference Include="..\ElectionGuard.Core\ElectionGuard.Core.csproj" />
   </ItemGroup>
 
 </Project>
