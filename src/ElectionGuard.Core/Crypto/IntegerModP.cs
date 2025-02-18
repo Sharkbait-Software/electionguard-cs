@@ -93,6 +93,11 @@ public struct IntegerModP : IEquatable<IntegerModP>
         return new IntegerModP(a._i * b._i);
     }
 
+    public static IntegerModP operator /(IntegerModP a, IntegerModP b)
+    {
+        return new IntegerModP(a._i * PowModP(b, EGParameters.CryptographicParameters.P - 2)._i);
+    }
+
     public override bool Equals(object? obj)
     {
         if (obj is IntegerModP i)
