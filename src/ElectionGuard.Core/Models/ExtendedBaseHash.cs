@@ -14,15 +14,3 @@ public class ExtendedBaseHash : HashValue
 
     protected override byte[] Bytes { get; }
 }
-
-public class SelectionEncryptionIdentifierHash : HashValue
-{
-    public SelectionEncryptionIdentifierHash(ExtendedBaseHash extendedBaseHash, SelectionEncryptionIdentifier identifier)
-    {
-        Bytes = EGHash.Hash(extendedBaseHash,
-            [0x20],
-            identifier);
-    }
-
-    protected override byte[] Bytes { get; }
-}

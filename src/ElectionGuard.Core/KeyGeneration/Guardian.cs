@@ -32,18 +32,18 @@ public class Guardian
         List<KeyPair> voteEncryptionKeyPairs = new List<KeyPair>();
         for (int i = 0; i < EGParameters.GuardianParameters.K; i++)
         {
-            var keyPair = GenerateKeyPair();
+            var keyPair = KeyPair.GenerateRandom();
             voteEncryptionKeyPairs.Add(keyPair);
         }
 
         List<KeyPair> otherBallotDataEncryptionKeyPairs = new List<KeyPair>();
         for (int i = 0; i < EGParameters.GuardianParameters.K; i++)
         {
-            var keyPair = GenerateKeyPair();
+            var keyPair = KeyPair.GenerateRandom();
             otherBallotDataEncryptionKeyPairs.Add(keyPair);
         }
 
-        var communicationKeyPair = GenerateKeyPair();
+        var communicationKeyPair = KeyPair.GenerateRandom();
 
         // Generate a NIZK proof for voteEncryptionKeys
         var voteEncryptionKeyProof = GenerateKeyProof(voteEncryptionKeyPairs, communicationKeyPair, "pk_vote");
@@ -75,7 +75,7 @@ public class Guardian
 
         foreach (var guardian in guardians)
         {
-            var keyPair = GenerateKeyPair();
+            var keyPair = KeyPair.GenerateRandom();
             IntegerModQ epsilon = keyPair.SecretKey;
             IntegerModP alpha = keyPair.PublicKey;
 
@@ -96,7 +96,7 @@ public class Guardian
             var c1b = ComputePolynomial(_keys.OtherBallotDataEncryptionKeyPairs, guardian.Index).ToByteArray().XOR(k2);
             var c1 = ByteArrayExtensions.Concat(c1a, c1b);
 
-            var proof = GenerateKeyPair();
+            var proof = KeyPair.GenerateRandom();
             var uBar = proof.SecretKey;
             var gamma = proof.PublicKey;
             var cBar = EGHash.HashModQ(EGParameters.ParameterBaseHash,
@@ -263,16 +263,6 @@ public class Guardian
         }
     }
 
-    private KeyPair GenerateKeyPair()
-    {
-        IntegerModQ secretKey = ElectionGuardRandom.GetIntegerModQ();
-
-        // Public key is g^secretKey mod p
-        IntegerModP publicKey = IntegerModP.PowModP(EGParameters.CryptographicParameters.G, secretKey);
-
-        return new KeyPair(secretKey, publicKey);
-    }
-
     private IntegerModQ ComputePolynomial(List<KeyPair> keyPairs, int destinationGuardianIndex)
     {
         return keyPairs.Select((x, j) => new IntegerModQ(x.SecretKey * BigInteger.Pow(destinationGuardianIndex, j))).Sum();
@@ -307,7 +297,7 @@ public class Guardian
         List<KeyPair> randomKeyPairs = new List<KeyPair>();
         for (int i = 0; i <= EGParameters.GuardianParameters.K; i++)
         {
-            var random = GenerateKeyPair();
+            var random = KeyPair.GenerateRandom();
             randomKeyPairs.Add(random);
         }
 

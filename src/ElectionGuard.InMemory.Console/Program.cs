@@ -1,6 +1,8 @@
 ﻿// We're going to assume 2/3 guardians for now.
+using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.KeyGeneration;
 using ElectionGuard.Core.Models;
+using System.Text.Json;
 
 CryptographicParameters cryptographicParameters = new CryptographicParameters();
 GuardianParameters guardianParameters = new GuardianParameters();
@@ -56,7 +58,38 @@ try
         guardian.Verify(guardianRecord);
     }
 
-    Console.WriteLine("Writing out encryption package.");
+    // Write out guardian record
+    Console.WriteLine("Writing out guardian record.");
+    var serializedGuardianRecord = JsonSerializer.Serialize(guardianRecord);
+    File.WriteAllBytes(Path.Combine(outputDirectory, "guardian-record.json"), System.Text.Encoding.UTF8.GetBytes(serializedGuardianRecord));
+
+    // Combine with manifest
+    var manifestBytes = File.ReadAllBytes("../../../../../test/data/famous-names-manifest.json");
+    var manifest = new ManifestFile
+    {
+        Bytes = manifestBytes
+    };
+    var electionBaseHash = new ElectionBaseHash(EGParameters.ParameterBaseHash, manifest);
+    var extendedBaseHash = new ExtendedBaseHash(electionBaseHash, electionPublicKeys);
+
+    // Write out encryption record
+    Console.WriteLine("Writing out encryption record.");
+    var encryptionRecord = new EncryptionRecord
+    {
+        CryptographicParameters = cryptographicParameters,
+        GuardianParameters = guardianParameters,
+        Guardians = guardianKeys,
+        ElectionPublicKeys = electionPublicKeys,
+        ExtendedBaseHash = extendedBaseHash,
+    };
+    var serializedEncryptionRecord = JsonSerializer.Serialize(encryptionRecord);
+    File.WriteAllBytes(Path.Combine(outputDirectory, "encryption-record.json"), System.Text.Encoding.UTF8.GetBytes(serializedEncryptionRecord));
+
+    // Encrypt a ballot
+    BallotEncryptor ballotEncryptor = new BallotEncryptor(encryptionRecord);
+    ballotEncryptor.Encrypt();
+
+    Console.WriteLine("Done.");
 }
 catch (Exception ex)
 {

@@ -1,0 +1,63 @@
+{
+  "electionId": "1",
+  "contests": [
+    {
+      "contestId": "1",
+      "name": "Favorite Historical President",
+      "order": 1,
+      "selectionLimit": 1,
+      "optionSelectionLimit": 1,
+      "choices": [
+        {
+          "choiceId": "1",
+          "name": "George Washington",
+          "order": 1
+        },
+        {
+          "choiceId": "2",
+          "name": "Abraham Lincoln",
+          "order": 2
+        },
+        {
+          "choiceId": "3",
+          "name": "Franklin D. Roosevelt",
+          "order": 3
+        },
+        {
+          "choiceId": "4",
+          "name": "Teddy Roosevelt",
+          "order": 4
+        }
+      ]
+    },
+    {
+      "contestId": "2",
+      "name": "Favorite State",
+      "order": 2,
+      "selectionLimit": 1,
+      "optionSelectionLimit": 1,
+      "choices": [
+        {
+          "choiceId": "6",
+          "name": "Florida",
+          "order": 1
+        },
+        {
+          "choiceId": "7",
+          "name": "New York",
+          "order": 2
+        },
+        {
+          "choiceId": "8",
+          "name": "Pennsylvania",
+          "order": 3
+        },
+        {
+          "choiceId": "9",
+          "name": "California",
+          "order": 4
+        }
+      ]
+    }
+  ]
+}

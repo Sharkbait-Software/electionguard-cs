@@ -3,6 +3,9 @@ using ElectionGuard.Core.Models;
 
 namespace ElectionGuard.Core.Verify;
 
+/// <summary>
+/// Verification 4 (Extended base hash validation)
+/// </summary>
 public class ExtendedBaseHashVerification
 {
     public void Verify(ExtendedBaseHash actual, ElectionBaseHash baseHash, ElectionPublicKeys electionPublicKeys)

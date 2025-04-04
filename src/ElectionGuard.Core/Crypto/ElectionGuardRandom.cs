@@ -1,4 +1,5 @@
 using ElectionGuard.Core.Models;
+using System.Diagnostics;
 using System.Numerics;
 using System.Security.Cryptography;
 
@@ -21,5 +22,10 @@ public static class ElectionGuardRandom
                 return new IntegerModQ(b);
             }
         }
+    }
+
+    public static byte[] GetBytes(int numBytes)
+    {
+        return RandomNumberGenerator.GetBytes(numBytes);
     }
 }

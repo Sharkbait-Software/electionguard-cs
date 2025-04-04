@@ -3,6 +3,9 @@ using ElectionGuard.Core.Models;
 
 namespace ElectionGuard.Core.Verify;
 
+/// <summary>
+/// Verification 5 (Uniqueness of selection encryption identifiers)
+/// </summary>
 public class SelectionEncryptionIdentifierVerification
 {
     public void Verify(List<SelectionEncryptionIdentifier> identifiers)
