@@ -19,4 +19,5 @@ public record EncryptedContest
     public required EncryptedValueWithProofs NullvoteCount { get; init; }
     public required EncryptedValueWithProofs UndervoteCount { get; init; }
     public required EncryptedValueWithProofs WriteInVoteCount { get; init; }
+    public required EncryptedData? ContestData { get; init; }
 }

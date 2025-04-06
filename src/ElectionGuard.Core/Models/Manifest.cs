@@ -5,6 +5,7 @@ public record Manifest
     public required string ElectionId { get; init; }
     public required List<Contest> Contests { get; init; }
     public required List<BallotStyle> BallotStyles { get; init; }
+    public required int OptionalContestDataMaxLength { get; init; }
 }
 
 public record Contest

@@ -98,7 +98,7 @@ public class BallotEncryptor
         }
     }
 
-    private EncryptedBallotNonce EncryptBallotNonce(BallotNonce ballotNonce, SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash)
+    private EncryptedData EncryptBallotNonce(BallotNonce ballotNonce, SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash)
     {
         // 3.3.4
         var keyPair = KeyPair.GenerateRandom();
@@ -124,7 +124,7 @@ public class BallotEncryptor
             c1);
         var response = u - challenge * epsilon;
 
-        return new EncryptedBallotNonce
+        return new EncryptedData
         {
             C0 = c0,
             C1 = c1,
@@ -170,6 +170,12 @@ public class BallotEncryptor
         var underVoteCount = EncryptOptionalField(numUndervotes, manifestContest.SelectionLimit, manifestContest.Index, selectionEncryptionIdentifierHash, ballotNonce);
         var writeInVoteCount = EncryptOptionalField(numWriteins, manifestContest.SelectionLimit, manifestContest.Index, selectionEncryptionIdentifierHash, ballotNonce);
 
+        EncryptedData? encryptedContestData = null;
+        if(contest.ContestData != null)
+        {
+            encryptedContestData = EncryptContestData(contest.ContestData, manifestContest.Index, selectionEncryptionIdentifierHash, ballotNonce);
+        }
+
         return new EncryptedContest
         {
             Id = contest.Id,
@@ -179,6 +185,7 @@ public class BallotEncryptor
             NullvoteCount = nullVoteCount,
             UndervoteCount = underVoteCount,
             WriteInVoteCount = writeInVoteCount,
+            ContestData = encryptedContestData,
         };
     }
 
@@ -316,9 +323,79 @@ public class BallotEncryptor
             [0x01, 0x00]);
         return key;
     }
+
+    private EncryptedData EncryptContestData(string valueToEncrypt, int contestIndex, SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, BallotNonce ballotNonce)
+    {
+        // 3.3.10
+        var bytes = Encoding.UTF8.GetBytes(valueToEncrypt);
+        var encryptionNonce = EGHash.HashModQ(selectionEncryptionIdentifierHash,
+            [0x25],
+            contestIndex.ToByteArray(),
+            ballotNonce);
+
+        var alpha = IntegerModP.PowModP(_encryptionRecord.CryptographicParameters.G, encryptionNonce);
+        var beta = IntegerModP.PowModP(_encryptionRecord.ElectionPublicKeys.OtherBallotDataEncryptionKey, encryptionNonce);
+        var secretKey = EGHash.Hash(selectionEncryptionIdentifierHash,
+            [0x26],
+            contestIndex.ToByteArray(),
+            alpha,
+            beta);
+
+        List<byte[]> encryptedBlocks = new();
+
+        for (int i = 0; i <= bytes.Length; i += 32)
+        {
+            int endOfSpan = i + 32;
+            if(endOfSpan > bytes.Length)
+            {
+                endOfSpan = bytes.Length;
+            }
+
+            var di = bytes[i..endOfSpan];
+            
+            // Right pad any remaining bytes.
+            if(di.Length < 32)
+            {
+                var ndi = new byte[32];
+                di.CopyTo(ndi, 0);
+                di = ndi;
+            }
+
+            var ki = EGHash.Hash(secretKey,
+                i.ToByteArray(),
+                Encoding.UTF8.GetBytes("data_enc_keys"),
+                [0x00],
+                Encoding.UTF8.GetBytes("contest_data"),
+                contestIndex.ToByteArray(),
+                (i * 256).ToByteArray());
+
+            var encryptedBlock = di.XOR(ki);
+            encryptedBlocks.Add(encryptedBlock);
+        }
+
+        var c0 = alpha;
+        var c1 = ByteArrayExtensions.Concat(encryptedBlocks.ToArray());
+
+        var proofKeyPair = KeyPair.GenerateRandom();
+        var challenge = EGHash.HashModQ(selectionEncryptionIdentifierHash,
+            [0x27],
+            contestIndex.ToByteArray(),
+            proofKeyPair.PublicKey,
+            c0,
+            c1);
+        var response = proofKeyPair.SecretKey - challenge * encryptionNonce;
+
+        return new EncryptedData
+        {
+            C0 = c0,
+            C1 = c1,
+            Challenge = challenge,
+            Response = response,
+        };
+    }
 }
 
-public class EncryptedBallotNonce
+public class EncryptedData
 {
     public required byte[] C0 { get; init; }
     public required byte[] C1 { get; init; }

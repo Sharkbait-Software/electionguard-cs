@@ -1,5 +1,6 @@
 {
   "electionId": "1",
+  "optionalContestDataMaxLength": 50,
   "contests": [
     {
       "id": "1",

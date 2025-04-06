@@ -12,6 +12,7 @@ public record BallotContest
     public required string Id { get; init; }
     public required List<BallotChoice> Choices { get; init; }
     public required int NumWriteinsSelected { get; init; }
+    public string? ContestData { get; init; }
 }
 
 public record BallotChoice
