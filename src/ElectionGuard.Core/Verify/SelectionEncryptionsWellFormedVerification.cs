@@ -23,26 +23,26 @@ public class SelectionEncryptionsWellFormedVerification
         }
     }
 
-    private void Verify(EncryptedSelection selection, Contest contest, Choice choice, EncryptionRecord encryptionRecord, EncryptedBallot encryptedBallot)
+    private void Verify(EncryptedValueWithProofs selection, Contest contest, Choice choice, EncryptionRecord encryptionRecord, EncryptedBallot encryptedBallot)
     {
-        if(selection.Proof.Length != contest.OptionSelectionLimit)
+        if(selection.Proofs.Length != contest.OptionSelectionLimit)
         {
             throw new VerificationFailedException("6", $"A challenge/response value was not provided for all possible values of the option selection limit of {contest.OptionSelectionLimit}.");
         }
 
         List<(IntegerModP a, IntegerModP b)> calculatedValues = new();
-        for(int i = 0; i < selection.Proof.Length; i++)
+        for(int i = 0; i < selection.Proofs.Length; i++)
         {
-            var crPair = selection.Proof[i];
+            var crPair = selection.Proofs[i];
 
             VerifyIsInZq(crPair.Challenge, encryptionRecord.CryptographicParameters);
             VerifyIsInZq(crPair.Response, encryptionRecord.CryptographicParameters);
 
             var a = IntegerModP.PowModP(encryptionRecord.CryptographicParameters.G, crPair.Response)
-                * IntegerModP.PowModP(selection.Alpha, crPair.Challenge);
+                * IntegerModP.PowModP(selection.Value.Alpha, crPair.Challenge);
             var w = crPair.Response - i * crPair.Challenge;
             var b = IntegerModP.PowModP(encryptionRecord.ElectionPublicKeys.VoteEncryptionKey, w)
-                * IntegerModP.PowModP(selection.Beta, crPair.Challenge);
+                * IntegerModP.PowModP(selection.Value.Beta, crPair.Challenge);
             calculatedValues.Add((a, b));
         }
 
@@ -50,8 +50,8 @@ public class SelectionEncryptionsWellFormedVerification
                 [0x24],
                 contest.Index.ToByteArray(),
                 choice.Index.ToByteArray(),
-                selection.Alpha,
-                selection.Beta];
+                selection.Value.Alpha,
+                selection.Value.Beta];
         foreach(var val in calculatedValues)
         {
             bytesToHash.Add(val.a);
@@ -60,10 +60,10 @@ public class SelectionEncryptionsWellFormedVerification
 
         var c = EGHash.HashModQ(encryptedBallot.SelectionEncryptionIdentifierHash, bytesToHash.ToArray());
 
-        VerifyIsInZpr(selection.Alpha, encryptionRecord.CryptographicParameters);
-        VerifyIsInZpr(selection.Beta, encryptionRecord.CryptographicParameters);
+        VerifyIsInZpr(selection.Value.Alpha, encryptionRecord.CryptographicParameters);
+        VerifyIsInZpr(selection.Value.Beta, encryptionRecord.CryptographicParameters);
 
-        var sumC = selection.Proof.Select(x => x.Challenge).Sum();
+        var sumC = selection.Proofs.Select(x => x.Challenge).Sum();
         if(sumC != c)
         {
             throw new VerificationFailedException("6.D", "Sum of challenge values did not equal c.");

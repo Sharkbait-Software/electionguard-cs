@@ -21,7 +21,8 @@
                     "id": "4",
                     "selectionValue": 0
                 }
-            ]
+            ],
+            "numWriteinsSelected": 0
         },
         {
             "id": "2",
@@ -42,7 +43,8 @@
                     "id": "9",
                     "selectionValue": 0
                 }
-            ]
+            ],
+            "numWriteinsSelected": 0
         }
     ]
 }

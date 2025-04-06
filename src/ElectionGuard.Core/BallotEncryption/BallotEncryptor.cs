@@ -137,7 +137,24 @@ public class BallotEncryptor
     {
         var encryptedSelections = new List<EncryptedSelection>();
         var manifestContest = _encryptionRecord.Manifest.Contests.Single(x => x.Id == contest.Id);
+        var actualSelectionTotal = contest.Choices.Sum(x => x.SelectionValue);
+        var actualCountOfSelections = contest.Choices.Where(x => x.SelectionValue > 0).Count();
 
+        bool isOvervote = actualSelectionTotal > manifestContest.SelectionLimit;
+        bool isNullVote = contest.Choices.All(x => x.SelectionValue == 0);
+        int numUndervotes = Math.Min(0, manifestContest.SelectionLimit - actualCountOfSelections);
+        int numWriteins = contest.NumWriteinsSelected;
+
+
+        if (isOvervote)
+        {
+            // Overvote. Per spec, we encrypt values of 0.
+            foreach(var choice in contest.Choices)
+            {
+                choice.SelectionValue = 0;
+            }
+        }
+        
         foreach (var choice in contest.Choices)
         {
             var manifestChoice = manifestContest.Choices.Single(x => x.Id == choice.Id);
@@ -145,14 +162,90 @@ public class BallotEncryptor
             encryptedSelections.Add(encryptedSelection);
         }
 
+        var encryptedAggregate = AggregateChoiceValues(encryptedSelections.Select(x => x.Value).ToList());
+        var proofs = GenerateProofs(actualSelectionTotal, manifestContest.SelectionLimit, encryptedAggregate, _encryptionRecord.ElectionPublicKeys, selectionEncryptionIdentifierHash, manifestContest.Index);
+
+        var overVoteCount = EncryptOptionalField(isOvervote ? 1 : 0, 1, manifestContest.Index, selectionEncryptionIdentifierHash, ballotNonce);
+        var nullVoteCount = EncryptOptionalField(isNullVote ? 1 : 0, 1, manifestContest.Index, selectionEncryptionIdentifierHash, ballotNonce);
+        var underVoteCount = EncryptOptionalField(numUndervotes, manifestContest.SelectionLimit, manifestContest.Index, selectionEncryptionIdentifierHash, ballotNonce);
+        var writeInVoteCount = EncryptOptionalField(numWriteins, manifestContest.SelectionLimit, manifestContest.Index, selectionEncryptionIdentifierHash, ballotNonce);
+
+        return new EncryptedContest
+        {
+            Id = contest.Id,
+            Choices = encryptedSelections,
+            Proofs = proofs,
+            OvervoteCount = overVoteCount,
+            NullvoteCount = nullVoteCount,
+            UndervoteCount = underVoteCount,
+            WriteInVoteCount = writeInVoteCount,
+        };
+    }
+
+    private EncryptedSelection EncryptSelection(Contest contest, Choice choice, int selectionValue, SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, BallotNonce ballotNonce)
+    {
+        var encryptedValue = EncryptContestValue(selectionValue, selectionEncryptionIdentifierHash, ballotNonce, contest.Index, choice.Index);
+        var proofs = GenerateProofs(selectionValue, contest.OptionSelectionLimit, encryptedValue, _encryptionRecord.ElectionPublicKeys, selectionEncryptionIdentifierHash, contest.Index, choice.Index);
+
+        return new EncryptedSelection
+        {
+            ChoiceId = choice.Id,
+            Value = encryptedValue,
+            Proofs = proofs,
+        };
+    }
+
+    private EncryptedValueWithProofs EncryptOptionalField(int selectionValue, int maxValue, int contestIndex, SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, BallotNonce ballotNonce)
+    {
+        var encryptedValue = EncryptContestValue(selectionValue, selectionEncryptionIdentifierHash, ballotNonce, contestIndex);
+        var proofs = GenerateProofs(selectionValue, maxValue, encryptedValue, _encryptionRecord.ElectionPublicKeys, selectionEncryptionIdentifierHash, contestIndex);
+
+        return new EncryptedValueWithProofs
+        {
+            Value = encryptedValue,
+            Proofs = proofs,
+        };
+    }
+
+    private EncryptedValue EncryptContestValue(int valueToEncrypt, SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, BallotNonce ballotNonce, int contestIndex, int? choiceIndex = null)
+    {
+        IntegerModQ encryptionNonce = new EncryptionNonce(selectionEncryptionIdentifierHash, ballotNonce, contestIndex, choiceIndex);
+        var alpha = IntegerModP.PowModP(_encryptionRecord.CryptographicParameters.G, encryptionNonce);
+        var beta = IntegerModP.PowModP(_encryptionRecord.ElectionPublicKeys.VoteEncryptionKey, encryptionNonce + valueToEncrypt);
+        return new EncryptedValue
+        {
+            Alpha = alpha,
+            Beta = beta,
+            EncryptionNonce = encryptionNonce,
+        };
+    }
+
+    private EncryptedValue AggregateChoiceValues(List<EncryptedValue> encryptedSelections)
+    {
         var alpha = encryptedSelections.Select(x => x.Alpha).Product();
         var beta = encryptedSelections.Select(x => x.Beta).Product();
-        var actualSelectionTotal = contest.Choices.Sum(x => x.SelectionValue);
-        var aggregateEncryptionNonce = encryptedSelections.Select(x => x.SelectionEncryptionNonce!.Value).Sum();
-        
+        var aggregateEncryptionNonce = encryptedSelections.Select(x => x.EncryptionNonce!.Value).Sum();
+
+        return new EncryptedValue
+        {
+            Alpha = alpha,
+            Beta = beta,
+            EncryptionNonce = aggregateEncryptionNonce,
+        };
+    }
+
+    private ChallengeResponsePair[] GenerateProofs(
+        int valueToEncrypt, 
+        int selectionLimit,
+        EncryptedValue encryptedValue,
+        ElectionPublicKeys electionPublicKeys,
+        SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, 
+        int contestIndex, 
+        int? choiceIndex = null)
+    {
         List<(IntegerModQ u, IntegerModP a, IntegerModP b, IntegerModQ? cj)> commitments = new();
 
-        for (int i = 0; i < manifestContest.SelectionLimit; i++)
+        for (int i = 0; i < selectionLimit; i++)
         {
             var keyPair = KeyPair.GenerateRandom();
             IntegerModQ u = keyPair.SecretKey;
@@ -160,24 +253,32 @@ public class BallotEncryptor
 
             IntegerModP b;
             IntegerModQ? cj = null;
-            if (actualSelectionTotal == i)
+            if (valueToEncrypt == i)
             {
-                b = IntegerModP.PowModP(_encryptionRecord.ElectionPublicKeys.VoteEncryptionKey, u);
+                b = IntegerModP.PowModP(electionPublicKeys.VoteEncryptionKey, u);
             }
             else
             {
                 cj = ElectionGuardRandom.GetIntegerModQ();
-                var t = u + (actualSelectionTotal - i) * cj.Value;
-                b = IntegerModP.PowModP(_encryptionRecord.ElectionPublicKeys.VoteEncryptionKey, t);
+                var t = u + (valueToEncrypt - i) * cj.Value;
+                b = IntegerModP.PowModP(electionPublicKeys.VoteEncryptionKey, t);
             }
             commitments.Add((u, a, b, cj));
         }
 
         List<byte[]> bytesToHash = [
             [0x24],
-            manifestContest.Index.ToByteArray(),
-            alpha,
-            beta];
+            contestIndex.ToByteArray()];
+
+        if(choiceIndex != null)
+        {
+            bytesToHash.Add(choiceIndex.Value.ToByteArray());
+        }
+
+        bytesToHash.AddRange([
+            encryptedValue.Alpha,
+            encryptedValue.Beta]);
+
         foreach (var commitment in commitments)
         {
             bytesToHash.Add(commitment.a);
@@ -196,89 +297,13 @@ public class BallotEncryptor
         var cl = c - cSum;
 
         IEnumerable<(IntegerModQ challenge, IntegerModQ response)> challengeResponsePairs = commitments
-            .Select(x => (x.cj ?? cl, x.u - (x.cj ?? cl) * aggregateEncryptionNonce));
+            .Select(x => (x.cj ?? cl, x.u - (x.cj ?? cl) * encryptedValue.EncryptionNonce!.Value));
 
-        var encryptedContest = new EncryptedContest
+        return challengeResponsePairs.Select(x => new ChallengeResponsePair
         {
-            Id = contest.Id,
-            Choices = encryptedSelections,
-            Proof = challengeResponsePairs.Select(x => new ChallengeResponsePair
-            {
-                Challenge = x.challenge,
-                Response = x.response,
-            }).ToArray(),
-        };
-
-        return encryptedContest;
-    }
-
-    private EncryptedSelection EncryptSelection(Contest contest, Choice choice, int selectionValue, SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, BallotNonce ballotNonce)
-    {
-        IntegerModQ selectionEncryptionNonce = new SelectionNonce(selectionEncryptionIdentifierHash, ballotNonce, contest.Index, choice.Index);
-        var alpha = IntegerModP.PowModP(_encryptionRecord.CryptographicParameters.G, selectionEncryptionNonce);
-        var beta = IntegerModP.PowModP(_encryptionRecord.ElectionPublicKeys.VoteEncryptionKey, selectionEncryptionNonce + selectionValue);
-
-        List<(IntegerModQ u, IntegerModP a, IntegerModP b, IntegerModQ? cj)> commitments = new();
-
-        for (int i = 0; i < contest.OptionSelectionLimit; i++)
-        {
-            var keyPair = KeyPair.GenerateRandom();
-            IntegerModQ u = keyPair.SecretKey;
-            IntegerModP a = keyPair.PublicKey;
-
-            IntegerModP b;
-            IntegerModQ? cj = null;
-            if(selectionValue == i)
-            {
-                b = IntegerModP.PowModP(_encryptionRecord.ElectionPublicKeys.VoteEncryptionKey, u);
-            }
-            else
-            {
-                cj = ElectionGuardRandom.GetIntegerModQ();
-                var t = u + (selectionValue - i) * cj.Value;
-                b = IntegerModP.PowModP(_encryptionRecord.ElectionPublicKeys.VoteEncryptionKey, t);
-            }
-            commitments.Add((u, a, b, cj));
-        }
-
-        List<byte[]> bytesToHash = [
-            [0x24],
-            contest.Index.ToByteArray(),
-            choice.Index.ToByteArray(),
-            alpha,
-            beta];
-        foreach(var commitment in commitments)
-        {
-            bytesToHash.Add(commitment.a);
-            bytesToHash.Add(commitment.b);
-        }
-
-        var c = EGHash.HashModQ(selectionEncryptionIdentifierHash, bytesToHash.ToArray());
-        IntegerModQ cSum = new IntegerModQ();
-        foreach(var commitment in commitments)
-        {
-            if(commitment.cj != null)
-            {
-                cSum += commitment.cj.Value;
-            }
-        }
-        var cl = c - cSum;
-
-        IEnumerable<(IntegerModQ challenge, IntegerModQ response)> challengeResponsePairs = commitments
-            .Select(x => (x.cj ?? cl, x.u - (x.cj ?? cl) * selectionEncryptionNonce));
-
-        return new EncryptedSelection
-        {
-            ChoiceId = choice.Id,
-            Alpha = alpha,
-            Beta = beta,
-            Proof = challengeResponsePairs.Select(x => new ChallengeResponsePair
-            {
-                Challenge = x.challenge,
-                Response = x.response,
-            }).ToArray(),
-            SelectionEncryptionNonce = selectionEncryptionNonce,
-        };
+            Challenge = x.challenge,
+            Response = x.response,
+        }).ToArray();
     }
 
     private byte[] ComputeBallotNonceEncryptionKey(byte[] symmetricKey)

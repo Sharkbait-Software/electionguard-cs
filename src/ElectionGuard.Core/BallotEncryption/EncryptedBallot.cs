@@ -14,5 +14,9 @@ public record EncryptedContest
 {
     public required string Id { get; init; }
     public required List<EncryptedSelection> Choices { get; init; }
-    public required ChallengeResponsePair[] Proof { get; init; }
+    public required ChallengeResponsePair[] Proofs { get; init; }
+    public required EncryptedValueWithProofs OvervoteCount { get; init; }
+    public required EncryptedValueWithProofs NullvoteCount { get; init; }
+    public required EncryptedValueWithProofs UndervoteCount { get; init; }
+    public required EncryptedValueWithProofs WriteInVoteCount { get; init; }
 }

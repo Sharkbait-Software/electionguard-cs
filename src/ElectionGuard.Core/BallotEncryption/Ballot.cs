@@ -11,12 +11,13 @@ public record BallotContest
 {
     public required string Id { get; init; }
     public required List<BallotChoice> Choices { get; init; }
+    public required int NumWriteinsSelected { get; init; }
 }
 
 public record BallotChoice
 {
     public required string Id { get; init; }
-    public required int SelectionValue { get; init; }
+    public required int SelectionValue { get; set; }
 }
 
 //public class Ballot

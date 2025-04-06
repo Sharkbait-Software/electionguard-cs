@@ -21,18 +21,18 @@ public class AdherenceToVoteLimitsVerification
 
     private void Verify(EncryptedContest encryptedContest, Contest contest, EncryptionRecord encryptionRecord, EncryptedBallot encryptedBallot)
     {
-        if (encryptedContest.Proof.Length != contest.SelectionLimit)
+        if (encryptedContest.Proofs.Length != contest.SelectionLimit)
         {
             throw new VerificationFailedException("7", $"A challenge/response value was not provided for all possible values of the contest selection limit of {contest.SelectionLimit}.");
         }
 
-        var alpha = encryptedContest.Choices.Select(x => x.Alpha).Product();
-        var beta = encryptedContest.Choices.Select(x => x.Beta).Product();
+        var alpha = encryptedContest.Choices.Select(x => x.Value.Alpha).Product();
+        var beta = encryptedContest.Choices.Select(x => x.Value.Beta).Product();
 
         List<(IntegerModP a, IntegerModP b)> calculatedValues = new();
-        for (int i = 0; i < encryptedContest.Proof.Length; i++)
+        for (int i = 0; i < encryptedContest.Proofs.Length; i++)
         {
-            var crPair = encryptedContest.Proof[i];
+            var crPair = encryptedContest.Proofs[i];
 
             VerifyIsInZq(crPair.Challenge, encryptionRecord.CryptographicParameters);
             VerifyIsInZq(crPair.Response, encryptionRecord.CryptographicParameters);
@@ -61,7 +61,7 @@ public class AdherenceToVoteLimitsVerification
         VerifyIsInZpr(alpha, encryptionRecord.CryptographicParameters);
         VerifyIsInZpr(beta, encryptionRecord.CryptographicParameters);
 
-        var sumC = encryptedContest.Proof.Select(x => x.Challenge).Sum();
+        var sumC = encryptedContest.Proofs.Select(x => x.Challenge).Sum();
         if (sumC != c)
         {
             throw new VerificationFailedException("7.D", "Sum of challenge values did not equal c.");
