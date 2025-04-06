@@ -72,24 +72,64 @@ public struct IntegerModQ : IEquatable<IntegerModQ>
         return i.ToBigInteger();
     }
 
+    public static implicit operator IntegerModQ(int i)
+    {
+        return new IntegerModQ(i);
+    }
+
     public static IntegerModQ operator +(IntegerModQ a, IntegerModQ b)
     {
         return new IntegerModQ(a._i + b._i);
     }
 
-    public static IntegerModQ operator +(IntegerModQ a, int b)
-    {
-        return new IntegerModQ(a._i + b);
-    }
+    //public static IntegerModQ operator +(IntegerModQ a, int b)
+    //{
+    //    return new IntegerModQ(a._i + b);
+    //}
 
     public static IntegerModQ operator -(IntegerModQ a, IntegerModQ b)
     {
         return new IntegerModQ(a._i - b._i);
     }
 
+    //public static IntegerModQ operator -(IntegerModQ a, int b)
+    //{
+    //    return new IntegerModQ(a._i - b);
+    //}
+
     public static IntegerModQ operator *(IntegerModQ a, IntegerModQ b)
     {
         return new IntegerModQ(a._i * b._i);
+    }
+
+    //public static IntegerModQ operator *(IntegerModQ a, int b)
+    //{
+    //    return new IntegerModQ(a._i * b);
+    //}
+
+    //public static IntegerModQ operator *(int a, IntegerModQ b)
+    //{
+    //    return new IntegerModQ(a * b._i);
+    //}
+
+    public static bool operator <(IntegerModQ a, IntegerModQ b)
+    {
+        return a._i < b._i;
+    }
+
+    public static bool operator >(IntegerModQ a, IntegerModQ b)
+    {
+        return a._i > b._i;
+    }
+
+    public static bool operator <=(IntegerModQ a, IntegerModQ b)
+    {
+        return a._i <= b._i;
+    }
+
+    public static bool operator >=(IntegerModQ a, IntegerModQ b)
+    {
+        return a._i >= b._i;
     }
 
     public override bool Equals(object? obj)

@@ -4,6 +4,11 @@ using ElectionGuard.Core.KeyGeneration;
 using ElectionGuard.Core.Models;
 using System.Text.Json;
 
+var jsonOptions = new JsonSerializerOptions
+{
+    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+};
+
 CryptographicParameters cryptographicParameters = new CryptographicParameters();
 GuardianParameters guardianParameters = new GuardianParameters();
 EGParameters.Init(cryptographicParameters, guardianParameters);
@@ -60,16 +65,17 @@ try
 
     // Write out guardian record
     Console.WriteLine("Writing out guardian record.");
-    var serializedGuardianRecord = JsonSerializer.Serialize(guardianRecord);
+    var serializedGuardianRecord = JsonSerializer.Serialize(guardianRecord, jsonOptions);
     File.WriteAllBytes(Path.Combine(outputDirectory, "guardian-record.json"), System.Text.Encoding.UTF8.GetBytes(serializedGuardianRecord));
 
     // Combine with manifest
-    var manifestBytes = File.ReadAllBytes("../../../../../test/data/famous-names-manifest.json");
-    var manifest = new ManifestFile
+    var manifestBytes = File.ReadAllBytes("../../../../../test/data/famous-names/manifest.json");
+    var manifestFile = new ManifestFile
     {
         Bytes = manifestBytes
     };
-    var electionBaseHash = new ElectionBaseHash(EGParameters.ParameterBaseHash, manifest);
+    var manifest = JsonSerializer.Deserialize<Manifest>(manifestBytes, jsonOptions)!;
+    var electionBaseHash = new ElectionBaseHash(EGParameters.ParameterBaseHash, manifestFile);
     var extendedBaseHash = new ExtendedBaseHash(electionBaseHash, electionPublicKeys);
 
     // Write out encryption record
@@ -81,13 +87,17 @@ try
         Guardians = guardianKeys,
         ElectionPublicKeys = electionPublicKeys,
         ExtendedBaseHash = extendedBaseHash,
+        Manifest = manifest,
     };
-    var serializedEncryptionRecord = JsonSerializer.Serialize(encryptionRecord);
+    var serializedEncryptionRecord = JsonSerializer.Serialize(encryptionRecord, jsonOptions);
     File.WriteAllBytes(Path.Combine(outputDirectory, "encryption-record.json"), System.Text.Encoding.UTF8.GetBytes(serializedEncryptionRecord));
 
     // Encrypt a ballot
     BallotEncryptor ballotEncryptor = new BallotEncryptor(encryptionRecord);
-    ballotEncryptor.Encrypt();
+    var ballot = JsonSerializer.Deserialize<Ballot>(File.ReadAllBytes("../../../../../test/data/famous-names/ballots/1.json"), jsonOptions)!;
+    var encryptedBallot = ballotEncryptor.Encrypt(ballot);
+    var serializedEncryptedBallot = JsonSerializer.Serialize(encryptedBallot, jsonOptions);
+    File.WriteAllBytes(Path.Combine(outputDirectory, "encrypted-ballots", "1.json"), System.Text.Encoding.UTF8.GetBytes(serializedEncryptedBallot));
 
     Console.WriteLine("Done.");
 }

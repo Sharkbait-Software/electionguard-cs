@@ -1,7 +1,6 @@
 ﻿using ElectionGuard.Core.KeyGeneration;
-using ElectionGuard.Core.Models;
 
-namespace ElectionGuard.Core.BallotEncryption;
+namespace ElectionGuard.Core.Models;
 
 public class EncryptionRecord
 {
@@ -10,4 +9,5 @@ public class EncryptionRecord
     public required List<GuardianPublicView> Guardians { get; init; }
     public required ElectionPublicKeys ElectionPublicKeys { get; init; }
     public required ExtendedBaseHash ExtendedBaseHash { get; init; }
+    public required Manifest Manifest { get; init; }
 }

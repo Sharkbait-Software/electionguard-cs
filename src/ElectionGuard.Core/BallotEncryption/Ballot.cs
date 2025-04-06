@@ -1,48 +1,64 @@
-﻿using ElectionGuard.Core.Crypto;
-using ElectionGuard.Core.Models;
+﻿namespace ElectionGuard.Core.BallotEncryption;
 
-namespace ElectionGuard.Core.BallotEncryption;
-
-public class Ballot
+public record Ballot
 {
-    public Ballot(IntegerModP electionPublicKey)
-    {
-        _electionPublicKey = electionPublicKey;
-    }
-
-    private IntegerModP _electionPublicKey;
-
-    public EncryptedSelection EncryptSelection(int voteWeight, IntegerModQ selectionNonce)
-    {
-        IntegerModP alpha = IntegerModP.PowModP(EGParameters.CryptographicParameters.G, selectionNonce);
-        IntegerModP beta = IntegerModP.PowModP(_electionPublicKey, selectionNonce + voteWeight);
-
-        return new EncryptedSelection
-        {
-            Alpha = alpha,
-            Beta = beta,
-        };
-    }
-
-    public int DecryptSelection(EncryptedSelection selection, IntegerModQ selectionNonce, int maxWeight)
-    {
-        var publicKeyPow = selection.Beta / IntegerModP.PowModP(_electionPublicKey, selectionNonce);
-
-        for (int i = 0; i <= maxWeight; i++)
-        {
-            IntegerModP p = IntegerModP.PowModP(_electionPublicKey, new IntegerModQ(i));
-            if (publicKeyPow == p)
-            {
-                return i;
-            }
-        }
-
-        throw new Exception("Could not decrypt selection");
-    }
+    public required string Id { get; init; }
+    public required string BallotStyleId { get; init; }
+    public required List<BallotContest> Contests { get; init; }
 }
 
-public class EncryptedSelection
+public record BallotContest
 {
-    public required IntegerModP Alpha { get; init; }
-    public required IntegerModP Beta { get; init; }
+    public required string Id { get; init; }
+    public required List<BallotChoice> Choices { get; init; }
 }
+
+public record BallotChoice
+{
+    public required string Id { get; init; }
+    public required int SelectionValue { get; init; }
+}
+
+//public class Ballot
+//{
+//    public Ballot(IntegerModP electionPublicKey)
+//    {
+//        _electionPublicKey = electionPublicKey;
+//    }
+
+//    private IntegerModP _electionPublicKey;
+
+//    public EncryptedSelection EncryptSelection(int voteWeight, IntegerModQ selectionNonce)
+//    {
+//        IntegerModP alpha = IntegerModP.PowModP(EGParameters.CryptographicParameters.G, selectionNonce);
+//        IntegerModP beta = IntegerModP.PowModP(_electionPublicKey, selectionNonce + voteWeight);
+
+//        return new EncryptedSelection
+//        {
+//            Alpha = alpha,
+//            Beta = beta,
+//        };
+//    }
+
+//    public int DecryptSelection(EncryptedSelection selection, IntegerModQ selectionNonce, int maxWeight)
+//    {
+//        var publicKeyPow = selection.Beta / IntegerModP.PowModP(_electionPublicKey, selectionNonce);
+
+//        for (int i = 0; i <= maxWeight; i++)
+//        {
+//            IntegerModP p = IntegerModP.PowModP(_electionPublicKey, new IntegerModQ(i));
+//            if (publicKeyPow == p)
+//            {
+//                return i;
+//            }
+//        }
+
+//        throw new Exception("Could not decrypt selection");
+//    }
+//}
+
+//public class EncryptedSelection
+//{
+//    public required IntegerModP Alpha { get; init; }
+//    public required IntegerModP Beta { get; init; }
+//}

@@ -2,61 +2,71 @@
   "electionId": "1",
   "contests": [
     {
-      "contestId": "1",
+      "id": "1",
       "name": "Favorite Historical President",
-      "order": 1,
+      "index": 1,
       "selectionLimit": 1,
       "optionSelectionLimit": 1,
       "choices": [
         {
-          "choiceId": "1",
+          "id": "1",
           "name": "George Washington",
-          "order": 1
+          "index": 1
         },
         {
-          "choiceId": "2",
+          "id": "2",
           "name": "Abraham Lincoln",
-          "order": 2
+          "index": 2
         },
         {
-          "choiceId": "3",
+          "id": "3",
           "name": "Franklin D. Roosevelt",
-          "order": 3
+          "index": 3
         },
         {
-          "choiceId": "4",
+          "id": "4",
           "name": "Teddy Roosevelt",
-          "order": 4
+          "index": 4
         }
       ]
     },
     {
-      "contestId": "2",
+      "id": "2",
       "name": "Favorite State",
-      "order": 2,
+      "index": 2,
       "selectionLimit": 1,
       "optionSelectionLimit": 1,
       "choices": [
         {
-          "choiceId": "6",
+          "id": "6",
           "name": "Florida",
-          "order": 1
+          "index": 1
         },
         {
-          "choiceId": "7",
+          "id": "7",
           "name": "New York",
-          "order": 2
+          "index": 2
         },
         {
-          "choiceId": "8",
+          "id": "8",
           "name": "Pennsylvania",
-          "order": 3
+          "index": 3
         },
         {
-          "choiceId": "9",
+          "id": "9",
           "name": "California",
-          "order": 4
+          "index": 4
         }
+      ]
+    }
+  ],
+  "ballotStyles": [
+    {
+      "id": "1",
+      "name": "One",
+      "contestIds": [
+        "1",
+        "2"
       ]
     }
   ]

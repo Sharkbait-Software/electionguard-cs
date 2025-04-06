@@ -78,6 +78,11 @@ public struct IntegerModP : IEquatable<IntegerModP>
         return i.ToBigInteger();
     }
 
+    public static implicit operator IntegerModP(int i)
+    {
+        return new IntegerModP(i);
+    }
+
     public static IntegerModP operator +(IntegerModP a, IntegerModP b)
     {
         return new IntegerModP(a._i + b._i);
@@ -98,11 +103,31 @@ public struct IntegerModP : IEquatable<IntegerModP>
         return new IntegerModP(a._i * PowModP(b, EGParameters.CryptographicParameters.P - 2)._i);
     }
 
+    public static bool operator <(IntegerModP a, IntegerModP b)
+    {
+        return a < b;
+    }
+
+    public static bool operator >(IntegerModP a, IntegerModP b)
+    {
+        return a > b;
+    }
+
+    public static bool operator <=(IntegerModP a, IntegerModP b)
+    {
+        return a <= b;
+    }
+
+    public static bool operator >=(IntegerModP a, IntegerModP b)
+    {
+        return a >= b;
+    }
+
     public override bool Equals(object? obj)
     {
-        if (obj is IntegerModP i)
+        if (obj is IntegerModP p)
         {
-            return Equals(i);
+            return Equals(p);
         }
 
         return false;

@@ -20,4 +20,9 @@ public struct SelectionNonce
     {
         return i._value;
     }
+
+    public static implicit operator IntegerModQ(SelectionNonce i)
+    {
+        return i._value;
+    }
 }
