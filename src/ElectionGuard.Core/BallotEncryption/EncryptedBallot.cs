@@ -8,6 +8,7 @@ public class EncryptedBallot
     public required SelectionEncryptionIdentifierHash SelectionEncryptionIdentifierHash { get; init; }
     public required string BallotStyleId { get; init; }
     public required List<EncryptedContest> Contests { get; init; }
+    public required ConfirmationCode ConfirmationCode { get; init; }
 }
 
 public record EncryptedContest
@@ -20,4 +21,5 @@ public record EncryptedContest
     public required EncryptedValueWithProofs UndervoteCount { get; init; }
     public required EncryptedValueWithProofs WriteInVoteCount { get; init; }
     public required EncryptedData? ContestData { get; init; }
+    public required ContestHash ContestHash { get; init; }
 }

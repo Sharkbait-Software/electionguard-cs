@@ -1,7 +1,7 @@
 ﻿using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.Models;
 
-namespace ElectionGuard.Core.Verify;
+namespace ElectionGuard.Core.Verify.Ballot;
 
 /// <summary>
 /// Verification 5 (Uniqueness of selection encryption identifiers)

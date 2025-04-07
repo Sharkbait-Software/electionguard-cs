@@ -6,6 +6,17 @@ public record Manifest
     public required List<Contest> Contests { get; init; }
     public required List<BallotStyle> BallotStyles { get; init; }
     public required int OptionalContestDataMaxLength { get; init; }
+    public bool IncludeOvervotes { get; init; }
+    public bool IncludeNullvotes { get; init; }
+    public bool IncludeUndervotes { get; init; }
+    public bool IncludeWriteins { get; init; }
+    public ChainingMode ChainingMode { get; init; }
+}
+
+public enum ChainingMode
+{
+    None = 0,
+    Simple = 1,
 }
 
 public record Contest

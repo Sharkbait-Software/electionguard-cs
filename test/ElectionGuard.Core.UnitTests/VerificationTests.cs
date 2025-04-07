@@ -1,5 +1,6 @@
 ﻿using ElectionGuard.Core.Models;
 using ElectionGuard.Core.Verify;
+using ElectionGuard.Core.Verify.KeyGeneration;
 
 namespace ElectionGuard.Core.UnitTests;
 

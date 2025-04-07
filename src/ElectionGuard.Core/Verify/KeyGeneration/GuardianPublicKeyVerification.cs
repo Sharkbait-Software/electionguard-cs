@@ -3,7 +3,7 @@ using ElectionGuard.Core.KeyGeneration;
 using ElectionGuard.Core.Models;
 using System.Numerics;
 
-namespace ElectionGuard.Core.Verify;
+namespace ElectionGuard.Core.Verify.KeyGeneration;
 
 /// <summary>
 /// Verification 2 (Guardian public-key validation)
@@ -12,7 +12,7 @@ public class GuardianPublicKeyVerification
 {
     public void Verify(IEnumerable<GuardianPublicView> guardians)
     {
-        foreach(var guardian in guardians)
+        foreach (var guardian in guardians)
         {
             Verify(guardian);
         }
@@ -46,7 +46,7 @@ public class GuardianPublicKeyVerification
         otherBallotDataEncryptionHValues.Add(hHatik);
 
         // 2.A
-        for(int j = 0; j < EGParameters.GuardianParameters.K; j++)
+        for (int j = 0; j < EGParameters.GuardianParameters.K; j++)
         {
             if (IntegerModP.PowModP(guardian.VoteEncryptionCommitments[j], EGParameters.CryptographicParameters.Q) != new BigInteger(1))
             {
@@ -68,7 +68,7 @@ public class GuardianPublicKeyVerification
         }
 
         // 2.B
-        for(int j = 0; j <= guardian.VoteEncryptionProof.Responses.Length; j++)
+        for (int j = 0; j <= guardian.VoteEncryptionProof.Responses.Length; j++)
         {
             // Because all objects are already IntegerModQ, this is already true for the time being.
         }
@@ -84,7 +84,7 @@ public class GuardianPublicKeyVerification
         cBytes.AddRange(voteEncryptionHValues.Select(h => h.ToByteArray()));
 
         IntegerModQ ci = EGHash.HashModQ(EGParameters.ParameterBaseHash, cBytes.ToArray());
-        if(ci != guardian.VoteEncryptionProof.Challenge)
+        if (ci != guardian.VoteEncryptionProof.Challenge)
         {
             throw new VerificationFailedException("2.C", "Challenge value Ci was not computed correctly.");
         }

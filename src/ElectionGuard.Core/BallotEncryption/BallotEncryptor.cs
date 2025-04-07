@@ -2,23 +2,23 @@
 using ElectionGuard.Core.Extensions;
 using ElectionGuard.Core.KeyGeneration;
 using ElectionGuard.Core.Models;
-using System;
 using System.Text;
 
 namespace ElectionGuard.Core.BallotEncryption;
 
 public class BallotEncryptor
 {
-    public BallotEncryptor(EncryptionRecord encryptionRecord)
+    public BallotEncryptor(EncryptionRecord encryptionRecord, VotingDeviceInformationHash deviceHash)
     {
         _encryptionRecord = encryptionRecord;
+        _deviceHash = deviceHash;
     }
 
     private readonly EncryptionRecord _encryptionRecord;
+    private readonly VotingDeviceInformationHash _deviceHash;
 
-    public EncryptedBallot Encrypt(Ballot ballot)
+    public EncryptedBallot Encrypt(Ballot ballot, ConfirmationCode? previousConfirmationCode)
     {
-        // Validate the ballot
         Validate(ballot);
 
         var selectionEncryptionIdentifier = new SelectionEncryptionIdentifier(ElectionGuardRandom.GetBytes(32));
@@ -28,11 +28,16 @@ public class BallotEncryptor
         var encryptedBallotNonce = EncryptBallotNonce(ballotNonce, selectionEncryptionIdentifierHash);
 
         var encryptedContests = new List<EncryptedContest>();
+        List<ContestHash> contestHashes = new List<ContestHash>();
         foreach(var contest in ballot.Contests)
         {
             var encryptedContest = EncryptContest(contest, selectionEncryptionIdentifierHash, ballotNonce);
             encryptedContests.Add(encryptedContest);
+            contestHashes.Add(encryptedContest.ContestHash);
         }
+
+        var chainingField = new ChainingField(_encryptionRecord.Manifest.ChainingMode, _deviceHash, _encryptionRecord.ExtendedBaseHash, previousConfirmationCode);
+        var confirmationCode = new ConfirmationCode(selectionEncryptionIdentifierHash, contestHashes, chainingField);
 
         return new EncryptedBallot
         {
@@ -40,6 +45,7 @@ public class BallotEncryptor
             BallotStyleId = ballot.BallotStyleId,
             SelectionEncryptionIdentifierHash = selectionEncryptionIdentifierHash,
             Contests = encryptedContests,
+            ConfirmationCode = confirmationCode,
         };
     }
 
@@ -176,7 +182,16 @@ public class BallotEncryptor
             encryptedContestData = EncryptContestData(contest.ContestData, manifestContest.Index, selectionEncryptionIdentifierHash, ballotNonce);
         }
 
-        return new EncryptedContest
+        var contestHash = new ContestHash(selectionEncryptionIdentifierHash, 
+            manifestContest.Index, 
+            encryptedSelections,
+            overVoteCount,
+            nullVoteCount,
+            underVoteCount,
+            writeInVoteCount,
+            encryptedContestData);
+
+        var encryptedContest = new EncryptedContest
         {
             Id = contest.Id,
             Choices = encryptedSelections,
@@ -186,7 +201,10 @@ public class BallotEncryptor
             UndervoteCount = underVoteCount,
             WriteInVoteCount = writeInVoteCount,
             ContestData = encryptedContestData,
+            ContestHash = contestHash,
         };
+
+        return encryptedContest;
     }
 
     private EncryptedSelection EncryptSelection(Contest contest, Choice choice, int selectionValue, SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, BallotNonce ballotNonce)

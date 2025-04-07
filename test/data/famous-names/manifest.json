@@ -1,6 +1,10 @@
 {
   "electionId": "1",
   "optionalContestDataMaxLength": 50,
+  "includeOvervotes": true,
+  "includeNullvotes": true,
+  "includeUndervotes": true,
+  "includeWriteins": true,
   "contests": [
     {
       "id": "1",

@@ -3,7 +3,7 @@ using ElectionGuard.Core.Extensions;
 using ElectionGuard.Core.Models;
 using Version = ElectionGuard.Core.Models.Version;
 
-namespace ElectionGuard.Core.Verify;
+namespace ElectionGuard.Core.Verify.KeyGeneration;
 
 /// <summary>
 /// Verification 1 (Parameter validation)

@@ -1,7 +1,7 @@
 ﻿using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.Models;
 
-namespace ElectionGuard.Core.Verify;
+namespace ElectionGuard.Core.Verify.KeyGeneration;
 
 /// <summary>
 /// Verification 4 (Extended base hash validation)

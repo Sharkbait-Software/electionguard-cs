@@ -3,53 +3,55 @@ using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.Extensions;
 using ElectionGuard.Core.Models;
 
-namespace ElectionGuard.Core.Verify;
+namespace ElectionGuard.Core.Verify.Ballot;
 
 /// <summary>
-/// Verification 7 (Adherence to vote limits)
+/// Verification 6 (Well-formedness of selection encryptions)
 /// </summary>
-public class AdherenceToVoteLimitsVerification
+public class SelectionEncryptionsWellFormedVerification
 {
     public void Verify(EncryptedBallot encryptedBallot, EncryptionRecord encryptionRecord)
     {
         foreach (var contest in encryptedBallot.Contests)
         {
             var manifestContest = encryptionRecord.Manifest.Contests.Single(x => x.Id == contest.Id);
-            Verify(contest, manifestContest, encryptionRecord, encryptedBallot);
+            foreach (var choice in contest.Choices)
+            {
+                var manifestChoice = manifestContest.Choices.Single(x => x.Id == choice.ChoiceId);
+                Verify(choice, manifestContest, manifestChoice, encryptionRecord, encryptedBallot);
+            }
         }
     }
 
-    private void Verify(EncryptedContest encryptedContest, Contest contest, EncryptionRecord encryptionRecord, EncryptedBallot encryptedBallot)
+    private void Verify(EncryptedValueWithProofs selection, Contest contest, Choice choice, EncryptionRecord encryptionRecord, EncryptedBallot encryptedBallot)
     {
-        if (encryptedContest.Proofs.Length != contest.SelectionLimit)
+        if (selection.Proofs.Length != contest.OptionSelectionLimit)
         {
-            throw new VerificationFailedException("7", $"A challenge/response value was not provided for all possible values of the contest selection limit of {contest.SelectionLimit}.");
+            throw new VerificationFailedException("6", $"A challenge/response value was not provided for all possible values of the option selection limit of {contest.OptionSelectionLimit}.");
         }
 
-        var alpha = encryptedContest.Choices.Select(x => x.Value.Alpha).Product();
-        var beta = encryptedContest.Choices.Select(x => x.Value.Beta).Product();
-
         List<(IntegerModP a, IntegerModP b)> calculatedValues = new();
-        for (int i = 0; i < encryptedContest.Proofs.Length; i++)
+        for (int i = 0; i < selection.Proofs.Length; i++)
         {
-            var crPair = encryptedContest.Proofs[i];
+            var crPair = selection.Proofs[i];
 
             VerifyIsInZq(crPair.Challenge, encryptionRecord.CryptographicParameters);
             VerifyIsInZq(crPair.Response, encryptionRecord.CryptographicParameters);
 
             var a = IntegerModP.PowModP(encryptionRecord.CryptographicParameters.G, crPair.Response)
-                * IntegerModP.PowModP(alpha, crPair.Challenge);
+                * IntegerModP.PowModP(selection.Value.Alpha, crPair.Challenge);
             var w = crPair.Response - i * crPair.Challenge;
             var b = IntegerModP.PowModP(encryptionRecord.ElectionPublicKeys.VoteEncryptionKey, w)
-                * IntegerModP.PowModP(beta, crPair.Challenge);
+                * IntegerModP.PowModP(selection.Value.Beta, crPair.Challenge);
             calculatedValues.Add((a, b));
         }
 
         List<byte[]> bytesToHash = [
                 [0x24],
                 contest.Index.ToByteArray(),
-                alpha,
-                beta];
+                choice.Index.ToByteArray(),
+                selection.Value.Alpha,
+                selection.Value.Beta];
         foreach (var val in calculatedValues)
         {
             bytesToHash.Add(val.a);
@@ -58,13 +60,13 @@ public class AdherenceToVoteLimitsVerification
 
         var c = EGHash.HashModQ(encryptedBallot.SelectionEncryptionIdentifierHash, bytesToHash.ToArray());
 
-        VerifyIsInZpr(alpha, encryptionRecord.CryptographicParameters);
-        VerifyIsInZpr(beta, encryptionRecord.CryptographicParameters);
+        VerifyIsInZpr(selection.Value.Alpha, encryptionRecord.CryptographicParameters);
+        VerifyIsInZpr(selection.Value.Beta, encryptionRecord.CryptographicParameters);
 
-        var sumC = encryptedContest.Proofs.Select(x => x.Challenge).Sum();
+        var sumC = selection.Proofs.Select(x => x.Challenge).Sum();
         if (sumC != c)
         {
-            throw new VerificationFailedException("7.D", "Sum of challenge values did not equal c.");
+            throw new VerificationFailedException("6.D", "Sum of challenge values did not equal c.");
         }
     }
 
@@ -75,7 +77,7 @@ public class AdherenceToVoteLimitsVerification
             || value > cryptographicParameters.P
             || IntegerModP.PowModP(value, cryptographicParameters.Q) != 1)
         {
-            throw new VerificationFailedException("7.A", "Value was not in Zpr.");
+            throw new VerificationFailedException("6.A", "Value was not in Zpr.");
         }
     }
 
@@ -84,8 +86,7 @@ public class AdherenceToVoteLimitsVerification
         if (value <= 0
             || value > cryptographicParameters.Q)
         {
-            throw new VerificationFailedException("7.B/C", "Value was not in Zq.");
+            throw new VerificationFailedException("6.B/C", "Value was not in Zq.");
         }
     }
 }
-

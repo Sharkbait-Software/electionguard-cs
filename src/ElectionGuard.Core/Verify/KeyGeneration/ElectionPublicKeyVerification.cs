@@ -2,7 +2,7 @@
 using ElectionGuard.Core.KeyGeneration;
 using ElectionGuard.Core.Models;
 
-namespace ElectionGuard.Core.Verify;
+namespace ElectionGuard.Core.Verify.KeyGeneration;
 
 /// <summary>
 /// Verification 3 (Election public-key validation)
@@ -22,7 +22,7 @@ public class ElectionPublicKeyVerification
     {
         IntegerModP result = guardianPublicKeys[0];
 
-        for(int i = 1; i < guardianPublicKeys.Count; i++)
+        for (int i = 1; i < guardianPublicKeys.Count; i++)
         {
             result = result * guardianPublicKeys[i];
         }
