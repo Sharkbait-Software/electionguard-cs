@@ -46,6 +46,7 @@ public class BallotEncryptor
             SelectionEncryptionIdentifierHash = selectionEncryptionIdentifierHash,
             Contests = encryptedContests,
             ConfirmationCode = confirmationCode,
+            Weight = 1,
         };
     }
 

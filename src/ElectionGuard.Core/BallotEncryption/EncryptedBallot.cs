@@ -9,6 +9,7 @@ public class EncryptedBallot
     public required string BallotStyleId { get; init; }
     public required List<EncryptedContest> Contests { get; init; }
     public required ConfirmationCode ConfirmationCode { get; init; }
+    public required int Weight { get; init; }
 }
 
 public record EncryptedContest

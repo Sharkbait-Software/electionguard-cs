@@ -1,0 +1,52 @@
+{
+    "id": "2",
+    "ballotStyleId": "1",
+    "contests": [
+        {
+            "id": "1",
+            "choices": [
+                {
+                    "id": "1",
+                    "selectionValue": 1
+                },
+                {
+                    "id": "2",
+                    "selectionValue": 0
+                },
+                {
+                    "id": "3",
+                    "selectionValue": 0
+                },
+                {
+                    "id": "4",
+                    "selectionValue": 0
+                }
+            ],
+            "numWriteinsSelected": 0,
+            "contestData": "Some Contest Data 1"
+        },
+        {
+            "id": "2",
+            "choices": [
+                {
+                    "id": "6",
+                    "selectionValue": 1
+                },
+                {
+                    "id": "7",
+                    "selectionValue": 0
+                },
+                {
+                    "id": "8",
+                    "selectionValue": 0
+                },
+                {
+                    "id": "9",
+                    "selectionValue": 0
+                }
+            ],
+            "numWriteinsSelected": 0,
+            "contestData": "Some Contest Data 2"
+        }
+    ]
+}

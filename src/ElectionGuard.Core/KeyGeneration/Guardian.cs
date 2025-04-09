@@ -2,6 +2,7 @@
 using ElectionGuard.Core.Extensions;
 using ElectionGuard.Core.Models;
 using ElectionGuard.Core.Verify;
+using ElectionGuard.Core.Verify.KeyGeneration;
 using System.Numerics;
 
 namespace ElectionGuard.Core.KeyGeneration;
