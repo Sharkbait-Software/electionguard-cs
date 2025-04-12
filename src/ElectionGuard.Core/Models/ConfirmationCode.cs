@@ -2,7 +2,7 @@
 
 namespace ElectionGuard.Core.Models;
 
-public struct ConfirmationCode
+public struct ConfirmationCode : IEquatable<ConfirmationCode>
 {
     public ConfirmationCode(byte[] bytes)
     {
@@ -25,5 +25,30 @@ public struct ConfirmationCode
     public static implicit operator byte[](ConfirmationCode i)
     {
         return i._value;
+    }
+
+    public static bool operator ==(ConfirmationCode left, ConfirmationCode right)
+    {
+        return left.Equals(right);
+    }
+
+    public static bool operator !=(ConfirmationCode left, ConfirmationCode right)
+    {
+        return !(left == right);
+    }
+
+    public override bool Equals(object? obj)
+    {
+        return obj is ConfirmationCode code && Equals(code);
+    }
+
+    public bool Equals(ConfirmationCode other)
+    {
+        return EqualityComparer<byte[]>.Default.Equals(_value, other._value);
+    }
+
+    public override int GetHashCode()
+    {
+        return HashCode.Combine(_value);
     }
 }

@@ -4,7 +4,7 @@ using ElectionGuard.Core.Extensions;
 
 namespace ElectionGuard.Core.Models;
 
-public struct ContestHash
+public struct ContestHash : IEquatable<ContestHash>
 {
     public ContestHash(byte[] bytes)
     {
@@ -55,5 +55,30 @@ public struct ContestHash
     public static implicit operator byte[](ContestHash i)
     {
         return i._value;
+    }
+
+    public static bool operator ==(ContestHash left, ContestHash right)
+    {
+        return left.Equals(right);
+    }
+
+    public static bool operator !=(ContestHash left, ContestHash right)
+    {
+        return !(left == right);
+    }
+
+    public override bool Equals(object? obj)
+    {
+        return obj is ContestHash hash && Equals(hash);
+    }
+
+    public bool Equals(ContestHash other)
+    {
+        return EqualityComparer<byte[]>.Default.Equals(_value, other._value);
+    }
+
+    public override int GetHashCode()
+    {
+        return HashCode.Combine(_value);
     }
 }

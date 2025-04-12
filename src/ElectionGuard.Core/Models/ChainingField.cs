@@ -2,7 +2,7 @@
 
 namespace ElectionGuard.Core.Models;
 
-public struct ChainingField
+public struct ChainingField : IEquatable<ChainingField>
 {
     public ChainingField(ChainingMode chainingMode, VotingDeviceInformationHash deviceHash, ExtendedBaseHash extendedBaseHash, ConfirmationCode? previousConfirmationCode)
     {
@@ -23,5 +23,30 @@ public struct ChainingField
     public static implicit operator byte[](ChainingField i)
     {
         return i._value;
+    }
+
+    public static bool operator ==(ChainingField left, ChainingField right)
+    {
+        return left.Equals(right);
+    }
+
+    public static bool operator !=(ChainingField left, ChainingField right)
+    {
+        return !(left == right);
+    }
+
+    public override bool Equals(object? obj)
+    {
+        return obj is ChainingField field && Equals(field);
+    }
+
+    public bool Equals(ChainingField other)
+    {
+        return EqualityComparer<byte[]>.Default.Equals(_value, other._value);
+    }
+
+    public override int GetHashCode()
+    {
+        return HashCode.Combine(_value);
     }
 }

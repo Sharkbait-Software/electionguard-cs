@@ -27,6 +27,7 @@ public class JsonEncryptedBallotSerializer : IEncryptedBallotSerializer
                 new ConfirmationCodeJsonConverter(),
                 new ContestHashJsonConverter(),
                 new SelectionEncryptionIdentifierHashJsonConverter(),
+                new VotingDeviceInformationHashJsonConverter(),
             }
         };
 
@@ -43,6 +44,7 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
             Id = encryptedBallot.Id,
             SelectionEncryptionIdentifierHash = encryptedBallot.SelectionEncryptionIdentifierHash,
             BallotStyleId = encryptedBallot.BallotStyleId,
+            DeviceId = encryptedBallot.DeviceId,
             Contests = encryptedBallot.Contests.Select(c => new ProtobufEncryptedContest
             {
                 Id = c.Id,
@@ -133,10 +135,12 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
         [ProtoMember(3)]
         public required string BallotStyleId { get; init; }
         [ProtoMember(4)]
-        public required List<ProtobufEncryptedContest> Contests { get; init; }
+        public required string DeviceId { get; init; }
         [ProtoMember(5)]
-        public required byte[] ConfirmationCode { get; init; }
+        public required List<ProtobufEncryptedContest> Contests { get; init; }
         [ProtoMember(6)]
+        public required byte[] ConfirmationCode { get; init; }
+        [ProtoMember(7)]
         public required int Weight { get; init; }
     }
 

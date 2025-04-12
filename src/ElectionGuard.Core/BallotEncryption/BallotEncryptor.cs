@@ -8,13 +8,15 @@ namespace ElectionGuard.Core.BallotEncryption;
 
 public class BallotEncryptor
 {
-    public BallotEncryptor(EncryptionRecord encryptionRecord, VotingDeviceInformationHash deviceHash)
+    public BallotEncryptor(EncryptionRecord encryptionRecord, string deviceId, VotingDeviceInformationHash deviceHash)
     {
         _encryptionRecord = encryptionRecord;
+        _deviceId = deviceId;
         _deviceHash = deviceHash;
     }
 
     private readonly EncryptionRecord _encryptionRecord;
+    private readonly string _deviceId;
     private readonly VotingDeviceInformationHash _deviceHash;
 
     public EncryptedBallot Encrypt(Ballot ballot, ConfirmationCode? previousConfirmationCode)
@@ -43,6 +45,7 @@ public class BallotEncryptor
         {
             Id = ballot.Id,
             BallotStyleId = ballot.BallotStyleId,
+            DeviceId = _deviceId,
             SelectionEncryptionIdentifierHash = selectionEncryptionIdentifierHash,
             Contests = encryptedContests,
             ConfirmationCode = confirmationCode,

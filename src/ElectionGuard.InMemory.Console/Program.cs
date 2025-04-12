@@ -97,8 +97,9 @@ try
     var jsonBallotSerializer = new JsonEncryptedBallotSerializer();
     var protobufBallotSerializer = new ProtobufEncryptedBallotSerializer();
     // Encrypt a ballot
-    var deviceHash = new VotingDeviceInformationHash(extendedBaseHash, "Device 1");
-    BallotEncryptor ballotEncryptor = new BallotEncryptor(encryptionRecord, deviceHash);
+    string deviceId = "Device 1";
+    var deviceHash = new VotingDeviceInformationHash(extendedBaseHash, deviceId);
+    BallotEncryptor ballotEncryptor = new BallotEncryptor(encryptionRecord, deviceId, deviceHash);
     var ballot = JsonSerializer.Deserialize<Ballot>(File.ReadAllBytes("../../../../../test/data/famous-names/ballots/1.json"), jsonOptions)!;
     var encryptedBallot = ballotEncryptor.Encrypt(ballot, null);
 

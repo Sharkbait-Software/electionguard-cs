@@ -114,3 +114,25 @@ public class SelectionEncryptionIdentifierHashJsonConverter : JsonConverter<Sele
         writer.WriteStringValue(hexString);
     }
 }
+
+public class VotingDeviceInformationHashJsonConverter : JsonConverter<VotingDeviceInformationHash>
+{
+    public override VotingDeviceInformationHash Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        string? hexString = reader.GetString();
+        if (hexString == null)
+        {
+            throw new JsonException("Hex string is null");
+        }
+
+        byte[] bytes = Convert.FromBase64String(hexString);
+        return new VotingDeviceInformationHash(bytes);
+    }
+
+    public override void Write(Utf8JsonWriter writer, VotingDeviceInformationHash value, JsonSerializerOptions options)
+    {
+        byte[] bytes = value;
+        string hexString = Convert.ToBase64String(bytes);
+        writer.WriteStringValue(hexString);
+    }
+}

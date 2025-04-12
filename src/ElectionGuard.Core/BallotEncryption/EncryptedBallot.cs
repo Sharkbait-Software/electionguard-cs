@@ -10,6 +10,7 @@ public class EncryptedBallot
     public required List<EncryptedContest> Contests { get; init; }
     public required ConfirmationCode ConfirmationCode { get; init; }
     public required int Weight { get; init; }
+    public required string DeviceId { get; init; }
 }
 
 public record EncryptedContest
