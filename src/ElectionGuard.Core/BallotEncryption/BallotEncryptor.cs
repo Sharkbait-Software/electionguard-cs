@@ -169,7 +169,7 @@ public class BallotEncryptor
             encryptedSelections.Add(encryptedSelection);
         }
 
-        var encryptedAggregate = AggregateChoiceValues(encryptedSelections.Select(x => x.Value).ToList());
+        var encryptedAggregate = AggregateChoiceValues(encryptedSelections.Select(x => x.ToEncryptedValue()).ToList());
         var proofs = GenerateProofs(actualSelectionTotal, manifestContest.SelectionLimit, encryptedAggregate, _encryptionRecord.ElectionPublicKeys, selectionEncryptionIdentifierHash, manifestContest.Index);
 
         var overVoteCount = EncryptOptionalField(isOvervote ? 1 : 0, 1, manifestContest.Index, selectionEncryptionIdentifierHash, ballotNonce);
@@ -216,7 +216,9 @@ public class BallotEncryptor
         return new EncryptedSelection
         {
             ChoiceId = choice.Id,
-            Value = encryptedValue,
+            Alpha = encryptedValue.Alpha,
+            Beta = encryptedValue.Beta,
+            EncryptionNonce = encryptedValue.EncryptionNonce,
             Proofs = proofs,
         };
     }
@@ -228,7 +230,9 @@ public class BallotEncryptor
 
         return new EncryptedValueWithProofs
         {
-            Value = encryptedValue,
+            Alpha = encryptedValue.Alpha,
+            Beta = encryptedValue.Beta,
+            EncryptionNonce = encryptedValue.EncryptionNonce,
             Proofs = proofs,
         };
     }

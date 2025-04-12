@@ -2,6 +2,7 @@
 using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.KeyGeneration;
 using ElectionGuard.Core.Models;
+using ElectionGuard.Core.Serialization;
 using System.Text.Json;
 
 var jsonOptions = new JsonSerializerOptions
@@ -92,18 +93,35 @@ try
     var serializedEncryptionRecord = JsonSerializer.Serialize(encryptionRecord, jsonOptions);
     File.WriteAllBytes(Path.Combine(outputDirectory, "encryption-record.json"), System.Text.Encoding.UTF8.GetBytes(serializedEncryptionRecord));
 
+
+    var jsonBallotSerializer = new JsonEncryptedBallotSerializer();
+    var protobufBallotSerializer = new ProtobufEncryptedBallotSerializer();
     // Encrypt a ballot
     var deviceHash = new VotingDeviceInformationHash(extendedBaseHash, "Device 1");
     BallotEncryptor ballotEncryptor = new BallotEncryptor(encryptionRecord, deviceHash);
     var ballot = JsonSerializer.Deserialize<Ballot>(File.ReadAllBytes("../../../../../test/data/famous-names/ballots/1.json"), jsonOptions)!;
     var encryptedBallot = ballotEncryptor.Encrypt(ballot, null);
-    var serializedEncryptedBallot = JsonSerializer.Serialize(encryptedBallot, jsonOptions);
-    File.WriteAllBytes(Path.Combine(outputDirectory, "encrypted-ballots", "1.json"), System.Text.Encoding.UTF8.GetBytes(serializedEncryptedBallot));
+
+    using (var jsonFileStream = File.OpenWrite(Path.Combine(outputDirectory, "encrypted-ballots", "1.json")))
+    {
+        jsonBallotSerializer.Serialize(jsonFileStream, encryptedBallot);
+    }
+    using (var protobufFileStream = File.OpenWrite(Path.Combine(outputDirectory, "encrypted-ballots", "1.protobuf")))
+    {
+        protobufBallotSerializer.Serialize(protobufFileStream, encryptedBallot);
+    }
 
     var ballot2 = JsonSerializer.Deserialize<Ballot>(File.ReadAllBytes("../../../../../test/data/famous-names/ballots/2.json"), jsonOptions)!;
     var encryptedBallot2 = ballotEncryptor.Encrypt(ballot2, encryptedBallot.ConfirmationCode);
-    var serializedEncryptedBallot2 = JsonSerializer.Serialize(encryptedBallot2, jsonOptions);
-    File.WriteAllBytes(Path.Combine(outputDirectory, "encrypted-ballots", "2.json"), System.Text.Encoding.UTF8.GetBytes(serializedEncryptedBallot2));
+
+    using (var jsonFileStream = File.OpenWrite(Path.Combine(outputDirectory, "encrypted-ballots", "2.json")))
+    {
+        jsonBallotSerializer.Serialize(jsonFileStream, encryptedBallot2);
+    }
+    using (var protobufFileStream = File.OpenWrite(Path.Combine(outputDirectory, "encrypted-ballots", "2.protobuf")))
+    {
+        protobufBallotSerializer.Serialize(protobufFileStream, encryptedBallot2);
+    }
 
     // TODO: SOMEWHERE NEEDS TO BE AN 'END OF ELECTION' FUNCTION (MAYBE TALLY?) WHERE WE CLOSE THE CONFIRMATION CODE CHAIN.
 

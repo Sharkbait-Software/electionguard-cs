@@ -4,6 +4,11 @@ namespace ElectionGuard.Core.Models;
 
 public class SelectionEncryptionIdentifierHash : HashValue
 {
+    public SelectionEncryptionIdentifierHash(byte[] bytes)
+    {
+        Bytes = bytes;
+    }
+
     public SelectionEncryptionIdentifierHash(ExtendedBaseHash extendedBaseHash, SelectionEncryptionIdentifier identifier)
     {
         Bytes = EGHash.Hash(extendedBaseHash,

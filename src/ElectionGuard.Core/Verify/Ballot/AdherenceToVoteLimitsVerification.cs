@@ -26,8 +26,8 @@ public class AdherenceToVoteLimitsVerification
             throw new VerificationFailedException("7", $"A challenge/response value was not provided for all possible values of the contest selection limit of {contest.SelectionLimit}.");
         }
 
-        var alpha = encryptedContest.Choices.Select(x => x.Value.Alpha).Product();
-        var beta = encryptedContest.Choices.Select(x => x.Value.Beta).Product();
+        var alpha = encryptedContest.Choices.Select(x => x.Alpha).Product();
+        var beta = encryptedContest.Choices.Select(x => x.Beta).Product();
 
         List<(IntegerModP a, IntegerModP b)> calculatedValues = new();
         for (int i = 0; i < encryptedContest.Proofs.Length; i++)

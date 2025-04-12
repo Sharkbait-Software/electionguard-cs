@@ -39,10 +39,10 @@ public class SelectionEncryptionsWellFormedVerification
             VerifyIsInZq(crPair.Response, encryptionRecord.CryptographicParameters);
 
             var a = IntegerModP.PowModP(encryptionRecord.CryptographicParameters.G, crPair.Response)
-                * IntegerModP.PowModP(selection.Value.Alpha, crPair.Challenge);
+                * IntegerModP.PowModP(selection.Alpha, crPair.Challenge);
             var w = crPair.Response - i * crPair.Challenge;
             var b = IntegerModP.PowModP(encryptionRecord.ElectionPublicKeys.VoteEncryptionKey, w)
-                * IntegerModP.PowModP(selection.Value.Beta, crPair.Challenge);
+                * IntegerModP.PowModP(selection.Beta, crPair.Challenge);
             calculatedValues.Add((a, b));
         }
 
@@ -50,8 +50,8 @@ public class SelectionEncryptionsWellFormedVerification
                 [0x24],
                 contest.Index.ToByteArray(),
                 choice.Index.ToByteArray(),
-                selection.Value.Alpha,
-                selection.Value.Beta];
+                selection.Alpha,
+                selection.Beta];
         foreach (var val in calculatedValues)
         {
             bytesToHash.Add(val.a);
@@ -60,8 +60,8 @@ public class SelectionEncryptionsWellFormedVerification
 
         var c = EGHash.HashModQ(encryptedBallot.SelectionEncryptionIdentifierHash, bytesToHash.ToArray());
 
-        VerifyIsInZpr(selection.Value.Alpha, encryptionRecord.CryptographicParameters);
-        VerifyIsInZpr(selection.Value.Beta, encryptionRecord.CryptographicParameters);
+        VerifyIsInZpr(selection.Alpha, encryptionRecord.CryptographicParameters);
+        VerifyIsInZpr(selection.Beta, encryptionRecord.CryptographicParameters);
 
         var sumC = selection.Proofs.Select(x => x.Challenge).Sum();
         if (sumC != c)

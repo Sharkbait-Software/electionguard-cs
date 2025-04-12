@@ -4,6 +4,11 @@ namespace ElectionGuard.Core.Models;
 
 public struct ConfirmationCode
 {
+    public ConfirmationCode(byte[] bytes)
+    {
+        _value = bytes;
+    }
+
     public ConfirmationCode(SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, IEnumerable<ContestHash> contestHashes, ChainingField? chainingField)
     {
         List<byte[]> bytesToHash = [[0x29]];

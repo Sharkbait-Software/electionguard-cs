@@ -6,6 +6,11 @@ namespace ElectionGuard.Core.Models;
 
 public struct ContestHash
 {
+    public ContestHash(byte[] bytes)
+    {
+        _value = bytes;
+    }
+
     public ContestHash(
         SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, 
         int contestIndex,
@@ -21,17 +26,17 @@ public struct ContestHash
             contestIndex.ToByteArray()];
         foreach (var encryptedSelection in encryptedChoices)
         {
-            contestBytesToHash.Add(encryptedSelection.Value.Alpha);
-            contestBytesToHash.Add(encryptedSelection.Value.Beta);
+            contestBytesToHash.Add(encryptedSelection.Alpha);
+            contestBytesToHash.Add(encryptedSelection.Beta);
         }
-        contestBytesToHash.Add(overVoteCount.Value.Alpha);
-        contestBytesToHash.Add(overVoteCount.Value.Beta);
-        contestBytesToHash.Add(nullVoteCount.Value.Alpha);
-        contestBytesToHash.Add(nullVoteCount.Value.Beta);
-        contestBytesToHash.Add(underVoteCount.Value.Alpha);
-        contestBytesToHash.Add(underVoteCount.Value.Beta);
-        contestBytesToHash.Add(writeInVoteCount.Value.Alpha);
-        contestBytesToHash.Add(writeInVoteCount.Value.Beta);
+        contestBytesToHash.Add(overVoteCount.Alpha);
+        contestBytesToHash.Add(overVoteCount.Beta);
+        contestBytesToHash.Add(nullVoteCount.Alpha);
+        contestBytesToHash.Add(nullVoteCount.Beta);
+        contestBytesToHash.Add(underVoteCount.Alpha);
+        contestBytesToHash.Add(underVoteCount.Beta);
+        contestBytesToHash.Add(writeInVoteCount.Alpha);
+        contestBytesToHash.Add(writeInVoteCount.Beta);
         if (encryptedContestData != null)
         {
             contestBytesToHash.Add(encryptedContestData.C0);

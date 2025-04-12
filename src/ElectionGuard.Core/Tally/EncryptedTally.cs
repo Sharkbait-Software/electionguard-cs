@@ -34,8 +34,8 @@ public class EncryptedTally
             foreach(var choice in contest.Choices)
             {
                 var aggregateChoice = aggregateContest.Choices[choice.ChoiceId];
-                var alpha = choice.Value.Alpha;
-                var beta = choice.Value.Beta;
+                var alpha = choice.Alpha;
+                var beta = choice.Beta;
                 
                 if(encryptedBallot.Weight > 1)
                 {
