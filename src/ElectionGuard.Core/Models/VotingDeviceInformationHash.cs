@@ -43,7 +43,7 @@ public struct VotingDeviceInformationHash : IEquatable<VotingDeviceInformationHa
 
     public bool Equals(VotingDeviceInformationHash other)
     {
-        return EqualityComparer<byte[]>.Default.Equals(_value, other._value);
+        return _value.SequenceEqual(other._value);
     }
 
     public override int GetHashCode()

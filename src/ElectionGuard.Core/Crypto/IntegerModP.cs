@@ -105,22 +105,22 @@ public struct IntegerModP : IEquatable<IntegerModP>
 
     public static bool operator <(IntegerModP a, IntegerModP b)
     {
-        return a < b;
+        return a._i < b._i;
     }
 
     public static bool operator >(IntegerModP a, IntegerModP b)
     {
-        return a > b;
+        return a._i > b._i;
     }
 
     public static bool operator <=(IntegerModP a, IntegerModP b)
     {
-        return a <= b;
+        return a._i <= b._i;
     }
 
     public static bool operator >=(IntegerModP a, IntegerModP b)
     {
-        return a >= b;
+        return a._i >= b._i;
     }
 
     public override bool Equals(object? obj)

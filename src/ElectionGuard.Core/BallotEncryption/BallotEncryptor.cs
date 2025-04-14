@@ -46,6 +46,7 @@ public class BallotEncryptor
             Id = ballot.Id,
             BallotStyleId = ballot.BallotStyleId,
             DeviceId = _deviceId,
+            SelectionEncryptionIdentifier = selectionEncryptionIdentifier,
             SelectionEncryptionIdentifierHash = selectionEncryptionIdentifierHash,
             Contests = encryptedContests,
             ConfirmationCode = confirmationCode,
@@ -278,7 +279,7 @@ public class BallotEncryptor
     {
         List<(IntegerModQ u, IntegerModP a, IntegerModP b, IntegerModQ? cj)> commitments = new();
 
-        for (int i = 0; i < selectionLimit; i++)
+        for (int i = 0; i <= selectionLimit; i++)
         {
             var keyPair = KeyPair.GenerateRandom();
             IntegerModQ u = keyPair.SecretKey;

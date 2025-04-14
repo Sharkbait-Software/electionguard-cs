@@ -3,6 +3,8 @@ using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.KeyGeneration;
 using ElectionGuard.Core.Models;
 using ElectionGuard.Core.Serialization;
+using ElectionGuard.Core.Verify.Ballot;
+using ElectionGuard.Core.Verify.KeyGeneration;
 using System.Text.Json;
 
 var jsonOptions = new JsonSerializerOptions
@@ -125,6 +127,34 @@ try
     }
 
     // TODO: SOMEWHERE NEEDS TO BE AN 'END OF ELECTION' FUNCTION (MAYBE TALLY?) WHERE WE CLOSE THE CONFIRMATION CODE CHAIN.
+
+    // Verification 4
+    var extendedBaseHashVerification = new ExtendedBaseHashVerification();
+    extendedBaseHashVerification.Verify(extendedBaseHash, electionBaseHash, electionPublicKeys);
+    
+    // Verification 5
+    var selectionEncryptionIdentifierVerification = new SelectionEncryptionIdentifierVerification();
+    var selectionEncryptionIdentifiers = new List<SelectionEncryptionIdentifier>();
+    selectionEncryptionIdentifiers.Add(encryptedBallot.SelectionEncryptionIdentifier);
+    selectionEncryptionIdentifiers.Add(encryptedBallot2.SelectionEncryptionIdentifier);
+    selectionEncryptionIdentifierVerification.Verify(selectionEncryptionIdentifiers);
+
+    // Verification 6
+    var selectionEncryptionsWellFormedVerification = new SelectionEncryptionsWellFormedVerification();
+    selectionEncryptionsWellFormedVerification.Verify(encryptedBallot, encryptionRecord);
+    selectionEncryptionsWellFormedVerification.Verify(encryptedBallot2, encryptionRecord);
+
+    // Verification 7
+    var adherenceToVoteLimitsVerification = new AdherenceToVoteLimitsVerification();
+    adherenceToVoteLimitsVerification.Verify(encryptedBallot, encryptionRecord);
+    adherenceToVoteLimitsVerification.Verify(encryptedBallot2, encryptionRecord);
+
+    // Verificaiton 8
+    var confirmationCodeVerification = new ConfirmationCodeVerification();
+    confirmationCodeVerification.Verify(encryptedBallot, deviceHash, encryptionRecord, null);
+    confirmationCodeVerification.Verify(encryptedBallot2, deviceHash, encryptionRecord, null);
+
+    // Verification 9
 
     Console.WriteLine("Done.");
 }

@@ -21,7 +21,7 @@ public class AdherenceToVoteLimitsVerification
 
     private void Verify(EncryptedContest encryptedContest, Contest contest, EncryptionRecord encryptionRecord, EncryptedBallot encryptedBallot)
     {
-        if (encryptedContest.Proofs.Length != contest.SelectionLimit)
+        if (encryptedContest.Proofs.Length != contest.SelectionLimit + 1)
         {
             throw new VerificationFailedException("7", $"A challenge/response value was not provided for all possible values of the contest selection limit of {contest.SelectionLimit}.");
         }

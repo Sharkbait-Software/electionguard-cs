@@ -15,7 +15,7 @@ public class ExtendedBaseHashVerification
             electionPublicKeys.VoteEncryptionKey,
             electionPublicKeys.OtherBallotDataEncryptionKey);
 
-        if (expected != (byte[])actual)
+        if (!expected.SequenceEqual((byte[])actual))
         {
             throw new VerificationFailedException("4.A", "Extended base hash was not calculated correctly.");
         }

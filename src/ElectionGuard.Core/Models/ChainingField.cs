@@ -42,7 +42,7 @@ public struct ChainingField : IEquatable<ChainingField>
 
     public bool Equals(ChainingField other)
     {
-        return EqualityComparer<byte[]>.Default.Equals(_value, other._value);
+        return _value.SequenceEqual(other._value);
     }
 
     public override int GetHashCode()

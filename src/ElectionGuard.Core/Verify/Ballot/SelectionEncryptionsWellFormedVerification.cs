@@ -25,7 +25,7 @@ public class SelectionEncryptionsWellFormedVerification
 
     private void Verify(EncryptedValueWithProofs selection, Contest contest, Choice choice, EncryptionRecord encryptionRecord, EncryptedBallot encryptedBallot)
     {
-        if (selection.Proofs.Length != contest.OptionSelectionLimit)
+        if (selection.Proofs.Length != contest.OptionSelectionLimit + 1)
         {
             throw new VerificationFailedException("6", $"A challenge/response value was not provided for all possible values of the option selection limit of {contest.OptionSelectionLimit}.");
         }

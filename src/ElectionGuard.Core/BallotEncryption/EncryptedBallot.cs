@@ -5,6 +5,7 @@ namespace ElectionGuard.Core.BallotEncryption;
 public class EncryptedBallot
 {
     public required string Id { get; init; }
+    public required SelectionEncryptionIdentifier SelectionEncryptionIdentifier { get; init; }
     public required SelectionEncryptionIdentifierHash SelectionEncryptionIdentifierHash { get; init; }
     public required string BallotStyleId { get; init; }
     public required List<EncryptedContest> Contests { get; init; }

@@ -44,7 +44,7 @@ public struct ConfirmationCode : IEquatable<ConfirmationCode>
 
     public bool Equals(ConfirmationCode other)
     {
-        return EqualityComparer<byte[]>.Default.Equals(_value, other._value);
+        return _value.SequenceEqual(other._value);
     }
 
     public override int GetHashCode()
