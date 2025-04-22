@@ -13,6 +13,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ElectionGuard.Core.UnitTest
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ElectionGuard.InMemory.Console", "src\ElectionGuard.InMemory.Console\ElectionGuard.InMemory.Console.csproj", "{89353337-46EF-4C0D-A4FC-8BFFD766AB32}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ElectionGuard.Testing.Cli", "test\ElectionGuard.Testing.Cli\ElectionGuard.Testing.Cli.csproj", "{3694376D-6247-4CE0-B3C2-A5D723AB0CDF}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -31,6 +33,10 @@ Global
 		{89353337-46EF-4C0D-A4FC-8BFFD766AB32}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{89353337-46EF-4C0D-A4FC-8BFFD766AB32}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{89353337-46EF-4C0D-A4FC-8BFFD766AB32}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3694376D-6247-4CE0-B3C2-A5D723AB0CDF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3694376D-6247-4CE0-B3C2-A5D723AB0CDF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3694376D-6247-4CE0-B3C2-A5D723AB0CDF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3694376D-6247-4CE0-B3C2-A5D723AB0CDF}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -39,6 +45,7 @@ Global
 		{A4FFEEFD-4A34-1E0F-51FA-BFFA7094F551} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{52F5B529-4C4C-4FCA-91F7-A8774A53959F} = {07ADC7F7-E231-4B6C-A69B-2AFD655B7FDD}
 		{89353337-46EF-4C0D-A4FC-8BFFD766AB32} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{3694376D-6247-4CE0-B3C2-A5D723AB0CDF} = {07ADC7F7-E231-4B6C-A69B-2AFD655B7FDD}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {2BEAD993-0C20-4D40-81EB-B83C168D701B}

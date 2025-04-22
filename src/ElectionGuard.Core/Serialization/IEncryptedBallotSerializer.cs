@@ -1,5 +1,6 @@
 ﻿using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.Crypto;
+using ElectionGuard.Core.Models;
 using ElectionGuard.Core.Serialization.Converters;
 using ProtoBuf;
 using System.Text.Json;
@@ -9,6 +10,7 @@ namespace ElectionGuard.Core.Serialization;
 public interface IEncryptedBallotSerializer
 {
     void Serialize(Stream destination, EncryptedBallot encryptedBallot);
+    EncryptedBallot? Deserialize(Stream source);
 }
 
 
@@ -19,7 +21,7 @@ public class JsonEncryptedBallotSerializer : IEncryptedBallotSerializer
         var options = new JsonSerializerOptions
         {
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            WriteIndented = true,
+            WriteIndented = false,
             Converters =
             {
                 new IntegerModQJsonConverter(),
@@ -33,6 +35,26 @@ public class JsonEncryptedBallotSerializer : IEncryptedBallotSerializer
 
         JsonSerializer.Serialize(destination, encryptedBallot, options);
     }
+
+    public EncryptedBallot? Deserialize(Stream source)
+    {
+        var options = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            WriteIndented = false,
+            Converters =
+            {
+                new IntegerModQJsonConverter(),
+                new IntegerModPJsonConverter(),
+                new ConfirmationCodeJsonConverter(),
+                new ContestHashJsonConverter(),
+                new SelectionEncryptionIdentifierHashJsonConverter(),
+                new VotingDeviceInformationHashJsonConverter(),
+            }
+        };
+
+        return JsonSerializer.Deserialize<EncryptedBallot>(source, options);
+    }
 }
 
 public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
@@ -42,6 +64,7 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
         var protobufEncryptedBallot = new ProtobufEncryptedBallot
         {
             Id = encryptedBallot.Id,
+            SelectionEncryptionIdentifier = encryptedBallot.SelectionEncryptionIdentifier,
             SelectionEncryptionIdentifierHash = encryptedBallot.SelectionEncryptionIdentifierHash,
             BallotStyleId = encryptedBallot.BallotStyleId,
             DeviceId = encryptedBallot.DeviceId,
@@ -125,22 +148,110 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
         Serializer.Serialize(destination, protobufEncryptedBallot);
     }
 
+    public EncryptedBallot? Deserialize(Stream source)
+    {
+        var protobufBallot = Serializer.Deserialize<ProtobufEncryptedBallot>(source);
+
+        var encryptedBallot = new EncryptedBallot
+        {
+            Id = protobufBallot.Id,
+            SelectionEncryptionIdentifier = new SelectionEncryptionIdentifier(protobufBallot.SelectionEncryptionIdentifier),
+            SelectionEncryptionIdentifierHash = new SelectionEncryptionIdentifierHash(protobufBallot.SelectionEncryptionIdentifierHash),
+            BallotStyleId = protobufBallot.BallotStyleId,
+            DeviceId = protobufBallot.DeviceId,
+            Contests = protobufBallot.Contests.Select(c => new EncryptedContest
+            {
+                Id = c.Id,
+                Choices = c.Choices.Select(s => new EncryptedSelection
+                {
+                    ChoiceId = s.ChoiceId,
+                    Alpha = new IntegerModP(s.Alpha),
+                    Beta = new IntegerModP(s.Beta),
+                    Proofs = s.Proofs.Select(p => new ChallengeResponsePair
+                    {
+                        Challenge = new IntegerModQ(p.Challenge),
+                        Response = new IntegerModQ(p.Response)
+                    }).ToArray()
+                }).ToList(),
+                Proofs = c.Proofs.Select(p => new ChallengeResponsePair
+                {
+                    Challenge = new IntegerModQ(p.Challenge),
+                    Response = new IntegerModQ(p.Response)
+                }).ToArray(),
+                OvervoteCount = new EncryptedValueWithProofs
+                {
+                    Alpha = new IntegerModP(c.OvervoteCount.Alpha),
+                    Beta = new IntegerModP(c.OvervoteCount.Beta),
+                    Proofs = c.OvervoteCount.Proofs.Select(p => new ChallengeResponsePair
+                    {
+                        Challenge = new IntegerModQ(p.Challenge),
+                        Response = new IntegerModQ(p.Response)
+                    }).ToArray()
+                },
+                NullvoteCount = new EncryptedValueWithProofs
+                {
+                    Alpha = new IntegerModP(c.NullvoteCount.Alpha),
+                    Beta = new IntegerModP(c.NullvoteCount.Beta),
+                    Proofs = c.NullvoteCount.Proofs.Select(p => new ChallengeResponsePair
+                    {
+                        Challenge = new IntegerModQ(p.Challenge),
+                        Response = new IntegerModQ(p.Response)
+                    }).ToArray()
+                },
+                UndervoteCount = new EncryptedValueWithProofs
+                {
+                    Alpha = new IntegerModP(c.UndervoteCount.Alpha),
+                    Beta = new IntegerModP(c.UndervoteCount.Beta),
+                    Proofs = c.UndervoteCount.Proofs.Select(p => new ChallengeResponsePair
+                    {
+                        Challenge = new IntegerModQ(p.Challenge),
+                        Response = new IntegerModQ(p.Response)
+                    }).ToArray()
+                },
+                WriteInVoteCount = new EncryptedValueWithProofs
+                {
+                    Alpha = new IntegerModP(c.WriteInVoteCount.Alpha),
+                    Beta = new IntegerModP(c.WriteInVoteCount.Beta),
+                    Proofs = c.WriteInVoteCount.Proofs.Select(p => new ChallengeResponsePair
+                    {
+                        Challenge = new IntegerModQ(p.Challenge),
+                        Response = new IntegerModQ(p.Response)
+                    }).ToArray()
+                },
+                ContestData = c.ContestData != null ? new EncryptedData
+                {
+                    C0 = c.ContestData.C0,
+                    C1 = c.ContestData.C1,
+                    Challenge = new IntegerModQ(c.ContestData.Challenge),
+                    Response = new IntegerModQ(c.ContestData.Response)
+                } : null,
+                ContestHash = new ContestHash(c.ContestHash),
+            }).ToList(),
+            ConfirmationCode = new ConfirmationCode(protobufBallot.ConfirmationCode),
+            Weight = protobufBallot.Weight,
+        };
+
+        return encryptedBallot;
+    }
+
     [ProtoContract]
     public class ProtobufEncryptedBallot
     {
         [ProtoMember(1)]
         public required string Id { get; init; }
         [ProtoMember(2)]
-        public required byte[] SelectionEncryptionIdentifierHash { get; init; }
+        public required byte[] SelectionEncryptionIdentifier { get; init; }
         [ProtoMember(3)]
-        public required string BallotStyleId { get; init; }
+        public required byte[] SelectionEncryptionIdentifierHash { get; init; }
         [ProtoMember(4)]
-        public required string DeviceId { get; init; }
+        public required string BallotStyleId { get; init; }
         [ProtoMember(5)]
-        public required List<ProtobufEncryptedContest> Contests { get; init; }
+        public required string DeviceId { get; init; }
         [ProtoMember(6)]
-        public required byte[] ConfirmationCode { get; init; }
+        public required List<ProtobufEncryptedContest> Contests { get; init; }
         [ProtoMember(7)]
+        public required byte[] ConfirmationCode { get; init; }
+        [ProtoMember(8)]
         public required int Weight { get; init; }
     }
 

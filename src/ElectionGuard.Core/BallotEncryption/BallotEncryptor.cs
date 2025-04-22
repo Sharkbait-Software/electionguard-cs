@@ -86,12 +86,13 @@ public class BallotEncryptor
                 }
             }
 
+            // This doesn't work with overvotes
             // Each contest has an allowed number of selections.
-            var numberOfSelections = contest.Choices.Where(x => x.SelectionValue > 0).Count();
-            if(numberOfSelections > manifestContest.SelectionLimit)
-            {
-                throw new Exception($"Contest with id {contest.Id} has selections that exceed the contest selection limit.");
-            }
+            //var numberOfSelections = contest.Choices.Where(x => x.SelectionValue > 0).Count();
+            //if(numberOfSelections > manifestContest.SelectionLimit)
+            //{
+            //    throw new Exception($"Contest with id {contest.Id} has selections that exceed the contest selection limit.");
+            //}
         }
 
         // All contests for the given ballot style are specified.

@@ -10,7 +10,7 @@ public class EncryptedTally
     {
         _manifest = manifest;
 
-        _contests = _manifest.Contests
+        Contests = _manifest.Contests
             .ToDictionary(x => x.Id, x => new EncryptedAggregateContest
             {
                 ContestId = x.Id,
@@ -24,13 +24,13 @@ public class EncryptedTally
     }
 
     private readonly Manifest _manifest;
-    private Dictionary<string, EncryptedAggregateContest> _contests;
+    public Dictionary<string, EncryptedAggregateContest> Contests;
 
     public void AddBallot(EncryptedBallot encryptedBallot)
     {
         foreach(var contest in encryptedBallot.Contests)
         {
-            var aggregateContest = _contests[contest.Id];
+            var aggregateContest = Contests[contest.Id];
             foreach(var choice in contest.Choices)
             {
                 var aggregateChoice = aggregateContest.Choices[choice.ChoiceId];
@@ -49,16 +49,22 @@ public class EncryptedTally
         }
     }
 
-    private class EncryptedAggregateContest
+    public class EncryptedAggregateContest
     {
         public required string ContestId { get; init; }
         public required Dictionary<string, EncryptedAggregateChoice> Choices { get; init; }
     }
 
-    private class EncryptedAggregateChoice
+    public class EncryptedAggregateChoice
     {
         public required string ChoiceId { get; init; }
         public required IntegerModP A { get; set; }
         public required IntegerModP B { get; set; }
     }
+}
+
+
+public class PartialTallyDecryption
+{
+
 }
