@@ -102,6 +102,11 @@ public struct IntegerModQ : IEquatable<IntegerModQ>
         return new IntegerModQ(a._i * b._i);
     }
 
+    public static IntegerModQ operator /(IntegerModQ a, IntegerModQ b)
+    {
+        return new IntegerModQ(a._i / b._i);
+    }
+
     //public static IntegerModQ operator *(IntegerModQ a, int b)
     //{
     //    return new IntegerModQ(a._i * b);

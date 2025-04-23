@@ -1,6 +1,7 @@
 ﻿using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.Models;
+using static ElectionGuard.Core.Tally.EncryptedTally;
 
 namespace ElectionGuard.Core.Tally;
 
@@ -25,6 +26,7 @@ public class EncryptedTally
 
     private readonly Manifest _manifest;
     public Dictionary<string, EncryptedAggregateContest> Contests;
+    public int BallotsCast { get; private set; } = 0;
 
     public void AddBallot(EncryptedBallot encryptedBallot)
     {
@@ -43,10 +45,20 @@ public class EncryptedTally
                     beta = IntegerModP.PowModP(beta, encryptedBallot.Weight);
                 }
 
-                aggregateChoice.A *= alpha;
-                aggregateChoice.B *= beta;
+                
+                if(aggregateChoice.IsZero())
+                {
+                    aggregateChoice.A = alpha;
+                    aggregateChoice.B = beta;
+                }
+                else
+                {
+                    aggregateChoice.A *= alpha;
+                    aggregateChoice.B *= beta;
+                }
             }
         }
+        BallotsCast++;
     }
 
     public class EncryptedAggregateContest
@@ -60,11 +72,10 @@ public class EncryptedTally
         public required string ChoiceId { get; init; }
         public required IntegerModP A { get; set; }
         public required IntegerModP B { get; set; }
+
+        public bool IsZero()
+        {
+            return A == 0 && B == 0;
+        }
     }
-}
-
-
-public class PartialTallyDecryption
-{
-
 }

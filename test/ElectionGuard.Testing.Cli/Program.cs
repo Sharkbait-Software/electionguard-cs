@@ -11,8 +11,8 @@ var jsonSerializerOptions = new JsonSerializerOptions
     PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
 };
 
-var manifest = GenerateManifest(50, 25, 100, outputDirectory);
-GenerateTestBallots(manifest, 10000, outputDirectory);
+var manifest = GenerateManifest(1, 1, 1, outputDirectory);
+GenerateTestBallots(manifest, 3, outputDirectory);
 
 Manifest GenerateManifest(int numContests, int averageContestsPerBallot, int numBallotStyles, string outputDirectory)
 {
@@ -214,7 +214,7 @@ void GenerateTestBallots(Manifest manifest, int numBallots, string outputDirecto
     }
 
     var serializedTally = JsonSerializer.Serialize(tally, jsonSerializerOptions);
-    File.WriteAllBytes(Path.Combine(outputDirectory, $"tally.json"), System.Text.Encoding.UTF8.GetBytes(serializedTally));
+    File.WriteAllBytes(Path.Combine(outputDirectory, $"expected-tally.json"), System.Text.Encoding.UTF8.GetBytes(serializedTally));
 }
 
 public class Tally

@@ -7,6 +7,7 @@ using ElectionGuard.Core.Tally;
 using ElectionGuard.Core.Verify.Ballot;
 using ElectionGuard.Core.Verify.KeyGeneration;
 using ElectionGuard.Core.Verify.Tally;
+using System.Collections.Concurrent;
 using System.Text.Json;
 
 var jsonOptions = new JsonSerializerOptions
@@ -46,11 +47,11 @@ try
         guardianEncryptedShares.AddRange(encryptedShares);
     }
 
-    List<GuardianSecretShares> guardianSecretShares = new List<GuardianSecretShares>();
+    Dictionary<GuardianIndex, GuardianSecretShares> guardianSecretShares = new Dictionary<GuardianIndex, GuardianSecretShares>();
     foreach (var guardian in guardians)
     {
         var secretShares = guardian.DecryptShares(guardianEncryptedShares.Where(x => x.DestinationIndex == guardian.Index).ToList());
-        guardianSecretShares.Add(secretShares);
+        guardianSecretShares[guardian.Index] = secretShares;
     }
 
     var electionPublicKeys = new ElectionPublicKeys(
@@ -109,19 +110,22 @@ try
 
     var ballots = Directory.GetFiles(Path.Combine(inputDirectory, "ballots"));
 
+    ConcurrentBag<EncryptedBallot> encryptedBallots = new ConcurrentBag<EncryptedBallot>();
+
     Parallel.ForEach(ballots, ballotFile =>
     {
         var ballot = JsonSerializer.Deserialize<Ballot>(File.ReadAllBytes(ballotFile), jsonOptions)!;
         var ballotEncryptor = new BallotEncryptor(encryptionRecord, deviceId, deviceHash);
         var encryptedBallot = ballotEncryptor.Encrypt(ballot, null);
+        encryptedBallots.Add(encryptedBallot);
         using (var jsonFileStream = File.OpenWrite(Path.Combine(outputDirectory, "encrypted-json-ballots", Path.GetFileName(ballotFile))))
         {
             jsonBallotSerializer.Serialize(jsonFileStream, encryptedBallot);
         }
-        using (var protobufFileStream = File.OpenWrite(Path.Combine(outputDirectory, "encrypted-protobuf-ballots", Path.GetFileNameWithoutExtension(ballotFile) + ".protobuf")))
-        {
-            protobufBallotSerializer.Serialize(protobufFileStream, encryptedBallot);
-        }
+        //using (var protobufFileStream = File.OpenWrite(Path.Combine(outputDirectory, "encrypted-protobuf-ballots", Path.GetFileNameWithoutExtension(ballotFile) + ".protobuf")))
+        //{
+        //    protobufBallotSerializer.Serialize(protobufFileStream, encryptedBallot);
+        //}
     });
 
     //BallotEncryptor ballotEncryptor = new BallotEncryptor(encryptionRecord, deviceId, deviceHash);
@@ -149,41 +153,55 @@ try
     //    protobufBallotSerializer.Serialize(protobufFileStream, encryptedBallot2);
     //}
 
-    // TODO: SOMEWHERE NEEDS TO BE AN 'END OF ELECTION' FUNCTION (MAYBE TALLY?) WHERE WE CLOSE THE CONFIRMATION CODE CHAIN.
+    //    TODO: SOMEWHERE NEEDS TO BE AN 'END OF ELECTION' FUNCTION(MAYBE TALLY ?) WHERE WE CLOSE THE CONFIRMATION CODE CHAIN.
 
     // Verification 4
-    //var extendedBaseHashVerification = new ExtendedBaseHashVerification();
-    //extendedBaseHashVerification.Verify(extendedBaseHash, electionBaseHash, electionPublicKeys);
-    
-    //// Verification 5
-    //var selectionEncryptionIdentifierVerification = new SelectionEncryptionIdentifierVerification();
-    //var selectionEncryptionIdentifiers = new List<SelectionEncryptionIdentifier>();
-    //selectionEncryptionIdentifiers.Add(encryptedBallot.SelectionEncryptionIdentifier);
-    //selectionEncryptionIdentifiers.Add(encryptedBallot2.SelectionEncryptionIdentifier);
-    //selectionEncryptionIdentifierVerification.Verify(selectionEncryptionIdentifiers);
+    var extendedBaseHashVerification = new ExtendedBaseHashVerification();
+    extendedBaseHashVerification.Verify(extendedBaseHash, electionBaseHash, electionPublicKeys);
 
-    //// Verification 6
-    //var selectionEncryptionsWellFormedVerification = new SelectionEncryptionsWellFormedVerification();
-    //selectionEncryptionsWellFormedVerification.Verify(encryptedBallot, encryptionRecord);
-    //selectionEncryptionsWellFormedVerification.Verify(encryptedBallot2, encryptionRecord);
+    // Verification 5
+    Parallel.ForEach(encryptedBallots, encryptedBallot =>
+    {
+        var selectionEncryptionIdentifierVerification = new SelectionEncryptionIdentifierVerification();
+        var selectionEncryptionIdentifiers = new List<SelectionEncryptionIdentifier>();
+        selectionEncryptionIdentifiers.Add(encryptedBallot.SelectionEncryptionIdentifier);
+        selectionEncryptionIdentifierVerification.Verify(selectionEncryptionIdentifiers);
 
-    //// Verification 7
-    //var adherenceToVoteLimitsVerification = new AdherenceToVoteLimitsVerification();
-    //adherenceToVoteLimitsVerification.Verify(encryptedBallot, encryptionRecord);
-    //adherenceToVoteLimitsVerification.Verify(encryptedBallot2, encryptionRecord);
+        // Verification 6
+        var selectionEncryptionsWellFormedVerification = new SelectionEncryptionsWellFormedVerification();
+        selectionEncryptionsWellFormedVerification.Verify(encryptedBallot, encryptionRecord);
 
-    //// Verificaiton 8
-    //var confirmationCodeVerification = new ConfirmationCodeVerification();
-    //confirmationCodeVerification.Verify(encryptedBallot, deviceHash, encryptionRecord, null);
-    //confirmationCodeVerification.Verify(encryptedBallot2, deviceHash, encryptionRecord, null);
+        // Verification 7
+        var adherenceToVoteLimitsVerification = new AdherenceToVoteLimitsVerification();
+        adherenceToVoteLimitsVerification.Verify(encryptedBallot, encryptionRecord);
 
-    //var encryptedTally = new EncryptedTally(manifest);
-    //encryptedTally.AddBallot(encryptedBallot);
-    //encryptedTally.AddBallot(encryptedBallot2);
+        // Verificaiton 8
+        var confirmationCodeVerification = new ConfirmationCodeVerification();
+        confirmationCodeVerification.Verify(encryptedBallot, deviceHash, encryptionRecord, null);
+    });
 
-    //// Verification 9
-    //var ballotAggregationVerification = new BallotAggregationVerification();
-    //ballotAggregationVerification.Verify(new List<EncryptedBallot> { encryptedBallot, encryptedBallot2 }, manifest, encryptedTally);
+    var encryptedTally = new EncryptedTally(manifest);
+    foreach (var encryptedBallot in encryptedBallots)
+    {
+        encryptedTally.AddBallot(encryptedBallot);
+    }
+
+    // Verification 9
+    var ballotAggregationVerification = new BallotAggregationVerification();
+    ballotAggregationVerification.Verify(encryptedBallots.ToList(), manifest, encryptedTally);
+
+    List<PartialTallyDecryption> partialTallyDecryptions = new List<PartialTallyDecryption>();
+    foreach(var guardian in guardians)
+    {
+        var tallyGuardian = new TallyGuardian(guardian.Index, guardianSecretShares[guardian.Index]);
+        var partialDecryption = tallyGuardian.Decrypt(encryptedTally);
+        partialTallyDecryptions.Add(partialDecryption);
+    }
+
+    var tallyAdmin = new TallyAdmin();
+    var decryptedTally = tallyAdmin.Decrypt(partialTallyDecryptions, encryptedTally, electionPublicKeys);
+    var serializedDecryptedTally = JsonSerializer.Serialize(decryptedTally);
+    File.WriteAllBytes(Path.Combine(outputDirectory, "tally.json"), System.Text.Encoding.UTF8.GetBytes(serializedDecryptedTally));
 
     Console.WriteLine("Done.");
 }

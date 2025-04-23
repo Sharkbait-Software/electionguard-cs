@@ -152,7 +152,7 @@ public class BallotEncryptor
         var actualSelectionTotal = contest.Choices.Sum(x => x.SelectionValue);
         var actualCountOfSelections = contest.Choices.Where(x => x.SelectionValue > 0).Count();
 
-        bool isOvervote = actualSelectionTotal > manifestContest.SelectionLimit;
+        bool isOvervote = actualSelectionTotal > (manifestContest.SelectionLimit * manifestContest.OptionSelectionLimit);
         bool isNullVote = contest.Choices.All(x => x.SelectionValue == 0);
         int numUndervotes = Math.Min(0, manifestContest.SelectionLimit - actualCountOfSelections);
         int numWriteins = contest.NumWriteinsSelected;
@@ -165,6 +165,7 @@ public class BallotEncryptor
             {
                 choice.SelectionValue = 0;
             }
+            actualSelectionTotal = 0;
         }
         
         foreach (var choice in contest.Choices)

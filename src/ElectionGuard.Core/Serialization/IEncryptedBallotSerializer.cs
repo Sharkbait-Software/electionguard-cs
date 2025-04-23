@@ -21,7 +21,7 @@ public class JsonEncryptedBallotSerializer : IEncryptedBallotSerializer
         var options = new JsonSerializerOptions
         {
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            WriteIndented = false,
+            WriteIndented = true,
             Converters =
             {
                 new IntegerModQJsonConverter(),
@@ -41,7 +41,7 @@ public class JsonEncryptedBallotSerializer : IEncryptedBallotSerializer
         var options = new JsonSerializerOptions
         {
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            WriteIndented = false,
+            WriteIndented = true,
             Converters =
             {
                 new IntegerModQJsonConverter(),

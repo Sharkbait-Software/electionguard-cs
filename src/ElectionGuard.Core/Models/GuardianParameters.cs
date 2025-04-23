@@ -2,6 +2,6 @@
 
 public class GuardianParameters
 {
-    public int N { get; } = 5;
-    public int K { get; } = 3;
+    public int N { get; } = 3;
+    public int K { get; } = 2;
 }

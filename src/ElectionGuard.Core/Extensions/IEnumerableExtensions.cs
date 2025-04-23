@@ -19,4 +19,14 @@ public static class IEnumerableExtensions
     {
         return items.Aggregate((a, b) => a * b);
     }
+
+    public static IntegerModQ Product(this IEnumerable<IntegerModQ> items)
+    {
+        return items.Aggregate((a, b) => a * b);
+    }
+
+    public static int Product(this IEnumerable<int> items)
+    {
+        return items.Aggregate((a, b) => a * b);
+    }
 }
