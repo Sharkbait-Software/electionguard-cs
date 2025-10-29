@@ -154,7 +154,7 @@ public class BallotEncryptor
 
         bool isOvervote = actualSelectionTotal > (manifestContest.SelectionLimit * manifestContest.OptionSelectionLimit);
         bool isNullVote = contest.Choices.All(x => x.SelectionValue == 0);
-        int numUndervotes = Math.Min(0, manifestContest.SelectionLimit - actualCountOfSelections);
+        int numUndervotes = Math.Max(0, manifestContest.SelectionLimit - actualCountOfSelections);
         int numWriteins = contest.NumWriteinsSelected;
 
 
@@ -219,7 +219,7 @@ public class BallotEncryptor
         var encryptedValue = EncryptContestValue(selectionValue, selectionEncryptionIdentifierHash, ballotNonce, contest.Index, choice.Index);
         var proofs = GenerateProofs(selectionValue, contest.OptionSelectionLimit, encryptedValue, _encryptionRecord.ElectionPublicKeys, selectionEncryptionIdentifierHash, contest.Index, choice.Index);
 
-        return new EncryptedSelection
+        var selection = new EncryptedSelection
         {
             ChoiceId = choice.Id,
             Alpha = encryptedValue.Alpha,
@@ -227,6 +227,11 @@ public class BallotEncryptor
             EncryptionNonce = encryptedValue.EncryptionNonce,
             Proofs = proofs,
         };
+
+        // In theory we can decrypt this value with the encryption nonce if we have encrypted it properly.
+        // See 3.3.1
+        
+        return selection;
     }
 
     private EncryptedValueWithProofs EncryptOptionalField(int selectionValue, int maxValue, int contestIndex, SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, BallotNonce ballotNonce)

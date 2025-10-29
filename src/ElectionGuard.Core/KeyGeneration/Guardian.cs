@@ -267,7 +267,17 @@ public class Guardian
 
     private IntegerModQ ComputePolynomial(List<KeyPair> keyPairs, int destinationGuardianIndex)
     {
-        return keyPairs.Select((x, j) => new IntegerModQ(x.SecretKey * BigInteger.Pow(destinationGuardianIndex, j))).Sum();
+        var result = new IntegerModQ(0);
+        var power = new IntegerModQ(1);
+
+        foreach(var keyPair in keyPairs)
+        {
+            var term = keyPair.SecretKey * power;
+            result += term;
+            power *= destinationGuardianIndex;
+        }
+        return result;
+        //return keyPairs.Select((x, j) => new IntegerModQ(x.SecretKey * BigInteger.Pow(destinationGuardianIndex, j))).Sum();
     }
 
     private (byte[] k1, byte[] k2) ComputeShareEncryptionKeys(byte[] symmetricKey, GuardianIndex sourceIndex, GuardianIndex destinationIndex)

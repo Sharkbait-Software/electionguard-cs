@@ -59,36 +59,42 @@ public class TallyAdmin
         partialDecryptions = partialDecryptions.OrderBy(x => x.GuardianIndex.Index).ToList();
 
         var availableGuardians = partialDecryptions.Select(x => x.GuardianIndex).ToList();
-        List<IntegerModQ> lagrangeCoefficients = new List<IntegerModQ>();
+        Dictionary<GuardianIndex, IntegerModQ> lagrangeCoefficients = new Dictionary<GuardianIndex, IntegerModQ>();
         for (int i = 0; i < partialDecryptions.Count; i++)
         {
             var coefficient = CalculateLagrangeCoefficient(partialDecryptions[i].GuardianIndex, availableGuardians);
-            lagrangeCoefficients.Add(coefficient);
+            lagrangeCoefficients[partialDecryptions[i].GuardianIndex] = coefficient;
         }
 
-        foreach (var contest in partialDecryptions[0].Contests)
+        foreach (var encryptedContest in encryptedTally.Contests)
         {
             var decryptedContest = new DecryptedContest
             {
                 Choices = new Dictionary<string, DecryptedChoice>(),
             };
-            decryptedTally.Contests[contest.Key] = decryptedContest;
+            decryptedTally.Contests[encryptedContest.Key] = decryptedContest;
 
-            foreach (var choice in contest.Value.Choices)
+            foreach (var encryptedChoice in encryptedContest.Value.Choices)
             {
-                List<IntegerModP> mValues = new List<IntegerModP>();
-                for (int i = 0; i < lagrangeCoefficients.Count; i++)
+                IntegerModP m = 0;
+                foreach(var partialDecryption in partialDecryptions)
                 {
-                    var partialContest = partialDecryptions[i].Contests[contest.Key];
-                    var partialChoice = partialContest.Choices[choice.Key];
+                    var partialContest = partialDecryption.Contests[encryptedContest.Key];
+                    var partialChoice = partialContest.Choices[encryptedChoice.Key];
+                    var lagrangeCoefficient = lagrangeCoefficients[partialDecryption.GuardianIndex];
 
-                    var miwi = IntegerModP.PowModP(partialChoice.Mi, lagrangeCoefficients[i]);
-                    mValues.Add(miwi);
+                    var miwi = IntegerModP.PowModP(partialChoice.Mi, lagrangeCoefficient);
+                    if(m == 0)
+                    {
+                        m = miwi;
+                    }
+                    else
+                    {
+                        m *= miwi;
+                    }
                 }
 
-                var m = mValues.Product();
-                var encryptedChoice = encryptedTally.Contests[contest.Key].Choices[choice.Key];
-                var t = encryptedChoice.B * IntegerModP.PowModP(m, -1);
+                var t = encryptedChoice.Value.B / m;
 
                 int result = -1;
                 for (int i = 0; i <= encryptedTally.BallotsCast; i++)
@@ -109,7 +115,7 @@ public class TallyAdmin
                 {
                     VoteCount = result,
                 };
-                decryptedContest.Choices[choice.Key] = decryptedChoice;
+                decryptedContest.Choices[encryptedChoice.Key] = decryptedChoice;
             }
         }
 
@@ -125,9 +131,19 @@ public class TallyAdmin
         // Therefore, we're going to use an alternate representation of the math:
         // prod(l) / prod(l - i);
 
-        var ls = availableGuardians.Where(x => x != i).Select(x => x.Index);
-        var prodL = ls.Product();
-        var prodLMinusI = ls.Select(x => x - i.Index).Product();
+        var ls = availableGuardians.Where(x => x != i);
+        var prodL = ls.Select(x => x.Index).Product();
+        var prodLMinusI = ls.Select(x => x.Index - i.Index).Product();
+
+        //IntegerModQ prodLModQ;
+        //if(prodLMinusI > 0)
+        //{
+        //    prodLModQ = new IntegerModQ(prodLMinusI);
+        //}
+        //else
+        //{
+        //    prodLModQ = new IntegerModQ(-prodLMinusI);
+        //}
         
         var wi = prodL / prodLMinusI;
         return wi;
