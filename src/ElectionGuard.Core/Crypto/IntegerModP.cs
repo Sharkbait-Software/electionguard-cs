@@ -64,7 +64,7 @@ public struct IntegerModP : IEquatable<IntegerModP>
 
     public static IntegerModP PowModP(BigInteger value, BigInteger exponent)
     {
-        BigInteger result = BigInteger.ModPow(value, exponent, EGParameters.CryptographicParameters.P);
+        BigInteger result = value.MathModPow(exponent, EGParameters.CryptographicParameters.P);
         return new IntegerModP(result);
     }
 

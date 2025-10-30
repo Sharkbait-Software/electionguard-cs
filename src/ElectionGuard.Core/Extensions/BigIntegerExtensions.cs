@@ -11,4 +11,10 @@ public static class BigIntegerExtensions
         BigInteger r = a % b;
         return r < 0 ? r + b : r;
     }
+
+    public static BigInteger MathModPow(this BigInteger a, BigInteger exponent, BigInteger b)
+    {
+        var r = BigInteger.ModPow(a, exponent, b);
+        return r < 0 ? r + b : r;
+    }
 }
