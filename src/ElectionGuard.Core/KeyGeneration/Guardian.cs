@@ -198,7 +198,7 @@ public class Guardian
 
         // 1. Verify that the guardian record matches original data we received.
         var originalGuardianViews = _guardians.OrderBy(x => (int)x.Index);
-        var originalElectionPublicKeys = new ElectionPublicKeys(originalGuardianViews.SelectMany(x => x.VoteEncryptionCommitments), originalGuardianViews.SelectMany(x => x.OtherBallotDataEncryptionCommitments));
+        var originalElectionPublicKeys = new ElectionPublicKeys(originalGuardianViews.Select(x => x.VoteEncryptionCommitments[0]), originalGuardianViews.Select(x => x.OtherBallotDataEncryptionCommitments[0]));
         List<byte[]> originalValuesToHash = [
             [0x13],
             originalElectionPublicKeys.VoteEncryptionKey,

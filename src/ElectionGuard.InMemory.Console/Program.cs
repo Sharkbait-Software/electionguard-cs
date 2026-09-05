@@ -55,8 +55,8 @@ try
     }
 
     var electionPublicKeys = new ElectionPublicKeys(
-        guardianKeys.SelectMany(x => x.VoteEncryptionCommitments),
-        guardianKeys.SelectMany(x => x.OtherBallotDataEncryptionCommitments));
+        guardianKeys.Select(x => x.VoteEncryptionCommitments[0]),
+        guardianKeys.Select(x => x.OtherBallotDataEncryptionCommitments[0]));
 
     var guardianRecord = new GuardianRecord()
     {

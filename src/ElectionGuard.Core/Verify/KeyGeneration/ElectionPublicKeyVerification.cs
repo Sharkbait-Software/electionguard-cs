@@ -12,10 +12,10 @@ public class ElectionPublicKeyVerification
     public void Verify(List<GuardianPublicView> guardians, ElectionPublicKeys electionPublicKeys)
     {
         // 3.A
-        Verify("3.A", guardians.SelectMany(x => x.VoteEncryptionCommitments).ToList(), electionPublicKeys.VoteEncryptionKey);
+        Verify("3.A", guardians.Select(x => x.VoteEncryptionCommitments[0]).ToList(), electionPublicKeys.VoteEncryptionKey);
 
         // 3.B
-        Verify("3.B", guardians.SelectMany(x => x.OtherBallotDataEncryptionCommitments).ToList(), electionPublicKeys.OtherBallotDataEncryptionKey);
+        Verify("3.B", guardians.Select(x => x.OtherBallotDataEncryptionCommitments[0]).ToList(), electionPublicKeys.OtherBallotDataEncryptionKey);
     }
 
     private void Verify(string subSection, List<IntegerModP> guardianPublicKeys, IntegerModP electionPublicKey)
