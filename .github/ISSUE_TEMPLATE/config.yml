@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Ask a question / discuss a design
+    url: https://github.com/Sharkbait-Software/electionguard-cs/discussions
+    about: For design questions or anything that isn't a concrete bug or feature request.
+  - name: Report a security vulnerability
+    url: https://github.com/Sharkbait-Software/electionguard-cs/security/advisories/new
+    about: Please report vulnerabilities privately instead of filing a public issue.

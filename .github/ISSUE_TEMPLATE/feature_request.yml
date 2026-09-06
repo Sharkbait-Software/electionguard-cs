@@ -1,0 +1,42 @@
+name: Feature Request
+description: Suggest an enhancement, new capability, or spec coverage gap
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For anything beyond a small, obviously-good change, it helps to discuss the approach
+        here before a PR is written — especially for anything touching cryptographic behavior,
+        since it needs to line up with the ElectionGuard spec.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: What are you trying to do that the library doesn't currently support?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you like to see happen? Include spec section references if this maps to a specific part of the ElectionGuard spec.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any alternative approaches or workarounds you've considered.
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Anything else relevant — links, related issues, etc.
+    validations:
+      required: false

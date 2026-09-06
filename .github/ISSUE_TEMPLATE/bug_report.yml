@@ -1,0 +1,78 @@
+name: Bug Report
+description: Report incorrect or unexpected behavior in ElectionGuard C#
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Since this library implements a
+        cryptographic spec, precise details help a lot — please avoid including any real
+        secret keys, guardian secrets, or ballot data that shouldn't be public.
+
+        If this is a **security vulnerability** (key exposure, ballot secrecy violation, a
+        way to forge a valid-looking proof, etc.), please do not file it here — use
+        [private vulnerability reporting](../../security/advisories/new) instead.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear description of the bug and what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps or a minimal code snippet that reproduces the issue.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: input
+    id: spec-section
+    attributes:
+      label: Relevant spec section or verification (if known)
+      description: e.g. "§3.1.1", "Verification 6 / SelectionEncryptionsWellFormedVerification"
+      placeholder: e.g. Verification 8 (ConfirmationCodeVerification)
+    validations:
+      required: false
+
+  - type: input
+    id: area
+    attributes:
+      label: Area of the library
+      placeholder: e.g. KeyGeneration, BallotEncryption, Tally, Verify, Serialization
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      description: Package version, or commit SHA if building from source.
+    validations:
+      required: false
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: .NET SDK version, OS, and anything else relevant.
+      placeholder: |
+        - .NET SDK version:
+        - OS:
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Logs, stack traces, or anything else that would help.
+    validations:
+      required: false

@@ -1,0 +1,9 @@
+# Each line is a file pattern followed by one or more owners.
+# These owners will be requested for review when someone opens a pull request
+# touching matching files. See https://docs.github.com/articles/about-codeowners
+
+# Default owner for everything in the repo.
+*       @stevenmusick
+
+# The core crypto library gets extra scrutiny.
+/src/ElectionGuard.Core/       @stevenmusick
