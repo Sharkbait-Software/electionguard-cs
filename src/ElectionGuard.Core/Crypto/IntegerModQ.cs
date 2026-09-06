@@ -104,7 +104,7 @@ public struct IntegerModQ : IEquatable<IntegerModQ>
 
     public static IntegerModQ operator /(IntegerModQ a, IntegerModQ b)
     {
-        return new IntegerModQ(a._i / b._i);
+        return new IntegerModQ(a._i * b._i.MathModPow(EGParameters.CryptographicParameters.Q - 2, EGParameters.CryptographicParameters.Q));
     }
 
     //public static IntegerModQ operator *(IntegerModQ a, int b)

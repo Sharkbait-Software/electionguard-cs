@@ -124,37 +124,11 @@ public class TallyAdmin
 
     private IntegerModQ CalculateLagrangeCoefficient(GuardianIndex i, IEnumerable<GuardianIndex> availableGuardians)
     {
-        List<IntegerModQ> prod = new List<IntegerModQ>();
+        var ls = availableGuardians.Where(x => x != i).ToList();
 
-        // Because this equation can yield intermediate fractions that eventually resolve to integers,
-        // we don't want to keep the intermediate types as IntegerModQ.
-        // Therefore, we're going to use an alternate representation of the math:
-        // prod(l) / prod(l - i);
+        var prodL = ls.Select(x => new IntegerModQ(x.Index)).Product();
+        var prodLMinusI = ls.Select(x => new IntegerModQ(x.Index - i.Index)).Product();
 
-        var ls = availableGuardians.Where(x => x != i);
-        var prodL = ls.Select(x => x.Index).Product();
-        var prodLMinusI = ls.Select(x => x.Index - i.Index).Product();
-
-        //IntegerModQ prodLModQ;
-        //if(prodLMinusI > 0)
-        //{
-        //    prodLModQ = new IntegerModQ(prodLMinusI);
-        //}
-        //else
-        //{
-        //    prodLModQ = new IntegerModQ(-prodLMinusI);
-        //}
-        
-        var wi = prodL / prodLMinusI;
-        return wi;
-
-        //foreach (var l in availableGuardians.Where(x => x != i))
-        //{
-        //    var p = l / (l - i);
-        //    prod.Add(p);
-        //}
-
-        //var wi = prod.Product();
-        //return wi;
+        return prodL / prodLMinusI;
     }
 }

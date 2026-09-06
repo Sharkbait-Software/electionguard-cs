@@ -68,32 +68,16 @@ public class ProtobufEncryptedBallotSerializerTests
         Assert.Null(dtoValue.EncryptionNonce);
     }
 
-    // ------------------------------------------------------------------------------------------
-    // MAJOR FINDING FOR THIS PHASE: ProtobufEncryptedBallotSerializer.Deserialize() cannot
-    // successfully process ANY EncryptedBallot that BallotEncryptor actually produces. Confirmed
-    // via two independent, isolated root causes below. Per CLAUDE.md / task instructions, this is
-    // pinned with regression tests, NOT fixed as part of test generation.
-    // ------------------------------------------------------------------------------------------
-
     [Fact]
-    public void RoundTrip_RealisticBallotWithSelections_ThrowsArgumentNullException_DueToMissingProtoIncludeOnSelection_KnownBug()
+    public void RoundTrip_RealisticBallotWithSelections_RoundTripsSuccessfully()
     {
-        // GENUINE BUG #1, PINNED NOT FIXED. Root cause, confirmed via isolated repro against the
-        // real production DTO types: `ProtobufEncryptedSelection : ProtobufEncryptedValueWithProofs`
+        // Was GENUINE BUG #1 (now fixed): `ProtobufEncryptedSelection : ProtobufEncryptedValueWithProofs`
         // (both [ProtoContract], see Serialization/IEncryptedBallotSerializer.cs) declares its own
-        // additional [ProtoMember(4)] ChoiceId, but the base class is never linked back to the
-        // derived type via a `[ProtoInclude(n, typeof(ProtobufEncryptedSelection))]` attribute.
-        // Without that link, protobuf-net does not carry the base class's [ProtoMember(1..3)]
-        // members (Alpha, Beta, Proofs) through a round trip of a ProtobufEncryptedSelection
-        // instance -- only ChoiceId (declared directly on the derived type) survives; Alpha/Beta/
-        // Proofs silently come back null. EncryptedContest.Choices always has one EncryptedSelection
-        // per manifest choice regardless of vote value (see BallotEncryptor.EncryptContest), so
-        // EVERY ballot BallotEncryptor produces hits this. The very next line in Deserialize()
-        // (`s.Proofs.Select(...)`) then throws ArgumentNullException, so Deserialize cannot return
-        // anything at all for a ballot with selections -- see
-        // SerializedDto_NonListFields_RoundTripCorrectly_WhenInspectedDirectly below for proof that
-        // every OTHER field in the DTO tree is wired correctly and it is genuinely only this one
-        // derived/base relationship that is broken.
+        // additional [ProtoMember(4)] ChoiceId, but the base class was never linked back to the
+        // derived type via a `[ProtoInclude(n, typeof(ProtobufEncryptedSelection))]` attribute, so
+        // protobuf-net silently dropped the base class's [ProtoMember(1..3)] members (Alpha, Beta,
+        // Proofs) for every selection. ProtobufEncryptedValueWithProofs now declares
+        // `[ProtoInclude(10, typeof(ProtobufEncryptedSelection))]`, so Alpha/Beta/Proofs survive.
         var original = BuildRichEncryptedBallot();
         Assert.NotEmpty(original.Contests.Single().Choices);
 
@@ -102,23 +86,27 @@ public class ProtobufEncryptedBallotSerializerTests
         serializer.Serialize(stream, original);
         stream.Position = 0;
 
-        Assert.Throws<ArgumentNullException>(() => serializer.Deserialize(stream));
+        var result = serializer.Deserialize(stream);
+
+        Assert.NotNull(result);
+        var originalContest = original.Contests.Single();
+        var resultContest = result!.Contests.Single();
+        Assert.Equal(originalContest.Choices.Count, resultContest.Choices.Count);
+        foreach (var originalSelection in originalContest.Choices)
+        {
+            var resultSelection = resultContest.Choices.Single(s => s.ChoiceId == originalSelection.ChoiceId);
+            AssertEncryptedValueWithProofsEqual(originalSelection, resultSelection);
+        }
     }
 
     [Fact]
-    public void RoundTrip_ContestWithNoChoices_AlsoThrowsArgumentNullException_DueToEmptyRepeatedFieldBecomingNull_KnownBug()
+    public void RoundTrip_ContestWithNoChoices_RoundTripsToEmptyChoicesList()
     {
-        // GENUINE BUG #2, PINNED NOT FIXED -- a second, independent root cause with the same
-        // symptom. protobuf-net does not write any bytes at all for an empty repeated field
-        // (List<T>), so on deserialize a List<T> property that was empty at serialize time comes
-        // back as null rather than an empty list (this is standard protobuf-net/proto3 wire
-        // behavior, not specific to this codebase). EncryptedContest.Choices is `required
-        // List<EncryptedSelection>` with no default value, so an empty Choices list round-trips to
-        // a null `c.Choices` on the DTO -- and Deserialize()'s `c.Choices.Select(...)` then throws
-        // ArgumentNullException too, just at the CONTEST level instead of the SELECTION level (see
-        // the other pinned bug above). Net effect: there is no possible Choices value -- empty or
-        // populated -- for which ProtobufEncryptedBallotSerializer.Deserialize() succeeds on a
-        // ballot with at least one contest, i.e. every real ballot.
+        // Was GENUINE BUG #2 (now fixed): protobuf-net does not write any bytes at all for an
+        // empty repeated field, so on deserialize a List<T> property that was empty at serialize
+        // time used to come back as null rather than an empty list. ProtobufEncryptedContest.Choices
+        // now defaults to `= new()`, so protobuf-net's parameterless-construction path leaves it as
+        // an empty list (rather than null) when the wire has zero elements for it.
         var realBallot = BuildRichEncryptedBallot();
         var contestWithNoChoices = realBallot.Contests.Single() with { Choices = new List<EncryptedSelection>() };
         var ballotWithEmptyChoices = new EncryptedBallot
@@ -138,7 +126,10 @@ public class ProtobufEncryptedBallotSerializerTests
         serializer.Serialize(stream, ballotWithEmptyChoices);
         stream.Position = 0;
 
-        Assert.Throws<ArgumentNullException>(() => serializer.Deserialize(stream));
+        var result = serializer.Deserialize(stream);
+
+        Assert.NotNull(result);
+        Assert.Empty(result!.Contests.Single().Choices);
     }
 
     [Fact]
@@ -211,20 +202,22 @@ public class ProtobufEncryptedBallotSerializerTests
         Assert.Equal((byte[])originalContest.ContestData!.Challenge, dtoContest.ContestData!.Challenge);
         Assert.Equal((byte[])originalContest.ContestData!.Response, dtoContest.ContestData!.Response);
 
-        // The bug, demonstrated here without a crash: each selection's own declared member
-        // (ChoiceId) survives, but its INHERITED members (Alpha/Beta/Proofs, declared on the base
-        // ProtobufEncryptedValueWithProofs) do not -- this is exactly what makes
-        // ProtobufEncryptedBallotSerializer.Deserialize() throw ArgumentNullException for any real
-        // ballot (see RoundTrip_RealisticBallotWithSelections_ThrowsArgumentNullException_
-        // DueToMissingProtoIncludeOnSelection_KnownBug): it unconditionally does
-        // `s.Proofs.Select(...)` for every selection, and Proofs is always null here.
+        // Each selection's own declared member (ChoiceId) survives, and -- now that
+        // ProtobufEncryptedValueWithProofs declares [ProtoInclude(10, typeof(ProtobufEncryptedSelection))]
+        // -- its INHERITED members (Alpha/Beta/Proofs, declared on the base
+        // ProtobufEncryptedValueWithProofs) survive too.
         Assert.Equal(originalContest.Choices.Count, dtoContest.Choices.Count);
         foreach (var originalSelection in originalContest.Choices)
         {
             var dtoSelection = dtoContest.Choices.Single(s => s.ChoiceId == originalSelection.ChoiceId);
-            Assert.Null(dtoSelection.Alpha);
-            Assert.Null(dtoSelection.Beta);
-            Assert.Null(dtoSelection.Proofs);
+            Assert.Equal((byte[])originalSelection.Alpha, dtoSelection.Alpha);
+            Assert.Equal((byte[])originalSelection.Beta, dtoSelection.Beta);
+            Assert.Equal(originalSelection.Proofs.Length, dtoSelection.Proofs.Length);
+            for (int p = 0; p < originalSelection.Proofs.Length; p++)
+            {
+                Assert.Equal((byte[])originalSelection.Proofs[p].Challenge, dtoSelection.Proofs[p].Challenge);
+                Assert.Equal((byte[])originalSelection.Proofs[p].Response, dtoSelection.Proofs[p].Response);
+            }
         }
     }
 
@@ -295,21 +288,13 @@ public class ProtobufEncryptedBallotSerializerTests
     }
 
     [Fact]
-    public void RoundTrip_JsonSucceedsWhileProtobufThrows_ForTheIdenticalRealisticBallot()
+    public void RoundTrip_JsonAndProtobufBothSucceed_ForTheIdenticalRealisticBallot()
     {
-        // This is the cross-serializer consistency check called for by the plan
-        // (RoundTrip_JsonAndProtobufProduceEquivalentDomainObjects). The two DTO trees are NOT
-        // equivalent: for the exact same realistic source ballot (real selections, an overvote, a
-        // write-in, and ContestData), JsonEncryptedBallotSerializer round-trips successfully end to
-        // end, while ProtobufEncryptedBallotSerializer throws ArgumentNullException and cannot
-        // produce a domain object at all (see
-        // RoundTrip_RealisticBallotWithSelections_ThrowsArgumentNullException_
-        // DueToMissingProtoIncludeOnSelection_KnownBug for the root cause). That asymmetry -- one
-        // serializer silently succeeding, the other crashing outright, for identical input -- is
-        // exactly the kind of hand-mapping drift between the two DTO trees this phase exists to
-        // catch, and it is far more severe than a single dropped field. Asserting "equivalent
-        // domain objects" here would require pretending the crash doesn't happen; instead this test
-        // pins the actual, asymmetric behavior.
+        // Cross-serializer consistency check: for the exact same realistic source ballot (real
+        // selections, an overvote, a write-in, and ContestData), both JsonEncryptedBallotSerializer
+        // and ProtobufEncryptedBallotSerializer now round-trip successfully end to end (previously
+        // Protobuf threw ArgumentNullException -- see
+        // RoundTrip_RealisticBallotWithSelections_RoundTripsSuccessfully for the fixed root cause).
         var original = BuildRichEncryptedBallot();
 
         var jsonSerializer = new JsonEncryptedBallotSerializer();
@@ -325,7 +310,10 @@ public class ProtobufEncryptedBallotSerializerTests
         using var protobufStream = new MemoryStream();
         protobufSerializer.Serialize(protobufStream, original);
         protobufStream.Position = 0;
+        var protobufResult = protobufSerializer.Deserialize(protobufStream);
 
-        Assert.Throws<ArgumentNullException>(() => protobufSerializer.Deserialize(protobufStream));
+        Assert.NotNull(protobufResult);
+        Assert.Equal(original.Id, protobufResult!.Id);
+        Assert.Equal(jsonResult!.Contests.Single().Choices.Count, protobufResult!.Contests.Single().Choices.Count);
     }
 }

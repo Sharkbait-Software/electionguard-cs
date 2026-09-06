@@ -11,10 +11,15 @@ public struct ConfirmationCode : IEquatable<ConfirmationCode>
 
     public ConfirmationCode(SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, IEnumerable<ContestHash> contestHashes, ChainingField? chainingField)
     {
+        // §3.4.2 formula (71): HC = H(HI; 0x29, chi_1, ..., chi_mB, BC).
         List<byte[]> bytesToHash = [[0x29]];
         foreach(var contestHash in contestHashes)
         {
             bytesToHash.Add(contestHash);
+        }
+        if (chainingField != null)
+        {
+            bytesToHash.Add(chainingField.Value);
         }
 
         _value = EGHash.Hash(selectionEncryptionIdentifierHash, bytesToHash.ToArray());

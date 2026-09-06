@@ -91,14 +91,10 @@ public class VotingDeviceInformationHashTests
 
         Assert.Equal(hash1, hash2);
 
-        // Discovered quirk (pinned, not fixed -- see CLAUDE.md guidance on treating spec/behavior
-        // as source of truth rather than editing production code from a test):
-        // VotingDeviceInformationHash.GetHashCode() calls HashCode.Combine(_value) where _value is
-        // a byte[]. Arrays don't override GetHashCode(), so HashCode.Combine hashes the array's
-        // reference identity, not its content. Two content-equal instances (per the
-        // content-based Equals(VotingDeviceInformationHash) override, asserted above) built from
-        // independent byte[] instances therefore produce different hash codes here, violating the
+        // VotingDeviceInformationHash.GetHashCode() now hashes the byte[] content (each byte folded
+        // via System.HashCode) instead of the array's reference identity, so content-equal instances
+        // built from independent byte[] instances correctly produce equal hash codes, honoring the
         // usual Equals/GetHashCode contract.
-        Assert.NotEqual(hash1.GetHashCode(), hash2.GetHashCode());
+        Assert.Equal(hash1.GetHashCode(), hash2.GetHashCode());
     }
 }

@@ -68,13 +68,13 @@ public class ConfirmationCodeTests
         Assert.Equal(expected, (byte[])code);
     }
 
-    // Quirk-pinning test: research.md documents that ConfirmationCode's ChainingField? parameter is
-    // accepted but not folded into the hash computation (Models/ConfirmationCode.cs lines 12-20
-    // only hash [0x29] plus the contest hashes). Per CLAUDE.md, the spec-section comments (not the
-    // current code shape) are the source of truth, so this test pins current behavior rather than
-    // "fixing" it to expect the chaining field to matter.
+    // Was a quirk-pinning test for a GENUINE BUG (now fixed): ConfirmationCode's constructor used
+    // to accept a ChainingField? parameter but never fold it into the hash computation. Per §3.4.2
+    // formula (71), HC = H(HI; 0x29, chi_1,...,chi_mB, BC) -- the chaining field BC is a required
+    // hash input. ConfirmationCode's constructor now appends chainingField's bytes (when non-null)
+    // to the hash input, so two different chaining fields now produce different confirmation codes.
     [Fact]
-    public void Constructor_ChainingFieldParameterIsUnused_HashUnaffectedByItsValue()
+    public void Constructor_DifferentChainingFields_ProduceDifferentCodes()
     {
         var selIdHash = CreateSelIdHash();
         var contestHashes = new[] { CreateContestHash(0x01) };
@@ -92,6 +92,6 @@ public class ConfirmationCodeTests
         var code1 = new ConfirmationCode(selIdHash, contestHashes, chainingField1);
         var code2 = new ConfirmationCode(selIdHash, contestHashes, chainingField2);
 
-        Assert.Equal(code1, code2);
+        Assert.NotEqual(code1, code2);
     }
 }

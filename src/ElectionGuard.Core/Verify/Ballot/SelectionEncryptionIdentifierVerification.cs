@@ -25,7 +25,7 @@ public class SelectionEncryptionIdentifierVerification
             [0x20],
             identifier);
 
-        if (expected != (byte[])selectionEncryptionIdentifierHash)
+        if (!expected.SequenceEqual((byte[])selectionEncryptionIdentifierHash))
         {
             throw new VerificationFailedException("5.B", "Selection encryption identifier hash was not calculated correctly.");
         }

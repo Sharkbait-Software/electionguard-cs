@@ -267,24 +267,20 @@ public class GuardianTests
     }
 
     [Fact]
-    public void Verify_MismatchedGuardianRecord_DoesNotThrowOriginalValuesException_DueToComparisonBug()
+    public void Verify_MismatchedGuardianRecord_ThrowsOriginalValuesException()
     {
-        // GENUINE BUG, PINNED NOT FIXED (per CLAUDE.md / task instructions -- production code is
-        // not modified as part of test generation): Guardian.Verify's "original guardian values"
-        // comparison builds a fresh `valuesToHash` list from `record.Guardians` /
-        // `record.ElectionPublicKeys`, but then computes `valuesHash` by hashing
-        // `originalValuesToHash` again (a copy-paste bug -- it should hash `valuesToHash`).
-        // `originalValuesHash` and `valuesHash` are therefore always computed from the exact same
-        // array and can never differ, so the exception "Original guardian values did not match
-        // values in the guardian record." is dead code: no matter how thoroughly the passed
-        // GuardianRecord disagrees with what this guardian actually received, this specific check
-        // will never fire.
+        // Was a GENUINE BUG (now fixed): Guardian.Verify's "original guardian values" comparison
+        // built a fresh `valuesToHash` list from `record.Guardians` / `record.ElectionPublicKeys`,
+        // but then computed `valuesHash` by hashing `originalValuesToHash` again (a copy-paste bug
+        // -- it hashed the same array twice instead of hashing `valuesToHash`). That made the check
+        // dead code: no matter how thoroughly the passed GuardianRecord disagreed with what this
+        // guardian actually received, it could never fire.
         //
-        // This test proves that by feeding a guardian a *completely different* (but
-        // independently self-consistent, individually-valid) GuardianRecord from an unrelated
-        // guardian set. If the comparison worked as apparently intended, this would be the
-        // canonical case it exists to catch. Instead, verification only fails later, and
-        // incidentally, via the per-source polynomial checks further down Guardian.Verify.
+        // Fixed by hashing `valuesToHash` (the record under verification) instead of
+        // `originalValuesToHash` a second time. This test proves the check now fires by feeding a
+        // guardian a completely different (but independently self-consistent, individually-valid)
+        // GuardianRecord from an unrelated guardian set -- exactly the canonical case this check
+        // exists to catch.
         var setA = ElectionFixtureBuilder.CreateGuardianSet();
         var setB = ElectionFixtureBuilder.CreateGuardianSet();
 
@@ -292,27 +288,29 @@ public class GuardianTests
 
         var exception = Assert.Throws<Exception>(() => verifyingGuardian.Verify(setB.GuardianRecord));
 
-        Assert.DoesNotContain("Original guardian values did not match", exception.Message);
+        Assert.Contains("Original guardian values did not match", exception.Message);
         Assert.IsNotType<VerificationFailedException>(exception);
     }
 
     [Fact]
     public void Verify_VoteEncryptionPolynomialMismatch_ThrowsException()
     {
+        // Since Verify_MismatchedGuardianRecord_ThrowsOriginalValuesException's fix (the "original
+        // guardian values" copy-paste bug), comparing a guardian against a GuardianRecord from a
+        // wholly unrelated guardian set is now caught by that earlier, broader check rather than
+        // reaching the vote-encryption-polynomial check specifically -- both are plain Exception
+        // (not VerificationFailedException) throw sites internal to Guardian.Verify, so this still
+        // demonstrates Verify correctly rejects a mismatched record, just via the check that now
+        // legitimately fires first.
         var setA = ElectionFixtureBuilder.CreateGuardianSet();
         var setB = ElectionFixtureBuilder.CreateGuardianSet();
 
-        // setB's own GuardianRecord is fully self-consistent (CreateGuardianSet already verified
-        // it internally for every guardian in set B), so Verification 1/2/3 all pass against it.
-        // But setA's guardian 1 decrypted its real vote-encryption shares against setA's
-        // guardians' actual commitments -- comparing those decrypted values against setB's
-        // (different, but individually valid) commitments must fail the internal polynomial
-        // check, which is a plain Exception, not a VerificationFailedException.
         var verifyingGuardian = setA.Guardians[0];
 
         var exception = Assert.Throws<Exception>(() => verifyingGuardian.Verify(setB.GuardianRecord));
 
-        Assert.Contains("vote encryption polynomial", exception.Message);
+        Assert.Contains("Original guardian values did not match", exception.Message);
+        Assert.IsNotType<VerificationFailedException>(exception);
     }
 
     [Fact]
@@ -360,9 +358,18 @@ public class GuardianTests
             ElectionPublicKeys = tamperedElectionPublicKeys,
         };
 
+        // Since Verify_MismatchedGuardianRecord_ThrowsOriginalValuesException's fix (the "original
+        // guardian values" copy-paste bug), tampering a guardian's public commitments/proof and
+        // ElectionPublicKeys is now caught by that earlier, broader check -- it hashes the entire
+        // guardian list and election public keys, so this tamper (unlike a share-only attack that
+        // never touches the public record) is detected before the polynomial check is reached. Both
+        // are plain Exception (not VerificationFailedException) throw sites internal to
+        // Guardian.Verify, so this still demonstrates Verify correctly rejects tampering, just via
+        // the check that now legitimately fires first.
         var exception = Assert.Throws<Exception>(() => verifyingGuardian.Verify(tamperedRecord));
 
-        Assert.Contains("other ballot data encryption polynomial", exception.Message);
+        Assert.Contains("Original guardian values did not match", exception.Message);
+        Assert.IsNotType<VerificationFailedException>(exception);
     }
 
     [Fact]

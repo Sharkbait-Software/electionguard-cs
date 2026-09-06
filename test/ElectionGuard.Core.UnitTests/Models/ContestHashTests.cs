@@ -98,13 +98,11 @@ public class ContestHashTests
         Assert.True(hash1 == hash2);
         Assert.False(hash1 != hash2);
 
-        // Discovered quirk (pinned, not fixed -- see CLAUDE.md guidance on treating spec/behavior
-        // as source of truth rather than editing production code from a test): ContestHash.GetHashCode()
-        // calls HashCode.Combine(_value) where _value is a byte[]. Arrays don't override
-        // GetHashCode(), so HashCode.Combine hashes the array's reference identity, not its
-        // content. Two content-equal ContestHash values (per == above) built from independent
-        // byte[] instances can therefore still produce different hash codes.
-        Assert.NotEqual(hash1.GetHashCode(), hash2.GetHashCode());
+        // ContestHash.GetHashCode() now hashes the byte[] content (each byte folded via
+        // System.HashCode) instead of the array's reference identity, so content-equal ContestHash
+        // values (per == above) built from independent byte[] instances correctly produce equal
+        // hash codes.
+        Assert.Equal(hash1.GetHashCode(), hash2.GetHashCode());
     }
 
     // Gap-closing tests (verified via mutation): unlike every sibling Model hash type

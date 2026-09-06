@@ -48,6 +48,11 @@ public struct VotingDeviceInformationHash : IEquatable<VotingDeviceInformationHa
 
     public override int GetHashCode()
     {
-        return HashCode.Combine(_value);
+        var hash = new HashCode();
+        foreach (var b in _value)
+        {
+            hash.Add(b);
+        }
+        return hash.ToHashCode();
     }
 }

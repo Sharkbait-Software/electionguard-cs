@@ -18,8 +18,11 @@ public class EncryptedTally
                 Choices = x.Choices.ToDictionary(ch => ch.Id, ch => new EncryptedAggregateChoice
                 {
                     ChoiceId = ch.Id,
-                    A = new IntegerModP(0),
-                    B = new IntegerModP(0),
+                    // ElGamal ciphertext multiplicative identity (alpha=1, beta=1), not the additive
+                    // identity 0 -- so an aggregate with zero ballots added decrypts to vote count 0
+                    // instead of failing TallyAdmin's discrete-log search.
+                    A = new IntegerModP(1),
+                    B = new IntegerModP(1),
                 })
             });
     }
@@ -45,17 +48,8 @@ public class EncryptedTally
                     beta = IntegerModP.PowModP(beta, encryptedBallot.Weight);
                 }
 
-                
-                if(aggregateChoice.IsZero())
-                {
-                    aggregateChoice.A = alpha;
-                    aggregateChoice.B = beta;
-                }
-                else
-                {
-                    aggregateChoice.A *= alpha;
-                    aggregateChoice.B *= beta;
-                }
+                aggregateChoice.A *= alpha;
+                aggregateChoice.B *= beta;
             }
         }
         BallotsCast++;
@@ -75,7 +69,7 @@ public class EncryptedTally
 
         public bool IsZero()
         {
-            return A == 0 && B == 0;
+            return A == 1 && B == 1;
         }
     }
 }

@@ -218,7 +218,7 @@ public class Guardian
         valuesToHash.AddRange(guardians.SelectMany(x => x.VoteEncryptionCommitments).Select(x => x.ToByteArray()));
         valuesToHash.AddRange(guardians.SelectMany(x => x.OtherBallotDataEncryptionCommitments).Select(x => x.ToByteArray()));
         valuesToHash.AddRange(guardians.Select(x => x.CommunicationPublicKey.ToByteArray()));
-        var valuesHash = EGHash.Hash(EGParameters.ParameterBaseHash, originalValuesToHash.ToArray());
+        var valuesHash = EGHash.Hash(EGParameters.ParameterBaseHash, valuesToHash.ToArray());
 
         if (!originalValuesHash.SequenceEqual(valuesHash))
         {

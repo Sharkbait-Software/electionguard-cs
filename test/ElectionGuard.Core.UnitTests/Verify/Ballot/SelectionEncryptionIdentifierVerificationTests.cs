@@ -43,16 +43,11 @@ public class SelectionEncryptionIdentifierVerificationTests
     }
 
     [Fact]
-    public void Verify_ValidHash_AlwaysThrows_SubSection5B_DueToByteArrayReferenceComparisonBug()
+    public void Verify_ValidHash_DoesNotThrow()
     {
-        // Pinning a genuine production bug (per CLAUDE.md: pin observed behavior, don't "fix" it
-        // in a test). SelectionEncryptionIdentifierVerification.Verify(identifier, hash,
-        // extendedBaseHash) (line 28) compares `expected != (byte[])selectionEncryptionIdentifierHash`.
-        // `byte[]` has no `!=` operator overload, so this is a *reference* comparison between two
-        // freshly-allocated arrays -- it is never true equality, even when the hash was correctly
-        // derived from the same identifier/extendedBaseHash. As a result this overload throws
-        // VerificationFailedException("5.B", ...) unconditionally, for both matching and
-        // mismatching hashes. This test documents that even a correctly-computed hash throws.
+        // SelectionEncryptionIdentifierVerification.Verify(identifier, hash, extendedBaseHash) now
+        // compares hash bytes by content (SequenceEqual) instead of byte[] reference equality, so a
+        // correctly-derived hash passes.
         var guardianSet = ElectionFixtureBuilder.CreateGuardianSet();
         var (_, manifestFile) = ElectionFixtureBuilder.CreateMinimalManifest();
         var electionBaseHash = new ElectionBaseHash(EGParameters.ParameterBaseHash, manifestFile);
@@ -63,9 +58,8 @@ public class SelectionEncryptionIdentifierVerificationTests
 
         var verification = new SelectionEncryptionIdentifierVerification();
 
-        var exception = Assert.Throws<VerificationFailedException>(
-            () => verification.Verify(identifier, hash, extendedBaseHash));
-        Assert.Equal("5.B", exception.SubSection);
+        var exception = Record.Exception(() => verification.Verify(identifier, hash, extendedBaseHash));
+        Assert.Null(exception);
     }
 
     [Fact]

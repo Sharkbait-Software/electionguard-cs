@@ -175,29 +175,24 @@ public class TallyAdminTests
     }
 
     [Fact]
-    public void Decrypt_IndexGapOfTwoSubset_PinsTruncatingLagrangeCoefficientBug()
+    public void Decrypt_IndexGapOfTwoSubset_RecoversCorrectVoteCounts()
     {
-        // PINNED PRODUCTION BUG (newly discovered while implementing this phase, not in the
-        // original plan): TallyAdmin.CalculateLagrangeCoefficient computes
-        // `ls.Select(x => x.Index).Product()` -- x.Index is `int`, so this resolves to
+        // Was a PINNED PRODUCTION BUG: TallyAdmin.CalculateLagrangeCoefficient used to compute
+        // `ls.Select(x => x.Index).Product()` -- x.Index is `int`, so this resolved to
         // IEnumerableExtensions.Product(IEnumerable<int>), i.e. plain C# int arithmetic, not
-        // IntegerModQ. It then does `prodL / prodLMinusI` using truncating integer division
-        // instead of a modular inverse in Z_q.
+        // IntegerModQ -- then did `prodL / prodLMinusI` using truncating integer division instead
+        // of a modular inverse in Z_q.
         //
-        // For guardian index subsets whose *classical* (non-modular) Lagrange coefficient at
-        // x=0 happens to be an exact integer, this accidentally works:
-        //   {1,2}: L_1(0) = (0-2)/(1-2) = 2, L_2(0) = (0-1)/(2-1) = -1   (both exact integers)
-        //   {2,3}: L_2(0) = (0-3)/(2-3) = 3, L_3(0) = (0-2)/(3-2) = -2  (both exact integers)
-        // But for {1,3}, the true coefficients are fractional:
-        //   L_1(0) = (0-3)/(1-3) = 1.5, L_3(0) = (0-1)/(3-1) = -0.5
-        // which the code truncates to 1 and 0 respectively instead of computing the correct
-        // value mod Q (which is what IntegerModQ.operator/ should do via a modular inverse --
-        // note IntegerModQ.operator/ itself is ALSO plain truncating BigInteger division, unlike
-        // IntegerModP.operator/ which correctly uses a Fermat's-little-theorem modular inverse).
-        // The wrong coefficients corrupt the combined `m`, so no candidate `t` in the brute-force
-        // range matches and TallyAdmin.Decrypt throws "Tally did not decrypt successfully." This
-        // test pins that current (buggy) behavior rather than asserting the idealized
-        // subset-independent result -- do not "fix" this test to expect success.
+        // For guardian index subsets whose *classical* (non-modular) Lagrange coefficient at x=0
+        // happens to be an exact integer ({1,2}, {2,3}), that accidentally worked. But for {1,3},
+        // the true coefficients are fractional (L_1(0) = 1.5, L_3(0) = -0.5), which used to get
+        // truncated to 1 and 0 instead of the correct value mod Q.
+        //
+        // Fixed by computing the whole Lagrange coefficient in IntegerModQ (see
+        // TallyGuardian.CalculateLagrangeCoefficient) combined with a corrected IntegerModQ
+        // division operator that uses a Fermat's-little-theorem modular inverse (matching
+        // IntegerModP.operator/), so this subset now recovers the same subset-independent result
+        // as {1,2} and {2,3} (see Decrypt_LagrangeCoefficients_CombineCorrectly).
         var scenario = TallyTestScenario.Build();
         var subset = new List<PartialTallyDecryption>
         {
@@ -206,8 +201,10 @@ public class TallyAdminTests
         };
         var tallyAdmin = new TallyAdmin();
 
-        var exception = Assert.Throws<Exception>(() => tallyAdmin.Decrypt(subset, scenario.Tally, scenario.GuardianSet.ElectionPublicKeys));
-        Assert.Equal("Tally did not decrypt successfully.", exception.Message);
+        var decryptedTally = tallyAdmin.Decrypt(subset, scenario.Tally, scenario.GuardianSet.ElectionPublicKeys);
+
+        Assert.Equal(2, decryptedTally.Contests["contest-1"].Choices["choice-1"].VoteCount);
+        Assert.Equal(1, decryptedTally.Contests["contest-1"].Choices["choice-2"].VoteCount);
     }
 
     [Fact]
@@ -240,10 +237,15 @@ public class TallyAdminTests
     }
 
     [Fact]
-    public void Decrypt_ZeroBallotsCast_ThrowsException()
+    public void Decrypt_ZeroBallotsCast_ReturnsZeroVoteCountForEveryChoice()
     {
         // Build the guardian set / encryption pipeline but never call AddBallot, leaving every
-        // aggregate choice at its EncryptedTally constructor default of A=0, B=0.
+        // aggregate choice at its EncryptedTally constructor default -- now the ElGamal ciphertext
+        // multiplicative identity (alpha=1, beta=1) rather than the additive identity (0, 0) (see
+        // EncryptedTally's constructor). With A=1, each guardian's partial Mi = PowModP(1, share) =
+        // 1, the combined m stays 1, and t = B / m = 1 / 1 = 1, which correctly matches
+        // K^0 = 1 -- the only candidate in the [0, BallotsCast=0] brute-force range -- so
+        // TallyAdmin.Decrypt now returns VoteCount=0 for every choice instead of throwing.
         EGParameters.Init(new CryptographicParameters(), new GuardianParameters());
         var guardianSet = ElectionFixtureBuilder.CreateGuardianSet();
         var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest();
@@ -260,17 +262,10 @@ public class TallyAdminTests
 
         var tallyAdmin = new TallyAdmin();
 
-        // PINNED PRODUCTION QUIRK (not in the original plan, discovered while implementing this
-        // phase): EncryptedTally's "hasn't been added to yet" sentinel for an aggregate choice is
-        // literal IntegerModP(0) for both A and B (the *additive* identity), not the ElGamal
-        // ciphertext multiplicative identity (alpha=1, beta=1). When BallotsCast == 0, A stays 0,
-        // so each guardian's partial Mi = PowModP(0, share) = 0, the combined m stays 0, and
-        // t = B / m evaluates to 0 via IntegerModP's division operator (0 * inverse(0) = 0).
-        // t=0 never equals K^0=1 (the only candidate in the [0, BallotsCast=0] brute-force range),
-        // so TallyAdmin.Decrypt throws "Tally did not decrypt successfully." instead of returning
-        // VoteCount=0 for every choice. This is pinned as current behavior, not fixed.
-        var exception = Assert.Throws<Exception>(() => tallyAdmin.Decrypt(partials, emptyTally, guardianSet.ElectionPublicKeys));
-        Assert.Equal("Tally did not decrypt successfully.", exception.Message);
+        var decryptedTally = tallyAdmin.Decrypt(partials, emptyTally, guardianSet.ElectionPublicKeys);
+
+        Assert.Equal(0, decryptedTally.Contests["contest-1"].Choices["choice-1"].VoteCount);
+        Assert.Equal(0, decryptedTally.Contests["contest-1"].Choices["choice-2"].VoteCount);
     }
 
     [Fact]

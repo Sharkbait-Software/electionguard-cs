@@ -278,14 +278,13 @@ public class BallotEncryptorTests
     }
 
     [Fact]
-    public void Encrypt_FirstBallotOnDevice_PreviousConfirmationCodeNull_ProducesConfirmationCodeFromContestHashesOnly()
+    public void Encrypt_FirstBallotOnDevice_PreviousConfirmationCodeNull_FoldsInRealChainingField()
     {
-        // ConfirmationCode's constructor accepts a ChainingField? parameter but never folds it
-        // into the hash (see Models/ConfirmationCodeTests.cs's quirk-pinning test) -- so the
-        // ConfirmationCode BallotEncryptor produces is always exactly
-        // Hash(selectionEncryptionIdentifierHash, 0x29, contestHashes...), regardless of the
-        // chaining branch used internally. This test pins that for the "first ballot on a
-        // device" (previousConfirmationCode == null) case.
+        // ConfirmationCode's constructor now folds its ChainingField parameter into the hash (§3.4.2
+        // formula (71): HC = H(HI; 0x29, chi_1,...,chi_mB, BC)), so the ConfirmationCode
+        // BallotEncryptor produces must be computed with the REAL ChainingField for this ballot
+        // (ChainingMode.None -> BC = 0x00000000 || HDI, see Models/ChainingField.cs), not with a
+        // bare null chaining field.
         var (_, manifest, encryptionRecordResult) = BuildEncryptionRecord(chainingMode: ChainingMode.None);
         var deviceHash = new VotingDeviceInformationHash(encryptionRecordResult.ExtendedBaseHash, "device-6");
         var ballot = ElectionFixtureBuilder.CreateBallot(manifest, selectionValuesByChoiceId: new Dictionary<string, int> { ["choice-1"] = 1 });
@@ -293,27 +292,28 @@ public class BallotEncryptorTests
         var encryptedBallot = ElectionFixtureBuilder.CreateEncryptedBallot(
             encryptionRecordResult.EncryptionRecord, "device-6", deviceHash, ballot, previousConfirmationCode: null);
 
+        var realChainingField = new ChainingField(ChainingMode.None, deviceHash, encryptionRecordResult.ExtendedBaseHash, null);
         var expectedConfirmationCode = new ConfirmationCode(
             encryptedBallot.SelectionEncryptionIdentifierHash,
             encryptedBallot.Contests.Select(c => c.ContestHash),
-            chainingField: null);
+            realChainingField);
 
         Assert.Equal(expectedConfirmationCode, encryptedBallot.ConfirmationCode);
     }
 
     [Fact]
-    public void Encrypt_SecondBallotOnDevice_ChainingHasNoEffectOnConfirmationCode_DueToUnusedChainingFieldParameter()
+    public void Encrypt_SecondBallotOnDevice_ChainingAffectsConfirmationCode()
     {
-        // GENUINE BUG, PINNED NOT FIXED (per CLAUDE.md / task instructions -- production code is
-        // not modified as part of test generation): because ConfirmationCode's constructor
-        // ignores its ChainingField? parameter, the previousConfirmationCode argument to
-        // BallotEncryptor.Encrypt has zero observable effect on the resulting
-        // EncryptedBallot.ConfirmationCode -- chaining is a complete no-op in the current
-        // implementation. This test proves it by holding the real ballot's own
-        // SelectionEncryptionIdentifierHash/ContestHashes fixed and showing that two
-        // independently-constructed ChainingFields -- one built from the real prior confirmation
-        // code, one built as if there were none -- produce byte-identical ConfirmationCodes, both
-        // of which match what BallotEncryptor actually produced.
+        // Was GENUINE BUG #7 (now fixed): because ConfirmationCode's constructor used to ignore its
+        // ChainingField? parameter, the previousConfirmationCode argument to
+        // BallotEncryptor.Encrypt had zero observable effect on the resulting
+        // EncryptedBallot.ConfirmationCode. Now that ConfirmationCode folds the chaining field into
+        // the hash (and ChainingField itself correctly threads the previous confirmation code
+        // through per §3.4.4 formula (76)), the second ballot's confirmation code genuinely depends
+        // on the first ballot's confirmation code: recomputing it with the real prior code matches
+        // what BallotEncryptor produced, while recomputing it as if this were the FIRST ballon on
+        // the device (no previous code, so ChainingField takes the H0-initialization branch instead)
+        // produces a different value.
         var (_, manifest, encryptionRecordResult) = BuildEncryptionRecord(chainingMode: ChainingMode.Simple);
         var deviceHash = new VotingDeviceInformationHash(encryptionRecordResult.ExtendedBaseHash, "device-7");
         var ballot1 = ElectionFixtureBuilder.CreateBallot(manifest, ballotId: "ballot-1", selectionValuesByChoiceId: new Dictionary<string, int> { ["choice-1"] = 1 });
@@ -329,13 +329,13 @@ public class BallotEncryptorTests
 
         var chainingFieldWithRealPrevious = new ChainingField(
             ChainingMode.Simple, deviceHash, encryptionRecordResult.ExtendedBaseHash, encryptedBallot1.ConfirmationCode);
-        var chainingFieldWithNoPrevious = new ChainingField(
-            ChainingMode.None, deviceHash, encryptionRecordResult.ExtendedBaseHash, null);
+        var chainingFieldAsIfFirstBallot = new ChainingField(
+            ChainingMode.Simple, deviceHash, encryptionRecordResult.ExtendedBaseHash, previousConfirmationCode: null);
 
         var codeWithRealChaining = new ConfirmationCode(encryptedBallot2.SelectionEncryptionIdentifierHash, contestHashes, chainingFieldWithRealPrevious);
-        var codeWithNoChaining = new ConfirmationCode(encryptedBallot2.SelectionEncryptionIdentifierHash, contestHashes, chainingFieldWithNoPrevious);
+        var codeAsIfFirstBallot = new ConfirmationCode(encryptedBallot2.SelectionEncryptionIdentifierHash, contestHashes, chainingFieldAsIfFirstBallot);
 
-        Assert.Equal(codeWithRealChaining, codeWithNoChaining);
+        Assert.NotEqual(codeWithRealChaining, codeAsIfFirstBallot);
         Assert.Equal(codeWithRealChaining, encryptedBallot2.ConfirmationCode);
     }
 

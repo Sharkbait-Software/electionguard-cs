@@ -184,22 +184,12 @@ public class JsonEncryptedBallotSerializerTests
     }
 
     [Fact]
-    public void RoundTrip_SelectionEncryptionIdentifier_IsDroppedByJsonSerializer_KnownBug()
+    public void RoundTrip_PreservesSelectionEncryptionIdentifier()
     {
-        // GENUINE BUG, PINNED NOT FIXED (per CLAUDE.md / task instructions -- production code is
-        // not modified as part of test generation): JsonEncryptedBallotSerializer registers a
-        // JsonConverter for every other hash/identifier-shaped type reachable from EncryptedBallot
-        // (IntegerModQ, IntegerModP, ConfirmationCode, ContestHash,
-        // SelectionEncryptionIdentifierHash, VotingDeviceInformationHash -- see
-        // Serialization/Converters/IntegerModQJsonConverter.cs) but NOT for the plain
-        // SelectionEncryptionIdentifier struct itself (Models/SelectionEncryptionIdentifier.cs).
-        // That struct exposes no public properties, so System.Text.Json's default reflection-based
-        // serialization writes it out as an empty object and reads it back as
-        // default(SelectionEncryptionIdentifier) -- silently dropping the 32 random bytes
-        // BallotEncryptor generated for it. ProtobufEncryptedBallotSerializer does not have this
-        // gap (it hand-maps SelectionEncryptionIdentifier to a raw byte[] ProtoMember -- see
-        // ProtobufEncryptedBallotSerializerTests' equivalent test), which is exactly the kind of
-        // one-sided DTO/serializer drift CLAUDE.md warns about.
+        // JsonEncryptedBallotSerializer now registers a SelectionEncryptionIdentifierJsonConverter
+        // (matching the converter it already had for every other hash/identifier-shaped type
+        // reachable from EncryptedBallot), so the 32 random bytes BallotEncryptor generated for
+        // SelectionEncryptionIdentifier survive the round trip instead of being silently dropped.
         var original = BuildRichEncryptedBallot();
         var originalBytes = (byte[])original.SelectionEncryptionIdentifier;
         Assert.NotEmpty(originalBytes);
@@ -207,6 +197,6 @@ public class JsonEncryptedBallotSerializerTests
         var result = RoundTrip(original);
         var resultBytes = (byte[])result.SelectionEncryptionIdentifier;
 
-        Assert.NotEqual(originalBytes, resultBytes);
+        Assert.Equal(originalBytes, resultBytes);
     }
 }
