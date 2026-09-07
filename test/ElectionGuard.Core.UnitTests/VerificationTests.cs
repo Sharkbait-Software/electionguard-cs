@@ -108,10 +108,12 @@ public class VerificationTests
 
         ParameterVerification validation = new ParameterVerification();
 
-        byte[] baseHash = EGParameters.ParameterBaseHash;
+        // Clone before mutating -- the implicit byte[] conversion on HashValue returns the live
+        // backing array, and EGParameters.ParameterBaseHash is process-wide shared state.
+        byte[] baseHash = ((byte[])EGParameters.ParameterBaseHash).ToArray();
         baseHash[baseHash.Length - 1] = 0;
 
-        VerificationFailedException exception = Assert.Throws<VerificationFailedException>(() => validation.Verify(cryptographicParameters, guardianParameters, EGParameters.ParameterBaseHash));
+        VerificationFailedException exception = Assert.Throws<VerificationFailedException>(() => validation.Verify(cryptographicParameters, guardianParameters, baseHash));
         Assert.Equal("1.E", exception.SubSection);
     }
 }

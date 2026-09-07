@@ -26,29 +26,29 @@ public class GuardianPublicKeyVerification
         // 2.1
         for (int j = 0; j < EGParameters.GuardianParameters.K; j++)
         {
-            IntegerModP hij = IntegerModP.PowModP(EGParameters.CryptographicParameters.G, guardian.VoteEncryptionProof.Responses[j]) * IntegerModP.PowModP(guardian.VoteEncryptionCommitments[j], guardian.VoteEncryptionProof.Challenge);
+            IntegerModP hij = IntegerModP.PowModP(EGParameters.G, guardian.VoteEncryptionProof.Responses[j]) * IntegerModP.PowModP(guardian.VoteEncryptionCommitments[j], guardian.VoteEncryptionProof.Challenge);
             voteEncryptionHValues.Add(hij);
         }
 
         // 2.2
-        IntegerModP hik = IntegerModP.PowModP(EGParameters.CryptographicParameters.G, guardian.VoteEncryptionProof.Responses[EGParameters.GuardianParameters.K]) * IntegerModP.PowModP(guardian.CommunicationPublicKey, guardian.VoteEncryptionProof.Challenge);
+        IntegerModP hik = IntegerModP.PowModP(EGParameters.G, guardian.VoteEncryptionProof.Responses[EGParameters.GuardianParameters.K]) * IntegerModP.PowModP(guardian.CommunicationPublicKey, guardian.VoteEncryptionProof.Challenge);
         voteEncryptionHValues.Add(hik);
 
         // 2.3
         for (int j = 0; j < EGParameters.GuardianParameters.K; j++)
         {
-            IntegerModP hHatij = IntegerModP.PowModP(EGParameters.CryptographicParameters.G, guardian.OtherDataEncryptionProof.Responses[j]) * IntegerModP.PowModP(guardian.OtherBallotDataEncryptionCommitments[j], guardian.OtherDataEncryptionProof.Challenge);
+            IntegerModP hHatij = IntegerModP.PowModP(EGParameters.G, guardian.OtherDataEncryptionProof.Responses[j]) * IntegerModP.PowModP(guardian.OtherBallotDataEncryptionCommitments[j], guardian.OtherDataEncryptionProof.Challenge);
             otherBallotDataEncryptionHValues.Add(hHatij);
         }
 
         // 2.2
-        IntegerModP hHatik = IntegerModP.PowModP(EGParameters.CryptographicParameters.G, guardian.OtherDataEncryptionProof.Responses[EGParameters.GuardianParameters.K]) * IntegerModP.PowModP(guardian.CommunicationPublicKey, guardian.OtherDataEncryptionProof.Challenge);
+        IntegerModP hHatik = IntegerModP.PowModP(EGParameters.G, guardian.OtherDataEncryptionProof.Responses[EGParameters.GuardianParameters.K]) * IntegerModP.PowModP(guardian.CommunicationPublicKey, guardian.OtherDataEncryptionProof.Challenge);
         otherBallotDataEncryptionHValues.Add(hHatik);
 
         // 2.A
         for (int j = 0; j < EGParameters.GuardianParameters.K; j++)
         {
-            if (IntegerModP.PowModP(guardian.VoteEncryptionCommitments[j], EGParameters.CryptographicParameters.Q) != new BigInteger(1))
+            if (IntegerModP.PowModP(guardian.VoteEncryptionCommitments[j], EGParameters.Q) != new BigInteger(1))
             {
                 throw new VerificationFailedException("2.A", "Public commitment is not valid.");
             }
@@ -56,13 +56,13 @@ public class GuardianPublicKeyVerification
 
         for (int j = 0; j < EGParameters.GuardianParameters.K; j++)
         {
-            if (IntegerModP.PowModP(guardian.OtherBallotDataEncryptionCommitments[j], EGParameters.CryptographicParameters.Q) != new BigInteger(1))
+            if (IntegerModP.PowModP(guardian.OtherBallotDataEncryptionCommitments[j], EGParameters.Q) != new BigInteger(1))
             {
                 throw new VerificationFailedException("2.A", "Public commitment is not valid.");
             }
         }
 
-        if (IntegerModP.PowModP(guardian.CommunicationPublicKey, EGParameters.CryptographicParameters.Q) != new BigInteger(1))
+        if (IntegerModP.PowModP(guardian.CommunicationPublicKey, EGParameters.Q) != new BigInteger(1))
         {
             throw new VerificationFailedException("2.A", "Communication public key is not valid.");
         }

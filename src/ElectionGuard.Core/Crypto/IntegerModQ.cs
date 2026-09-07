@@ -13,9 +13,9 @@ public struct IntegerModQ : IEquatable<IntegerModQ>
 {
     public IntegerModQ(BigInteger i)
     {
-        if (i >= EGParameters.CryptographicParameters.Q || i < 0)
+        if (i >= EGParameters.Q || i < 0)
         {
-            _i = i.Mod(EGParameters.CryptographicParameters.Q);
+            _i = i.Mod(EGParameters.Q);
         }
         else
         {
@@ -104,7 +104,7 @@ public struct IntegerModQ : IEquatable<IntegerModQ>
 
     public static IntegerModQ operator /(IntegerModQ a, IntegerModQ b)
     {
-        return new IntegerModQ(a._i * b._i.MathModPow(EGParameters.CryptographicParameters.Q - 2, EGParameters.CryptographicParameters.Q));
+        return new IntegerModQ(a._i * b._i.MathModPow(EGParameters.Q - 2, EGParameters.Q));
     }
 
     //public static IntegerModQ operator *(IntegerModQ a, int b)

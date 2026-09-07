@@ -15,9 +15,9 @@ public static class ElectionGuardRandom
         // This works most of the time though because Q is very close to the max possible value represented in 32 bytes.
         while (true)
         {
-            var randomBytes = RandomNumberGenerator.GetBytes(EGParameters.CryptographicParameters.Q.GetByteCount(true));
+            var randomBytes = RandomNumberGenerator.GetBytes(EGParameters.Q.GetByteCount(true));
             var b = new BigInteger(randomBytes, true, true);
-            if (b < EGParameters.CryptographicParameters.Q)
+            if (b < EGParameters.Q)
             {
                 return new IntegerModQ(b);
             }

@@ -251,7 +251,7 @@ public class BallotEncryptor
     private EncryptedValue EncryptContestValue(int valueToEncrypt, SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, BallotNonce ballotNonce, int contestIndex, int? choiceIndex = null)
     {
         IntegerModQ encryptionNonce = new EncryptionNonce(selectionEncryptionIdentifierHash, ballotNonce, contestIndex, choiceIndex);
-        var alpha = IntegerModP.PowModP(_encryptionRecord.CryptographicParameters.G, encryptionNonce);
+        var alpha = IntegerModP.PowModP(EGParameters.G, encryptionNonce);
         var beta = IntegerModP.PowModP(_encryptionRecord.ElectionPublicKeys.VoteEncryptionKey, encryptionNonce + valueToEncrypt);
         return new EncryptedValue
         {
@@ -367,7 +367,7 @@ public class BallotEncryptor
             contestIndex.ToByteArray(),
             ballotNonce);
 
-        var alpha = IntegerModP.PowModP(_encryptionRecord.CryptographicParameters.G, encryptionNonce);
+        var alpha = IntegerModP.PowModP(EGParameters.G, encryptionNonce);
         var beta = IntegerModP.PowModP(_encryptionRecord.ElectionPublicKeys.OtherBallotDataEncryptionKey, encryptionNonce);
         var secretKey = EGHash.Hash(selectionEncryptionIdentifierHash,
             [0x26],

@@ -28,21 +28,21 @@ public class ParameterVerification
         }
 
         // 1.B
-        if (EGParameters.CryptographicParameters.P != cryptographicParameters.P)
+        if (EGParameters.P != cryptographicParameters.P)
         {
-            throw new VerificationFailedException("1.B", $"P does not match expected value. Expected: {EGParameters.CryptographicParameters.P} Actual: {cryptographicParameters.P}");
+            throw new VerificationFailedException("1.B", $"P does not match expected value. Expected: {EGParameters.P} Actual: {cryptographicParameters.P}");
         }
 
         // 1.C
-        if (EGParameters.CryptographicParameters.Q != cryptographicParameters.Q)
+        if (EGParameters.Q != cryptographicParameters.Q)
         {
-            throw new VerificationFailedException("1.C", $"Q does not match expected value. Expected: {EGParameters.CryptographicParameters.Q} Actual: {cryptographicParameters.Q}");
+            throw new VerificationFailedException("1.C", $"Q does not match expected value. Expected: {EGParameters.Q} Actual: {cryptographicParameters.Q}");
         }
 
         // 1.D
-        if (EGParameters.CryptographicParameters.G != cryptographicParameters.G)
+        if (EGParameters.G != cryptographicParameters.G)
         {
-            throw new VerificationFailedException("1.D", $"G does not match expected value. Expected: {EGParameters.CryptographicParameters.G} Actual: {cryptographicParameters.G}");
+            throw new VerificationFailedException("1.D", $"G does not match expected value. Expected: {EGParameters.G} Actual: {cryptographicParameters.G}");
         }
 
         // 1.E

@@ -19,7 +19,7 @@ public class KeyPair
         IntegerModQ secretKey = ElectionGuardRandom.GetIntegerModQ();
 
         // Public key is g^secretKey mod p
-        IntegerModP publicKey = IntegerModP.PowModP(EGParameters.CryptographicParameters.G, secretKey);
+        IntegerModP publicKey = IntegerModP.PowModP(EGParameters.G, secretKey);
 
         return new KeyPair(secretKey, publicKey);
     }

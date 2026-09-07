@@ -13,9 +13,9 @@ public struct IntegerModP : IEquatable<IntegerModP>
 {
     public IntegerModP(BigInteger i)
     {
-        if (i >= EGParameters.CryptographicParameters.P || i < 0)
+        if (i >= EGParameters.P || i < 0)
         {
-            _i = i.Mod(EGParameters.CryptographicParameters.P);
+            _i = i.Mod(EGParameters.P);
         }
         else
         {
@@ -64,7 +64,7 @@ public struct IntegerModP : IEquatable<IntegerModP>
 
     public static IntegerModP PowModP(BigInteger value, BigInteger exponent)
     {
-        BigInteger result = value.MathModPow(exponent, EGParameters.CryptographicParameters.P);
+        BigInteger result = value.MathModPow(exponent, EGParameters.P);
         return new IntegerModP(result);
     }
 
@@ -100,7 +100,7 @@ public struct IntegerModP : IEquatable<IntegerModP>
 
     public static IntegerModP operator /(IntegerModP a, IntegerModP b)
     {
-        return new IntegerModP(a._i * PowModP(b, EGParameters.CryptographicParameters.P - 2)._i);
+        return new IntegerModP(a._i * PowModP(b, EGParameters.P - 2)._i);
     }
 
     public static bool operator <(IntegerModP a, IntegerModP b)

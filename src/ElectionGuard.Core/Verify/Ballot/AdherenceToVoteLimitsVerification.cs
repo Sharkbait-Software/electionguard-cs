@@ -34,10 +34,10 @@ public class AdherenceToVoteLimitsVerification
         {
             var crPair = encryptedContest.Proofs[i];
 
-            VerifyIsInZq(crPair.Challenge, encryptionRecord.CryptographicParameters);
-            VerifyIsInZq(crPair.Response, encryptionRecord.CryptographicParameters);
+            VerifyIsInZq(crPair.Challenge);
+            VerifyIsInZq(crPair.Response);
 
-            var a = IntegerModP.PowModP(encryptionRecord.CryptographicParameters.G, crPair.Response)
+            var a = IntegerModP.PowModP(EGParameters.G, crPair.Response)
                 * IntegerModP.PowModP(alpha, crPair.Challenge);
             var w = crPair.Response - i * crPair.Challenge;
             var b = IntegerModP.PowModP(encryptionRecord.ElectionPublicKeys.VoteEncryptionKey, w)
@@ -58,8 +58,8 @@ public class AdherenceToVoteLimitsVerification
 
         var c = EGHash.HashModQ(encryptedBallot.SelectionEncryptionIdentifierHash, bytesToHash.ToArray());
 
-        VerifyIsInZpr(alpha, encryptionRecord.CryptographicParameters);
-        VerifyIsInZpr(beta, encryptionRecord.CryptographicParameters);
+        VerifyIsInZpr(alpha);
+        VerifyIsInZpr(beta);
 
         var sumC = encryptedContest.Proofs.Select(x => x.Challenge).Sum();
         if (sumC != c)
@@ -68,21 +68,21 @@ public class AdherenceToVoteLimitsVerification
         }
     }
 
-    private void VerifyIsInZpr(IntegerModP value, CryptographicParameters cryptographicParameters)
+    private void VerifyIsInZpr(IntegerModP value)
     {
         // 6.A
         if (value <= 0
-            || value > cryptographicParameters.P
-            || IntegerModP.PowModP(value, cryptographicParameters.Q) != 1)
+            || value > EGParameters.P
+            || IntegerModP.PowModP(value, EGParameters.Q) != 1)
         {
             throw new VerificationFailedException("7.A", "Value was not in Zpr.");
         }
     }
 
-    private void VerifyIsInZq(IntegerModQ value, CryptographicParameters cryptographicParameters)
+    private void VerifyIsInZq(IntegerModQ value)
     {
         if (value <= 0
-            || value > cryptographicParameters.Q)
+            || value > EGParameters.Q)
         {
             throw new VerificationFailedException("7.B/C", "Value was not in Zq.");
         }

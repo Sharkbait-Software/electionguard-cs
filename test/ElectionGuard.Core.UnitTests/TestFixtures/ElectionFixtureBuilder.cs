@@ -11,8 +11,9 @@ namespace ElectionGuard.Core.UnitTests.TestFixtures;
 /// encrypt -> tally pipeline in src/ElectionGuard.InMemory.Console/Program.cs, so later test
 /// classes don't have to re-derive the ~40-line construction sequence.
 ///
-/// Callers must call EGParameters.Init(...) before using any method here (same requirement as
-/// every other type in this library that touches IntegerModP/IntegerModQ/hash types).
+/// EGParameters defaults to the spec's v2.1.0 parameters, so callers need not call
+/// EGParameters.Init(...) before using any method here unless a test deliberately needs a
+/// non-default parameter set.
 ///
 /// This is a pure test helper -- it has no [Fact]/[Theory] methods of its own.
 /// </summary>
