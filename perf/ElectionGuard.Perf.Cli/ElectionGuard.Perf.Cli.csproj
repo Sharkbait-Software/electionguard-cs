@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <AssemblyName>egperf</AssemblyName>
+    <RootNamespace>ElectionGuard.Perf.Cli</RootNamespace>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Spectre.Console.Cli" Version="0.55.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\test\ElectionGuard.Testing.Common\ElectionGuard.Testing.Common.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- GitProbe.Run's test seam, so the timeout and pipe-draining behaviour can be pinned. -->
+    <InternalsVisibleTo Include="ElectionGuard.Perf.UnitTests" />
+  </ItemGroup>
+
+</Project>

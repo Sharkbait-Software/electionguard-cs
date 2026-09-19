@@ -1,6 +1,6 @@
 using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.Models;
-using ElectionGuard.Core.UnitTests.TestFixtures;
+using ElectionGuard.Testing.Common;
 using ElectionGuard.Core.Verify;
 using ElectionGuard.Core.Verify.Ballot;
 

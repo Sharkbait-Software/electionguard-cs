@@ -3,7 +3,7 @@ using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.KeyGeneration;
 using ElectionGuard.Core.Models;
 using ElectionGuard.Core.Tally;
-using ElectionGuard.Core.UnitTests.TestFixtures;
+using ElectionGuard.Testing.Common;
 
 namespace ElectionGuard.Core.UnitTests.Tally;
 

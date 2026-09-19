@@ -1,0 +1,27 @@
+{
+  "electionId": "perf-single-contest",
+  "optionalContestDataMaxLength": 0,
+  "includeOvervotes": true,
+  "includeNullvotes": true,
+  "includeUndervotes": true,
+  "includeWriteins": true,
+  "chainingMode": 0,
+  "contests": [
+    {
+      "id": "1",
+      "name": "Single Contest",
+      "index": 0,
+      "selectionLimit": 1,
+      "optionSelectionLimit": 1,
+      "choices": [
+        { "id": "1", "name": "Choice One", "index": 0 },
+        { "id": "2", "name": "Choice Two", "index": 1 },
+        { "id": "3", "name": "Choice Three", "index": 2 },
+        { "id": "4", "name": "Choice Four", "index": 3 }
+      ]
+    }
+  ],
+  "ballotStyles": [
+    { "id": "1", "name": "Standard", "contestIds": ["1"] }
+  ]
+}

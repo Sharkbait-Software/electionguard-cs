@@ -4,7 +4,7 @@ using ElectionGuard.Core.Models;
 using ElectionGuard.Core.Tally;
 using System.Text.Json;
 
-namespace ElectionGuard.Core.UnitTests.TestFixtures;
+namespace ElectionGuard.Testing.Common;
 
 /// <summary>
 /// Shared bootstrap helper mirroring the guardians -> keys -> shares -> manifest -> ballot ->
@@ -15,9 +15,9 @@ namespace ElectionGuard.Core.UnitTests.TestFixtures;
 /// EGParameters.Init(...) before using any method here unless a test deliberately needs a
 /// non-default parameter set.
 ///
-/// This is a pure test helper -- it has no [Fact]/[Theory] methods of its own.
+/// This is a pure fixture helper shared by the unit tests and the performance harness; it has no [Fact]/[Theory] methods of its own.
 /// </summary>
-internal static class ElectionFixtureBuilder
+public static class ElectionFixtureBuilder
 {
     /// <summary>
     /// Result of bootstrapping a full N/K guardian set: generated keys, exchanged/decrypted secret

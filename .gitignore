@@ -398,3 +398,12 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
+
+# Superpowers design docs and specs (local working notes)
+docs/superpowers/
+
+# Performance harness results are machine-specific local output.
+perf/results/
+
+# BenchmarkDotNet output is for interactive investigation; the macro harness owns the time series.
+BenchmarkDotNet.Artifacts/

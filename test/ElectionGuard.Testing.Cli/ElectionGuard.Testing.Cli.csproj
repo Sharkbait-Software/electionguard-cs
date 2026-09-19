@@ -13,6 +13,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\ElectionGuard.Core\ElectionGuard.Core.csproj" />
+    <ProjectReference Include="..\ElectionGuard.Testing.Common\ElectionGuard.Testing.Common.csproj" />
   </ItemGroup>
 
 </Project>

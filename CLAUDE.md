@@ -12,12 +12,33 @@ All projects are buildable and testable using the dotnet cli standard commands.
 
 ## Architecture
 
+The following projects either currently are or will exist in this repository:
+
+1. ElectionGuard.Core - This is the core cryptographic primitives used by everything else. This needs high test coverage, high reliability, and is the core purpose for the project. It will be used by other projects to build the end to end workflows, but all of the cryptography and math lives here.
+2. ElectionGuard.Administration - This project will be focused on adminstering an election guard election. Allowing guardians to communicate with each other, generating the encryption record, collecting encrypted ballots, and orchestrating the decryption before finally creating an Election Record (the final output of ElectionGuard).
+3. ElectionGuard.Verifier - This will be a verifier project whose purpose is to take a completed Election Record and to run all verifications against it to verify that the math checks out as it's supposed to.
+4. `perf/` - Performance testing. `ElectionGuard.Perf.Cli` (`egperf`) runs a scenario end to end -
+   generate, encrypt, aggregate, decrypt - with per-phase timing, allocation and GC metrics, checks
+   the decrypted tally against a known expected tally, and appends one JSON line per run to
+   `perf/results/<machine>.jsonl`. `ElectionGuard.Benchmarks` is a BenchmarkDotNet project for
+   function-level numbers. See `perf/README.md`. The harness streams in chunks because encrypted
+   ballots are ~50 KB each and cannot be held in memory at scale; scenario JSON under
+   `perf/scenarios/` controls which phases run and their time budgets, so a phase that is
+   impractical today becomes practical by editing configuration rather than code.
+
+Other related projects that will eventually exist that we need to prepare for:
+
+1. Ballot encryptors - Encrypted ballots in reality may be generated in different languages and runtimes since they may come from different sources. Devices could run C#, C++, Rust, or any other language, or it could even be a browser running something like Javascript. Because of that, the project must be prepared to handle ballots encrypted in any language, and therefore we will implement encryptors in multiple languages. These encryptors will be benchmarked and be testable against a unified testing system.
+2. Election Record Publish - The final election record must be distributable online. We will probably take some opinions on how that should be done, and may show an example or provide a platform for this purpose.
+
+For the current stuff so far we have:
+
 Two projects matter: `src/ElectionGuard.Core` is the library; everything else (`ElectionGuard.InMemory.Console`, `ElectionGuard.Testing.Cli`, the unit test project) is a consumer or fixture generator. There is no persistence layer, network layer, or UI — this is a pure crypto/protocol library operated by driving it from a `Program.cs` (see `src/ElectionGuard.InMemory.Console/Program.cs` for the canonical full pipeline).
 
 The library models the ElectionGuard protocol as a straight-line pipeline, and the folders under `ElectionGuard.Core` mirror its phases:
 
 1. **`Crypto`** — the math primitives everything else is built on: `IntegerModP` / `IntegerModQ` (structs wrapping `BigInteger`, auto-reducing mod the election's `P`/`Q`), `EGHash` (the spec's HMAC-SHA256-based hash, §5.2), and `ElectionGuardRandom`. `EGParameters` is a process-wide static holder for the active `CryptographicParameters` + `GuardianParameters` + `ParameterBaseHash`, defaulting to the spec's v2.1.0 parameters with no setup required — `EGParameters.Init(...)`/`EGParameters.OverrideScope(...)` exist only to swap in a different parameter set (e.g. to test that `ParameterVerification` rejects a record claiming different parameters). Arithmetic throughout Core reads parameters from `EGParameters` (`EGParameters.P`/`.Q`/`.G`), never from an `EncryptionRecord`/`GuardianRecord`'s own `CryptographicParameters` — that value is only a claim the record makes about its parameters, meaningful solely as the thing `ParameterVerification` (Verification 1) checks against `EGParameters`.
-2. **`KeyGeneration`** — `Guardian` runs distributed key generation: each guardian generates Schnorr-proved key pairs, encrypts key shares to every other guardian (`EncryptShares`), decrypts the shares it receives (`DecryptShares`), and verifies the resulting `GuardianRecord` against the other guardians' public commitments (`Verify`). This is a threshold scheme (`GuardianParameters.N`/`K`, currently hardcoded to 3-of-2) — no single guardian's secret key can decrypt anything alone.
+2. **`KeyGeneration`** — `Guardian` runs distributed key generation: each guardian generates Schnorr-proved key pairs, encrypts key shares to every other guardian (`EncryptShares`), decrypts the shares it receives (`DecryptShares`), and verifies the resulting `GuardianRecord` against the other guardians' public commitments (`Verify`). This is a threshold scheme (`GuardianParameters.N`/`K`, defaulting to 3-of-2 and settable via `new GuardianParameters(n, k)`) — no single guardian's secret key can decrypt anything alone.
 3. **`BallotEncryption`** — `BallotEncryptor.Encrypt` takes a plaintext `Ballot` + the election's `EncryptionRecord` and produces an `EncryptedBallot`: ElGamal-encrypts every selection plus overvote/nullvote/undervote/write-in counters, generates the disjunctive Chaum-Pedersen proofs that each ciphertext encrypts a value in its valid range, and threads a per-ballot confirmation-code chain (`ChainingField`/`ConfirmationCode`) so ballots can be provably ordered/chained on a device.
 4. **`Tally`** — `EncryptedTally.AddBallot` homomorphically accumulates encrypted ballots per contest/choice (ElGamal ciphertexts multiply to add plaintexts). `TallyGuardian.Decrypt` produces each guardian's partial decryption share; `TallyAdmin.Decrypt` combines the threshold-many partial decryptions via Lagrange interpolation into the final `DecryptedTally`, brute-forcing the discrete log against `BallotsCast` to recover the plaintext vote count per choice.
 5. **`Verify`** — one class per protocol verification, mirroring the spec's numbered verification list (`ParameterVerification` = Verification 1, `GuardianPublicKeyVerification` = 2, `ElectionPublicKeyVerification` = 3, `ExtendedBaseHashVerification` = 4, `SelectionEncryptionIdentifierVerification` = 5, `SelectionEncryptionsWellFormedVerification` = 6, `AdherenceToVoteLimitsVerification` = 7, `ConfirmationCodeVerification` = 8, `BallotAggregationVerification` = 9). Failures throw `VerificationFailedException`, which carries a `SubSection` (e.g. `"1.B"`) matching the spec's lettered sub-checks — tests assert on this field, not just on the exception type.
@@ -28,5 +49,16 @@ The library models the ElectionGuard protocol as a straight-line pipeline, and t
 
 - `IntegerModP`/`IntegerModQ` read `P`/`Q` from `EGParameters`, which defaults to the spec's v2.1.0 parameters — no initialization is required to use them. Only call `EGParameters.Init(...)`/`EGParameters.OverrideScope(...)` when a test deliberately needs a non-default parameter set.
 - When encrypting or verifying, always use `EGParameters.P`/`.Q`/`.G`, never `encryptionRecord.CryptographicParameters.*` or `guardianRecord.CryptographicParameters.*` — those are untrusted claims from the record, only meant to be checked against `EGParameters` inside `ParameterVerification`.
-- `GuardianParameters` (N=3, K=2) is currently hardcoded rather than configurable; anything assuming a specific guardian count is tied to that.
+- `GuardianParameters` defaults to N=3, K=2; pass `new GuardianParameters(n, k)` for other thresholds. `ElectionFixtureBuilder.CreateGuardianSet(n, k)` builds a matching guardian set.
 - Ballot/contest/tally data round-trips through JSON in `test/data/*` fixtures (see `test/data/famous-names/`) — `ElectionGuard.Testing.Cli` generates equivalent fixtures programmatically via Bogus for larger test scenarios.
+- `BallotEncryptor.EncryptContest` MUTATES the plaintext ballot it is given: on an overvote it sets
+  every `BallotChoice.SelectionValue` to 0. Anything computing an expected tally must do so *before*
+  encrypting, and must apply the same rule (a contest whose selection total exceeds
+  `SelectionLimit * OptionSelectionLimit` contributes nothing).
+- `TallyAdmin.Decrypt` recovers each plaintext count by looping `i` from 0 to `BallotsCast` and
+  computing a full `PowModP` per iteration, without breaking on a match. Cost is
+  `(BallotsCast + 1) x choices` modular exponentiations, which makes large tallies impractical to
+  decrypt today.
+- Non-shipping fixture code lives in `test/ElectionGuard.Testing.Common` (`ElectionFixtureBuilder`,
+  `BallotGenerator`, `ExpectedTallyAccumulator`), shared by the unit tests, the perf harness and the
+  benchmarks.

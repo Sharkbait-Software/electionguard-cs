@@ -2,7 +2,7 @@ using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.Extensions;
 using ElectionGuard.Core.KeyGeneration;
 using ElectionGuard.Core.Models;
-using ElectionGuard.Core.UnitTests.TestFixtures;
+using ElectionGuard.Testing.Common;
 using ElectionGuard.Core.Verify;
 using System.Numerics;
 

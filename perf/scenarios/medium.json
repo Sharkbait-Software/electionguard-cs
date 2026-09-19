@@ -1,0 +1,20 @@
+{
+  "id": "medium",
+  "manifest": "test/data/famous-names-large/manifest.json",
+  "ballotCount": 100000,
+  "seed": 20260907,
+  "guardians": { "n": 3, "k": 2 },
+  "parallelism": 0,
+  "chunkSize": 5000,
+  "warmupBallots": 200,
+  "phases": {
+    "ballotVerification": true,
+    "tallyVerification": false,
+    "decrypt": true,
+    "serialization": true
+  },
+  "budgets": {
+    "EncryptBallots": 120,
+    "DecryptTally": 120
+  }
+}

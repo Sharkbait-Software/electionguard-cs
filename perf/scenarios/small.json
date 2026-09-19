@@ -1,0 +1,16 @@
+{
+  "id": "small",
+  "manifest": "test/data/famous-names-large/manifest.json",
+  "ballotCount": 10000,
+  "seed": 20260907,
+  "guardians": { "n": 3, "k": 2 },
+  "parallelism": 0,
+  "chunkSize": 2000,
+  "warmupBallots": 200,
+  "phases": {
+    "ballotVerification": true,
+    "tallyVerification": true,
+    "decrypt": true,
+    "serialization": true
+  }
+}

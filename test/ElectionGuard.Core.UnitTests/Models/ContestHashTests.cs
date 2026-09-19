@@ -2,7 +2,7 @@ using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.Extensions;
 using ElectionGuard.Core.Models;
-using ElectionGuard.Core.UnitTests.TestFixtures;
+using ElectionGuard.Testing.Common;
 
 namespace ElectionGuard.Core.UnitTests.Models;
 
