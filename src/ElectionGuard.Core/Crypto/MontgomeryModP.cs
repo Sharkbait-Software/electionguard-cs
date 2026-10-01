@@ -1,4 +1,6 @@
 using ElectionGuard.Core.Extensions;
+using ElectionGuard.Core.Models;
+using System.Buffers;
 using System.Numerics;
 
 namespace ElectionGuard.Core.Crypto;
@@ -19,6 +21,10 @@ namespace ElectionGuard.Core.Crypto;
 /// precomputing a table for the base via <see cref="PowRadixRegistry"/>, that is used instead and is
 /// roughly thirty times as fast. Note 3.5 predicts "an order of magnitude or more"; both halves of
 /// the note, the table and the Montgomery form, are needed to get there.
+///
+/// <see cref="PowModPVariableTime(BigInteger, ReadOnlySpan{IntegerModQ}, Span{IntegerModP})"/> is
+/// the one exception to this class's exponent-independent operation count: a verifier-only path for
+/// raising one base to several public exponents, and never to be used with a secret.
 ///
 /// This is a static class rather than a Montgomery-form value type, which is where it started and
 /// what the reference Kotlin implementation has. A value type bought nothing here: Montgomery form
@@ -131,6 +137,307 @@ public static class MontgomeryModP
         }
 
         return PowModPTableFree(basis, bytes[..written]);
+    }
+
+    /// <summary>
+    /// Largest Yao window considered by <see cref="ChooseSharedSquaringWindowBits"/>. Above this the
+    /// 2^w - 1 bucket-combining multiplies dominate for any exponent size this library uses, and it
+    /// keeps every digit within two bytes of the exponent.
+    /// </summary>
+    private const int MaxSharedSquaringWindowBits = 8;
+
+    /// <summary>
+    /// Cost of a squaring relative to a multiply on <see cref="MontgomeryContext"/>: its SOS squaring
+    /// does s(s+1)/2 + s^2 limb products against CIOS's 2s^2, about three quarters at 64 limbs.
+    /// <see cref="Avx512Montgomery"/> has no squaring shortcut, so there it is 1.
+    /// </summary>
+    private const double ScalarSquareCost = 0.75;
+
+    private const double Avx512SquareCost = 1.0;
+
+    /// <summary>
+    /// Single-value buffers of the shared-squaring path are stack-allocated up to this width, which
+    /// covers both representations of the spec's p: 64 scalar limbs or 144 AVX-512 digits.
+    /// </summary>
+    private const int MaxStackAllocWidth = Avx512Montgomery.Lanes;
+
+    /// <summary>Digit buffers of the shared-squaring path longer than this go on the heap.</summary>
+    private const int MaxStackAllocDigits = 1024;
+
+    /// <summary>
+    /// Computes basis^exponents[k] mod p for every k, sharing one squaring chain across all of them.
+    ///
+    /// VARIABLE TIME. VERIFIER ONLY. FOR PUBLIC EXPONENTS ONLY. This exists for the verifier, where
+    /// the exponents are proof challenges published in the election record (Verifications 6 and 7
+    /// raise each selection or contest ciphertext component to every challenge c_j of its range
+    /// proof). The work done here depends on the exponents' bit lengths and on which of their digits
+    /// are zero or equal, so it must never be handed a secret: encryption, proof generation, key
+    /// generation and decryption keep using <see cref="PowModP(BigInteger, IntegerModQ)"/>, whose
+    /// operation count is independent of the exponent, and nothing under BallotEncryption,
+    /// KeyGeneration or Tally may call this.
+    ///
+    /// Raising one base to m exponents with the table-free window costs m full squaring chains
+    /// (256 squarings each for a 256-bit exponent). This instead uses Yao's method, the fixed-base
+    /// algorithm of Brickell, Gordon, McCurley and Wilson with a table built on the fly: write each
+    /// exponent e in base 2^w as sum d_i 2^(w i), compute x_i = basis^(2^(w i)) once (about 252
+    /// squarings in total at w = 4, shared by every exponent), and then evaluate
+    ///
+    ///   basis^e = prod_{d = 1}^{2^w - 1} ( prod_{i : d_i = d} x_i )^d
+    ///
+    /// with the running-product trick: walking d downward, B accumulates the x_i whose digit is d
+    /// and A multiplies in B after every step, so each x_i ends up raised to its own digit. That is
+    /// one multiply per non-zero digit plus 2^w - 1 to combine, about 75 multiplies per 256-bit
+    /// exponent at w = 4 and no squarings at all. For the m = 2 of a selection limit of 1 that is
+    /// 252 squarings + ~150 multiplies per base, against 512 squarings + ~158 multiplies separately.
+    ///
+    /// On hardware with AVX-512F the whole computation stays in <see cref="Avx512Montgomery"/>'s
+    /// representation: the base is converted in once, the chain and the combines use its multiply,
+    /// and each result is converted out once. Elsewhere it runs on <see cref="MontgomeryContext"/>.
+    /// The results are identical either way. Nothing is allocated but the results themselves and,
+    /// for the chain, a buffer rented from <see cref="ArrayPool{T}.Shared"/>; there is no shared
+    /// scratch state, so this is safe to call from many threads at once.
+    ///
+    /// A basis with a registered <see cref="PowRadix"/> table is routed to that table instead,
+    /// exponent by exponent, which is cheaper still.
+    /// </summary>
+    /// <param name="basis">The common base. Reduced mod p.</param>
+    /// <param name="exponents">The public exponents, each an element of Z_q.</param>
+    /// <param name="results">Receives basis^exponents[k] at index k; must be as long as
+    /// <paramref name="exponents"/>.</param>
+    public static void PowModPVariableTime(BigInteger basis, ReadOnlySpan<IntegerModQ> exponents, Span<IntegerModP> results)
+    {
+        PowModPVariableTime(basis, exponents, results, allowAvx512: true);
+    }
+
+    /// <summary>
+    /// <see cref="PowModPVariableTime(BigInteger, ReadOnlySpan{IntegerModQ}, Span{IntegerModP})"/>
+    /// with the AVX-512 engine optionally ruled out, so that tests can check the scalar path on
+    /// hardware that would otherwise never take it.
+    /// </summary>
+    internal static void PowModPVariableTime(BigInteger basis, ReadOnlySpan<IntegerModQ> exponents, Span<IntegerModP> results, bool allowAvx512)
+    {
+        if (results.Length != exponents.Length)
+        {
+            throw new ArgumentException("There must be exactly one result slot per exponent.", nameof(results));
+        }
+
+        if (exponents.IsEmpty)
+        {
+            return;
+        }
+
+        if (PowRadixRegistry.TryGet(basis, out PowRadix radix))
+        {
+            for (int k = 0; k < exponents.Length; k++)
+            {
+                results[k] = radix.Pow(exponents[k]);
+            }
+
+            return;
+        }
+
+        long maxBits = 0;
+        for (int k = 0; k < exponents.Length; k++)
+        {
+            maxBits = Math.Max(maxBits, exponents[k].ToBigInteger().GetBitLength());
+        }
+
+        if (maxBits == 0)
+        {
+            // Every exponent is zero, and basis^0 = 1 for every basis, including 0.
+            results.Fill(new IntegerModP(BigInteger.One));
+            return;
+        }
+
+        // An IntegerModP is already reduced; only a raw BigInteger basis can need it, and reducing
+        // unconditionally would allocate a copy every time.
+        BigInteger p = EGParameters.P;
+        BigInteger reduced = basis.Sign >= 0 && basis < p ? basis : basis.Mod(p);
+
+        if (allowAvx512 && Avx512Montgomery.TryGetCurrent(out Avx512Montgomery engine))
+        {
+            int windowBits = ChooseSharedSquaringWindowBits(maxBits, exponents.Length, Avx512SquareCost);
+            PowVariableTimeCore(reduced, exponents, results, maxBits, windowBits, new Avx512MontgomeryArithmetic(engine));
+        }
+        else
+        {
+            int windowBits = ChooseSharedSquaringWindowBits(maxBits, exponents.Length, ScalarSquareCost);
+            PowVariableTimeCore(reduced, exponents, results, maxBits, windowBits, new ScalarMontgomeryArithmetic(MontgomeryContext.Current));
+        }
+    }
+
+    /// <summary>
+    /// The Yao evaluation behind <see cref="PowModPVariableTime(BigInteger, ReadOnlySpan{IntegerModQ}, Span{IntegerModP})"/>,
+    /// generic over the representation so that each engine gets its own compiled copy.
+    /// <paramref name="basis"/> is already in [0, p) and at least one exponent is non-zero.
+    /// </summary>
+    private static void PowVariableTimeCore<TArithmetic>(
+        BigInteger basis,
+        ReadOnlySpan<IntegerModQ> exponents,
+        Span<IntegerModP> results,
+        long maxBits,
+        int windowBits,
+        TArithmetic arithmetic)
+        where TArithmetic : struct, IMontgomeryArithmetic
+    {
+        int s = arithmetic.Width;
+        int digitMask = (1 << windowBits) - 1;
+        int digitCount = (int)((maxBits + windowBits - 1) / windowBits);
+
+        // Rented arrays hold stale data. That is harmless here: row 0 is written by ToMontgomery and
+        // every later row by the squaring that derives it, each before anything reads it.
+        ulong[] chainArray = ArrayPool<ulong>.Shared.Rent(digitCount * s);
+        try
+        {
+            Span<ulong> chain = chainArray.AsSpan(0, digitCount * s);
+
+            // chain[i] = basis^(2^(w i)) in Montgomery form: the only squarings, done once for all
+            // exponents.
+            arithmetic.ToMontgomery(basis, chain[..s]);
+            for (int i = 1; i < digitCount; i++)
+            {
+                Span<ulong> next = chain.Slice(i * s, s);
+                arithmetic.Square(chain.Slice((i - 1) * s, s), next);
+                for (int square = 1; square < windowBits; square++)
+                {
+                    arithmetic.Square(next, next);
+                }
+            }
+
+            Span<ulong> bucket = s <= MaxStackAllocWidth ? stackalloc ulong[MaxStackAllocWidth] : new ulong[s];
+            Span<ulong> accumulator = s <= MaxStackAllocWidth ? stackalloc ulong[MaxStackAllocWidth] : new ulong[s];
+            bucket = bucket[..s];
+            accumulator = accumulator[..s];
+
+            Span<byte> digits = digitCount <= MaxStackAllocDigits ? stackalloc byte[MaxStackAllocDigits] : new byte[digitCount];
+            digits = digits[..digitCount];
+
+            Span<byte> exponentBuffer = stackalloc byte[ZqExponentBytes];
+
+            for (int k = 0; k < exponents.Length; k++)
+            {
+                BigInteger exponent = exponents[k].ToBigInteger();
+                ReadOnlySpan<byte> bytes = TryWriteBigEndian(exponent, exponentBuffer, padToLength: true, out _)
+                    ? exponentBuffer
+                    // Only reachable under a non-spec q wider than 256 bits.
+                    : exponent.ToByteArray(isUnsigned: true, isBigEndian: true);
+                ReadDigits(bytes, windowBits, digits);
+
+                // While either running product is still 1, the first factor is copied in rather
+                // than multiplied, saving a multiply each. Both are branches on the exponent's
+                // digits, which is fine only because the exponent is public.
+                bool bucketIsOne = true;
+                bool accumulatorIsOne = true;
+                for (int d = digitMask; d >= 1; d--)
+                {
+                    for (int i = 0; i < digitCount; i++)
+                    {
+                        if (digits[i] != d)
+                        {
+                            continue;
+                        }
+
+                        ReadOnlySpan<ulong> power = chain.Slice(i * s, s);
+                        if (bucketIsOne)
+                        {
+                            power.CopyTo(bucket);
+                            bucketIsOne = false;
+                        }
+                        else
+                        {
+                            arithmetic.Multiply(bucket, power, bucket);
+                        }
+                    }
+
+                    if (bucketIsOne)
+                    {
+                        continue;
+                    }
+
+                    if (accumulatorIsOne)
+                    {
+                        bucket.CopyTo(accumulator);
+                        accumulatorIsOne = false;
+                    }
+                    else
+                    {
+                        arithmetic.Multiply(accumulator, bucket, accumulator);
+                    }
+                }
+
+                results[k] = accumulatorIsOne
+                    ? new IntegerModP(BigInteger.One)
+                    : new IntegerModP(arithmetic.FromMontgomery(accumulator));
+            }
+        }
+        finally
+        {
+            ArrayPool<ulong>.Shared.Return(chainArray);
+        }
+    }
+
+    /// <summary>
+    /// Splits a big-endian exponent into base-2^<paramref name="windowBits"/> digits, least
+    /// significant first, filling all of <paramref name="digits"/>: digits past the exponent's own
+    /// length read as zero. A digit may straddle a byte boundary for widths that do not divide 8,
+    /// so each is assembled from up to two bytes; widths above 8 are never chosen.
+    /// </summary>
+    private static void ReadDigits(ReadOnlySpan<byte> exponentBigEndian, int windowBits, Span<byte> digits)
+    {
+        int mask = (1 << windowBits) - 1;
+        int last = exponentBigEndian.Length - 1;
+        for (int i = 0; i < digits.Length; i++)
+        {
+            int bit = i * windowBits;
+            int index = last - (bit >> 3);
+            int offset = bit & 7;
+            if (index < 0)
+            {
+                digits[i] = 0;
+                continue;
+            }
+
+            int value = exponentBigEndian[index] >> offset;
+            if (offset + windowBits > 8 && index > 0)
+            {
+                value |= exponentBigEndian[index - 1] << (8 - offset);
+            }
+
+            digits[i] = (byte)(value & mask);
+        }
+    }
+
+    /// <summary>
+    /// The Yao window that minimises the expected cost, in multiplies, of raising one base to
+    /// <paramref name="exponentCount"/> exponents of up to <paramref name="exponentBits"/> bits:
+    /// the shared chain's (ceil(bits / w) - 1) * w squarings, each costing
+    /// <paramref name="squareCost"/> multiplies, plus per exponent one multiply per non-zero digit
+    /// (h (1 - 2^-w) on average for h = ceil(bits / w) digits) and 2^w - 1 to combine the buckets.
+    ///
+    /// For the spec's 256-bit q this lands on w = 4 whatever the squaring cost and the exponent
+    /// count: the chain is 248 to 255 squarings for every w from 3 to 8, while the per-exponent term
+    /// is about 75 multiplies at w = 4 against 81 at w = 5 and 82 at w = 3. So the AVX-512 engine,
+    /// where a square costs a full multiply, and the scalar one, where it costs about three
+    /// quarters of one, choose the same window.
+    /// </summary>
+    internal static int ChooseSharedSquaringWindowBits(long exponentBits, int exponentCount, double squareCost)
+    {
+        int best = 1;
+        double bestCost = double.MaxValue;
+        for (int w = 1; w <= MaxSharedSquaringWindowBits; w++)
+        {
+            long digitCount = (exponentBits + w - 1) / w;
+            double chain = squareCost * (digitCount - 1) * w;
+            double perExponent = digitCount * (1 - Math.Pow(2, -w)) + ((1 << w) - 1);
+            double cost = chain + exponentCount * perExponent;
+            if (cost < bestCost)
+            {
+                bestCost = cost;
+                best = w;
+            }
+        }
+
+        return best;
     }
 
     /// <summary>

@@ -73,6 +73,11 @@ The library models the ElectionGuard protocol as a straight-line pipeline, and t
   batch test (random 128-bit exponents, one multi-exponentiation, one `^q`). Its soundness rests on
   p - 1 = 2·q·r' with r' a large prime, which holds for the spec's parameters only, so it falls back
   to exact per-value checks under any other parameter set. A unit test pins that factorization.
+- `MontgomeryModP.PowModPVariableTime` raises one base to several exponents over one shared
+  squaring chain (Yao/BGMW, w = 4), ~38% fewer Montgomery ops per base at two exponents. It is
+  **variable-time and verifier-only**: its work depends on the exponents' digits, so it is safe only
+  for public values such as the proof challenges c_j of Verifications 6 and 7. Never call it from
+  `BallotEncryption`, `KeyGeneration` or `Tally`, or with a nonce or secret key.
 - `TallyAdmin.Decrypt` recovers each plaintext count by looping `i` from 0 to `BallotsCast` and
   computing a full `PowModP` per iteration, without breaking on a match. Cost is
   `(BallotsCast + 1) x choices` modular exponentiations, which makes large tallies impractical to

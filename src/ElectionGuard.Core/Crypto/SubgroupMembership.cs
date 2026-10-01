@@ -101,8 +101,8 @@ public static class SubgroupMembership
         }
 
         bool batchPassed = Avx512Montgomery.TryGetCurrent(out Avx512Montgomery engine)
-            ? BatchTest(values, new Avx512Arithmetic(engine))
-            : BatchTest(values, new ScalarArithmetic(context));
+            ? BatchTest(values, new Avx512MontgomeryArithmetic(engine))
+            : BatchTest(values, new ScalarMontgomeryArithmetic(context));
 
         return batchPassed ? -1 : IndexOfFirstNonMemberExact(values);
     }
@@ -139,8 +139,9 @@ public static class SubgroupMembership
     /// would. Everything here is variable-time, which is fine: the values are public ballot data,
     /// and the exponents are this verifier's own coins, drawn after the ballot was fixed.
     ///
-    /// Generic over the arithmetic, with a struct constraint, so that the JIT compiles one copy per
-    /// representation with the multiplications called directly rather than through an interface.
+    /// Generic over the arithmetic (<see cref="IMontgomeryArithmetic"/>), with a struct constraint, so
+    /// that the JIT compiles one copy per representation with the multiplications called directly
+    /// rather than through an interface.
     /// </summary>
     private static bool BatchTest<TArithmetic>(IReadOnlyList<IntegerModP> values, TArithmetic arithmetic)
         where TArithmetic : struct, IMontgomeryArithmetic
@@ -289,63 +290,6 @@ public static class SubgroupMembership
             ArrayPool<ulong>.Shared.Return(buckets);
             ArrayPool<UInt128>.Shared.Return(exponents);
         }
-    }
-
-    /// <summary>
-    /// The Montgomery-form operations <see cref="BatchTest"/> needs, over either representation.
-    /// Values are spans of <see cref="Width"/> words, in whatever form the implementation uses.
-    /// </summary>
-    private interface IMontgomeryArithmetic
-    {
-        int Width { get; }
-
-        void ToMontgomery(BigInteger value, Span<ulong> result);
-
-        void Multiply(ReadOnlySpan<ulong> a, ReadOnlySpan<ulong> b, Span<ulong> result);
-
-        void Square(ReadOnlySpan<ulong> a, Span<ulong> result);
-
-        void PowMontgomeryInto(ReadOnlySpan<ulong> basis, ReadOnlySpan<byte> exponentBigEndian, Span<ulong> result);
-
-        /// <summary>Whether a Montgomery-form value represents 1.</summary>
-        bool IsOne(ReadOnlySpan<ulong> value);
-    }
-
-    /// <summary>64-bit limbs, fully reduced, so 1 has exactly one representation.</summary>
-    private readonly struct ScalarArithmetic(MontgomeryContext context) : IMontgomeryArithmetic
-    {
-        public int Width => context.LimbCount;
-
-        public void ToMontgomery(BigInteger value, Span<ulong> result) => context.ToMontgomery(value, result);
-
-        public void Multiply(ReadOnlySpan<ulong> a, ReadOnlySpan<ulong> b, Span<ulong> result) => context.Multiply(a, b, result);
-
-        public void Square(ReadOnlySpan<ulong> a, Span<ulong> result) => context.Square(a, result);
-
-        public void PowMontgomeryInto(ReadOnlySpan<ulong> basis, ReadOnlySpan<byte> exponentBigEndian, Span<ulong> result)
-            => MontgomeryModP.PowMontgomeryInto(basis, exponentBigEndian, context, result);
-
-        public bool IsOne(ReadOnlySpan<ulong> value) => value.SequenceEqual(context.One);
-    }
-
-    /// <summary>
-    /// 29-bit digits in [0, 2p), so 1 has two representations; <see cref="Avx512Montgomery.IsOne"/>
-    /// accepts both. There is no dedicated squaring on this representation.
-    /// </summary>
-    private readonly struct Avx512Arithmetic(Avx512Montgomery engine) : IMontgomeryArithmetic
-    {
-        public int Width => Avx512Montgomery.Lanes;
-
-        public void ToMontgomery(BigInteger value, Span<ulong> result) => engine.ToMontgomery(value, result);
-
-        public void Multiply(ReadOnlySpan<ulong> a, ReadOnlySpan<ulong> b, Span<ulong> result) => engine.Multiply(a, b, result);
-
-        public void Square(ReadOnlySpan<ulong> a, Span<ulong> result) => engine.Multiply(a, a, result);
-
-        public void PowMontgomeryInto(ReadOnlySpan<ulong> basis, ReadOnlySpan<byte> exponentBigEndian, Span<ulong> result)
-            => engine.PowMontgomeryInto(basis, exponentBigEndian, result);
-
-        public bool IsOne(ReadOnlySpan<ulong> value) => engine.IsOne(value);
     }
 
     /// <summary>

@@ -42,19 +42,33 @@ public class SelectionEncryptionsWellFormedVerification
             throw new VerificationFailedException("6", $"A challenge/response value was not provided for all possible values of the option selection limit of {contest.OptionSelectionLimit}.");
         }
 
+        // 6.B/C for every proof before any exponentiation. Nothing below can throw, so this
+        // raises exactly the exception, for exactly the inputs, that checking proof by proof did.
+        int proofCount = selection.Proofs.Length;
+        IntegerModQ[] challenges = new IntegerModQ[proofCount];
+        for (int i = 0; i < proofCount; i++)
+        {
+            VerifyIsInZq(selection.Proofs[i].Challenge);
+            VerifyIsInZq(selection.Proofs[i].Response);
+            challenges[i] = selection.Proofs[i].Challenge;
+        }
+
+        // alpha and beta are each raised to every challenge c_j. The challenges are public proof
+        // data, so the verifier-only variable-time path, which shares one squaring chain across all
+        // of a base's exponents, is safe here. g^v and K^w stay on PowModP, which uses their tables.
+        IntegerModP[] alphaPowers = new IntegerModP[proofCount];
+        IntegerModP[] betaPowers = new IntegerModP[proofCount];
+        MontgomeryModP.PowModPVariableTime(selection.Alpha, challenges, alphaPowers);
+        MontgomeryModP.PowModPVariableTime(selection.Beta, challenges, betaPowers);
+
         List<(IntegerModP a, IntegerModP b)> calculatedValues = new();
-        for (int i = 0; i < selection.Proofs.Length; i++)
+        for (int i = 0; i < proofCount; i++)
         {
             var crPair = selection.Proofs[i];
 
-            VerifyIsInZq(crPair.Challenge);
-            VerifyIsInZq(crPair.Response);
-
-            var a = MontgomeryModP.PowModP(EGParameters.G, crPair.Response)
-                * MontgomeryModP.PowModP(selection.Alpha, crPair.Challenge);
+            var a = MontgomeryModP.PowModP(EGParameters.G, crPair.Response) * alphaPowers[i];
             var w = crPair.Response - i * crPair.Challenge;
-            var b = MontgomeryModP.PowModP(encryptionRecord.ElectionPublicKeys.VoteEncryptionKey, w)
-                * MontgomeryModP.PowModP(selection.Beta, crPair.Challenge);
+            var b = MontgomeryModP.PowModP(encryptionRecord.ElectionPublicKeys.VoteEncryptionKey, w) * betaPowers[i];
             calculatedValues.Add((a, b));
         }
 
