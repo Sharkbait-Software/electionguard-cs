@@ -11,9 +11,12 @@ namespace ElectionGuard.Core.Crypto;
 /// branches on its hot path, for the many operations that gain nothing from precomputation.
 ///
 /// <see cref="PowModP(IntegerModP, IntegerModQ)"/> works with no setup at all, using a windowed
-/// square-and-multiply over Montgomery limbs, which is roughly twice as fast as
-/// <see cref="IntegerModP.PowModP(BigInteger, BigInteger)"/>. If a caller has opted in by
-/// precomputing a table for the base via <see cref="PowRadixRegistry"/>, it uses that instead and is
+/// square-and-multiply in Montgomery form. On hardware with AVX-512F that runs on
+/// <see cref="Avx512Montgomery"/>, several times as fast as
+/// <see cref="IntegerModP.PowModP(BigInteger, BigInteger)"/>; elsewhere, or for a p wider than 4096
+/// bits, it runs on the scalar limbs of <see cref="MontgomeryContext"/>, roughly twice as fast. The
+/// two give identical results, so which one ran is invisible to callers. If a caller has opted in by
+/// precomputing a table for the base via <see cref="PowRadixRegistry"/>, that is used instead and is
 /// roughly thirty times as fast. Note 3.5 predicts "an order of magnitude or more"; both halves of
 /// the note, the table and the Montgomery form, are needed to get there.
 ///
@@ -31,7 +34,7 @@ public static class MontgomeryModP
     /// one multiply per nibble, which beats both binary square-and-multiply and wider windows at the
     /// 256-bit exponent size the spec uses.
     /// </summary>
-    private const int TableFreeWindowBits = 4;
+    internal const int TableFreeWindowBits = 4;
 
     private const int TableFreeWindowSize = 1 << TableFreeWindowBits;
 
@@ -45,12 +48,23 @@ public static class MontgomeryModP
     /// ballot weight or a guardian index are not, and without this they would pay 15 multiplications
     /// to save two.
     /// </summary>
-    private const int NarrowWindowMaxExponentBytes = 4;
+    internal const int NarrowWindowMaxExponentBytes = 4;
 
-    private const int NarrowWindowBits = 1;
+    internal const int NarrowWindowBits = 1;
 
     /// <summary>Buffers longer than this are heap-allocated rather than stack-allocated.</summary>
     private const int MaxStackAllocLimbs = 80;
+
+    /// <summary>
+    /// Width an <see cref="IntegerModQ"/> exponent is always padded to, as
+    /// <see cref="IntegerModQ.ToByteArray"/> does. The padding is load-bearing: it puts every element
+    /// of Z_q, however small its value, on the 4-bit window, so the operation count of an
+    /// exponentiation by a secret nonce does not reveal anything about its magnitude.
+    /// </summary>
+    private const int ZqExponentBytes = 32;
+
+    /// <summary>BigInteger exponents up to this many bytes are serialized on the stack.</summary>
+    private const int MaxStackAllocExponentBytes = 64;
 
     /// <summary>
     /// Computes basis^exponent mod p, using a precomputed <see cref="PowRadix"/> table for
@@ -73,7 +87,14 @@ public static class MontgomeryModP
             return radix.Pow(exponent);
         }
 
-        return PowModPTableFree(basis, exponent.ToByteArray());
+        Span<byte> bytes = stackalloc byte[ZqExponentBytes];
+        if (!TryWriteBigEndian(exponent.ToBigInteger(), bytes, padToLength: true, out _))
+        {
+            // Only reachable under a non-spec q wider than 256 bits; ToByteArray reports it.
+            return PowModPTableFree(basis, exponent.ToByteArray());
+        }
+
+        return PowModPTableFree(basis, bytes);
     }
 
     /// <inheritdoc cref="PowModP(BigInteger, BigInteger)"/>
@@ -93,8 +114,8 @@ public static class MontgomeryModP
     /// silently accepting values outside the subgroup. Taking the exponent as a BigInteger keeps
     /// that from being expressible.
     ///
-    /// The table-free Montgomery path still applies, so these calls are about twice as fast as
-    /// <see cref="IntegerModP.PowModP(BigInteger, BigInteger)"/>.
+    /// The table-free Montgomery path still applies, AVX-512 included, so these calls are as fast as
+    /// the table-free <see cref="PowModP(BigInteger, IntegerModQ)"/>.
     /// </summary>
     public static IntegerModP PowModP(BigInteger basis, BigInteger exponent)
     {
@@ -103,11 +124,57 @@ public static class MontgomeryModP
             throw new ArgumentOutOfRangeException(nameof(exponent), exponent, "Exponent must not be negative.");
         }
 
-        return PowModPTableFree(basis, exponent.ToByteArray(isUnsigned: true, isBigEndian: true));
+        Span<byte> bytes = stackalloc byte[MaxStackAllocExponentBytes];
+        if (!TryWriteBigEndian(exponent, bytes, padToLength: false, out int written))
+        {
+            return PowModPTableFree(basis, exponent.ToByteArray(isUnsigned: true, isBigEndian: true));
+        }
+
+        return PowModPTableFree(basis, bytes[..written]);
     }
 
+    /// <summary>
+    /// Writes a non-negative value big-endian into <paramref name="destination"/> without allocating:
+    /// right-aligned and zero-padded to the whole span, or into its first <paramref name="written"/>
+    /// bytes. False if it does not fit.
+    /// </summary>
+    private static bool TryWriteBigEndian(BigInteger value, Span<byte> destination, bool padToLength, out int written)
+    {
+        int length = value.GetByteCount(isUnsigned: true);
+        if (length > destination.Length)
+        {
+            written = 0;
+            return false;
+        }
+
+        if (padToLength)
+        {
+            destination.Clear();
+            destination = destination[(destination.Length - length)..];
+        }
+
+        return value.TryWriteBytes(destination, out written, isUnsigned: true, isBigEndian: true);
+    }
+
+    /// <summary>
+    /// The table-free exponentiation, on <see cref="Avx512Montgomery"/> when the hardware and p allow
+    /// it and on <see cref="MontgomeryContext"/> otherwise. On the AVX-512 path nothing is allocated
+    /// but the result itself, which matters because verification runs this from many threads at once.
+    /// </summary>
     private static IntegerModP PowModPTableFree(BigInteger basis, ReadOnlySpan<byte> exponentBigEndian)
     {
+        if (Avx512Montgomery.TryGetCurrent(out Avx512Montgomery engine))
+        {
+            // An IntegerModP is already reduced; only a raw BigInteger basis can need it, and
+            // reducing unconditionally would allocate a copy every time.
+            BigInteger p = engine.Modulus;
+            BigInteger reduced = basis.Sign >= 0 && basis < p ? basis : basis.Mod(p);
+
+            Span<ulong> montgomery = stackalloc ulong[Avx512Montgomery.Lanes];
+            engine.PowInto(reduced, exponentBigEndian, montgomery);
+            return new IntegerModP(engine.FromMontgomery(montgomery));
+        }
+
         MontgomeryContext context = MontgomeryContext.Current;
         Span<ulong> result = context.LimbCount <= MaxStackAllocLimbs
             ? stackalloc ulong[MaxStackAllocLimbs]

@@ -37,6 +37,11 @@ namespace ElectionGuard.Core.Crypto;
 /// A list that fails the batch test is rescanned with the exact test, so a caller always learns
 /// precisely which value is not a member. A list that is entirely valid never pays for that rescan,
 /// and that is the case that has to be fast.
+///
+/// Part 2's arithmetic runs on <see cref="Avx512Montgomery"/> when the hardware has AVX-512F, and on
+/// the scalar <see cref="MontgomeryContext"/> otherwise. The soundness argument above is about the
+/// group, not the representation: both compute the same residues, the AVX-512 one merely holding
+/// them redundantly in [0, 2p) until the final comparison with 1.
 /// </summary>
 public static class SubgroupMembership
 {
@@ -48,6 +53,12 @@ public static class SubgroupMembership
 
     /// <summary>Buffers longer than this are heap-allocated rather than stack-allocated.</summary>
     private const int MaxStackAllocLimbs = 80;
+
+    /// <summary>
+    /// The batch test's single-value buffers are stack-allocated up to this width, which covers both
+    /// representations of the spec's p: 64 scalar limbs or 144 AVX-512 digits.
+    /// </summary>
+    private const int MaxStackAllocWidth = Avx512Montgomery.Lanes;
 
     /// <summary>Lists this short gain nothing from batching over the exact test.</summary>
     private const int MinBatchSize = 2;
@@ -89,7 +100,11 @@ public static class SubgroupMembership
             }
         }
 
-        return BatchTest(values, context) ? -1 : IndexOfFirstNonMemberExact(values);
+        bool batchPassed = Avx512Montgomery.TryGetCurrent(out Avx512Montgomery engine)
+            ? BatchTest(values, new Avx512Arithmetic(engine))
+            : BatchTest(values, new ScalarArithmetic(context));
+
+        return batchPassed ? -1 : IndexOfFirstNonMemberExact(values);
     }
 
     /// <summary>
@@ -123,11 +138,15 @@ public static class SubgroupMembership
     /// instead of the roughly 160 multiplications per base that separate 128-bit exponentiations
     /// would. Everything here is variable-time, which is fine: the values are public ballot data,
     /// and the exponents are this verifier's own coins, drawn after the ballot was fixed.
+    ///
+    /// Generic over the arithmetic, with a struct constraint, so that the JIT compiles one copy per
+    /// representation with the multiplications called directly rather than through an interface.
     /// </summary>
-    private static bool BatchTest(IReadOnlyList<IntegerModP> values, MontgomeryContext context)
+    private static bool BatchTest<TArithmetic>(IReadOnlyList<IntegerModP> values, TArithmetic arithmetic)
+        where TArithmetic : struct, IMontgomeryArithmetic
     {
         int n = values.Count;
-        int s = context.LimbCount;
+        int s = arithmetic.Width;
         int windowBits = ChooseWindowBits(n);
         int bucketCount = 1 << windowBits;
         int windows = (BatchExponentBits + windowBits - 1) / windowBits;
@@ -146,14 +165,14 @@ public static class SubgroupMembership
                     BinaryPrimitives.ReadUInt64LittleEndian(bytes[8..]),
                     BinaryPrimitives.ReadUInt64LittleEndian(bytes));
 
-                context.ToMontgomery(values[i].ToBigInteger(), bases.AsSpan(i * s, s));
+                arithmetic.ToMontgomery(values[i].ToBigInteger(), bases.AsSpan(i * s, s));
             }
 
             Span<bool> filled = stackalloc bool[bucketCount];
 
-            Span<ulong> accumulator = s <= MaxStackAllocLimbs ? stackalloc ulong[MaxStackAllocLimbs] : new ulong[s];
-            Span<ulong> running = s <= MaxStackAllocLimbs ? stackalloc ulong[MaxStackAllocLimbs] : new ulong[s];
-            Span<ulong> total = s <= MaxStackAllocLimbs ? stackalloc ulong[MaxStackAllocLimbs] : new ulong[s];
+            Span<ulong> accumulator = s <= MaxStackAllocWidth ? stackalloc ulong[MaxStackAllocWidth] : new ulong[s];
+            Span<ulong> running = s <= MaxStackAllocWidth ? stackalloc ulong[MaxStackAllocWidth] : new ulong[s];
+            Span<ulong> total = s <= MaxStackAllocWidth ? stackalloc ulong[MaxStackAllocWidth] : new ulong[s];
             accumulator = accumulator[..s];
             running = running[..s];
             total = total[..s];
@@ -167,7 +186,7 @@ public static class SubgroupMembership
                 {
                     for (int square = 0; square < windowBits; square++)
                     {
-                        context.Square(accumulator, accumulator);
+                        arithmetic.Square(accumulator, accumulator);
                     }
                 }
 
@@ -186,7 +205,7 @@ public static class SubgroupMembership
                     ReadOnlySpan<ulong> basis = bases.AsSpan(i * s, s);
                     if (filled[digit])
                     {
-                        context.Multiply(bucket, basis, bucket);
+                        arithmetic.Multiply(bucket, basis, bucket);
                     }
                     else
                     {
@@ -211,7 +230,7 @@ public static class SubgroupMembership
                         }
                         else
                         {
-                            context.Multiply(running, bucket, running);
+                            arithmetic.Multiply(running, bucket, running);
                         }
                     }
 
@@ -227,7 +246,7 @@ public static class SubgroupMembership
                     }
                     else
                     {
-                        context.Multiply(total, running, total);
+                        arithmetic.Multiply(total, running, total);
                     }
                 }
 
@@ -243,7 +262,7 @@ public static class SubgroupMembership
                 }
                 else
                 {
-                    context.Multiply(accumulator, total, accumulator);
+                    arithmetic.Multiply(accumulator, total, accumulator);
                 }
             }
 
@@ -254,15 +273,15 @@ public static class SubgroupMembership
                 return false;
             }
 
-            Span<ulong> raised = s <= MaxStackAllocLimbs ? stackalloc ulong[MaxStackAllocLimbs] : new ulong[s];
+            // q itself, as a BigInteger: reduced into Z_q it would be zero, and x^0 = 1 accepts anything.
+            Span<ulong> raised = s <= MaxStackAllocWidth ? stackalloc ulong[MaxStackAllocWidth] : new ulong[s];
             raised = raised[..s];
-            MontgomeryModP.PowMontgomeryInto(
+            arithmetic.PowMontgomeryInto(
                 accumulator,
                 EGParameters.Q.ToByteArray(isUnsigned: true, isBigEndian: true),
-                context,
                 raised);
 
-            return raised.SequenceEqual(context.One);
+            return arithmetic.IsOne(raised);
         }
         finally
         {
@@ -270,6 +289,63 @@ public static class SubgroupMembership
             ArrayPool<ulong>.Shared.Return(buckets);
             ArrayPool<UInt128>.Shared.Return(exponents);
         }
+    }
+
+    /// <summary>
+    /// The Montgomery-form operations <see cref="BatchTest"/> needs, over either representation.
+    /// Values are spans of <see cref="Width"/> words, in whatever form the implementation uses.
+    /// </summary>
+    private interface IMontgomeryArithmetic
+    {
+        int Width { get; }
+
+        void ToMontgomery(BigInteger value, Span<ulong> result);
+
+        void Multiply(ReadOnlySpan<ulong> a, ReadOnlySpan<ulong> b, Span<ulong> result);
+
+        void Square(ReadOnlySpan<ulong> a, Span<ulong> result);
+
+        void PowMontgomeryInto(ReadOnlySpan<ulong> basis, ReadOnlySpan<byte> exponentBigEndian, Span<ulong> result);
+
+        /// <summary>Whether a Montgomery-form value represents 1.</summary>
+        bool IsOne(ReadOnlySpan<ulong> value);
+    }
+
+    /// <summary>64-bit limbs, fully reduced, so 1 has exactly one representation.</summary>
+    private readonly struct ScalarArithmetic(MontgomeryContext context) : IMontgomeryArithmetic
+    {
+        public int Width => context.LimbCount;
+
+        public void ToMontgomery(BigInteger value, Span<ulong> result) => context.ToMontgomery(value, result);
+
+        public void Multiply(ReadOnlySpan<ulong> a, ReadOnlySpan<ulong> b, Span<ulong> result) => context.Multiply(a, b, result);
+
+        public void Square(ReadOnlySpan<ulong> a, Span<ulong> result) => context.Square(a, result);
+
+        public void PowMontgomeryInto(ReadOnlySpan<ulong> basis, ReadOnlySpan<byte> exponentBigEndian, Span<ulong> result)
+            => MontgomeryModP.PowMontgomeryInto(basis, exponentBigEndian, context, result);
+
+        public bool IsOne(ReadOnlySpan<ulong> value) => value.SequenceEqual(context.One);
+    }
+
+    /// <summary>
+    /// 29-bit digits in [0, 2p), so 1 has two representations; <see cref="Avx512Montgomery.IsOne"/>
+    /// accepts both. There is no dedicated squaring on this representation.
+    /// </summary>
+    private readonly struct Avx512Arithmetic(Avx512Montgomery engine) : IMontgomeryArithmetic
+    {
+        public int Width => Avx512Montgomery.Lanes;
+
+        public void ToMontgomery(BigInteger value, Span<ulong> result) => engine.ToMontgomery(value, result);
+
+        public void Multiply(ReadOnlySpan<ulong> a, ReadOnlySpan<ulong> b, Span<ulong> result) => engine.Multiply(a, b, result);
+
+        public void Square(ReadOnlySpan<ulong> a, Span<ulong> result) => engine.Multiply(a, a, result);
+
+        public void PowMontgomeryInto(ReadOnlySpan<ulong> basis, ReadOnlySpan<byte> exponentBigEndian, Span<ulong> result)
+            => engine.PowMontgomeryInto(basis, exponentBigEndian, result);
+
+        public bool IsOne(ReadOnlySpan<ulong> value) => engine.IsOne(value);
     }
 
     /// <summary>
