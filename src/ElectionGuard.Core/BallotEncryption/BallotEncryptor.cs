@@ -29,9 +29,9 @@ public class BallotEncryptor
     /// encryption key K-hat.
     ///
     /// This is not done automatically, because it is not free: at the v2.1.0 parameter sizes the
-    /// default window costs about 4 MB and a few hundred milliseconds per base. That is the right
-    /// trade for a process that is about to encrypt ballots and the wrong one for a process that is
-    /// not, so the choice belongs to the caller. Encryption is correct either way; without tables
+    /// default 12-bit window costs 44 MiB per base (49.5 MiB in the AVX-512 representation) and
+    /// tens of milliseconds to build. That is the right trade for a process that is about to
+    /// encrypt ballots and the wrong one for a process that is not, so the choice belongs to the caller. Encryption is correct either way; without tables
     /// it simply runs the table-free Montgomery path instead.
     ///
     /// Calling this more than once for the same record and width is cheap: existing tables are kept.

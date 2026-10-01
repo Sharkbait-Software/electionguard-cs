@@ -83,8 +83,30 @@ public class PowRadixTests
         Assert.Equal(256, radix.Columns);
         Assert.Equal(8, radix.WindowBits);
 
-        // 32 rows x 256 entries x 64 limbs x 8 bytes = 4 MB.
+        // 32 rows x 256 entries x 64 limbs x 8 bytes = 4 MiB for scalar limbs, or
+        // 32 x 256 x 144 digits x 4 bytes = 4.5 MiB for AVX-512 digits.
+        long expected = radix.UsesAvx512 ? 4608L * 1024 : 4L * 1024 * 1024;
+        Assert.Equal(expected, radix.TableSizeInBytes);
+    }
+
+    [Fact]
+    public void Build_ScalarTable_IsFourMebibytesAtEightBits()
+    {
+        PowRadix radix = PowRadix.Build(G, 8, allowAvx512: false);
+
+        Assert.False(radix.UsesAvx512);
         Assert.Equal(4L * 1024 * 1024, radix.TableSizeInBytes);
+    }
+
+    [Avx512Fact]
+    public void Build_Avx512Table_PacksDigitsIntoUInts()
+    {
+        // 144 digits of 29 bits, one per uint: 576 bytes an entry, against the 1152 the engine's
+        // own one-digit-per-ulong layout would take.
+        PowRadix radix = PowRadix.Build(G, 8);
+
+        Assert.True(radix.UsesAvx512);
+        Assert.Equal(32L * 256 * 576, radix.TableSizeInBytes);
     }
 
     [Fact]
@@ -119,8 +141,101 @@ public class PowRadixTests
     {
         // The cost of a wider window at the v2.1.0 parameter sizes, which is why the default stops
         // at 8 and the maximum at 16.
-        Assert.Equal(4L * 1024 * 1024, PowRadix.EstimateTableSizeInBytes(8));
-        Assert.Equal(512L * 1024 * 1024, PowRadix.EstimateTableSizeInBytes(16));
+        Assert.Equal(4L * 1024 * 1024, PowRadix.EstimateTableSizeInBytes(8, allowAvx512: false));
+        Assert.Equal(44L * 1024 * 1024, PowRadix.EstimateTableSizeInBytes(12, allowAvx512: false));
+        Assert.Equal(512L * 1024 * 1024, PowRadix.EstimateTableSizeInBytes(16, allowAvx512: false));
+    }
+
+    [Avx512Fact]
+    public void EstimateTableSizeInBytes_Avx512_GrowsAsDocumented()
+    {
+        // 576-byte entries: 4.5 MiB at 8 bits, 49.5 MiB at the default 12, 576 MiB at 16.
+        Assert.Equal(4608L * 1024, PowRadix.EstimateTableSizeInBytes(8));
+        Assert.Equal(50688L * 1024, PowRadix.EstimateTableSizeInBytes(12));
+        Assert.Equal(576L * 1024 * 1024, PowRadix.EstimateTableSizeInBytes(16));
+    }
+
+    [Fact]
+    public void EstimateTableSizeInBytes_MatchesTheScalarTableActuallyBuilt()
+    {
+        long estimate = PowRadix.EstimateTableSizeInBytes(4, allowAvx512: false);
+
+        Assert.Equal(estimate, PowRadix.Build(G, 4, allowAvx512: false).TableSizeInBytes);
+    }
+
+    public static TheoryData<int> EngineWindowWidths => new() { 1, 4, 8, 12 };
+
+    [Theory]
+    [MemberData(nameof(EngineWindowWidths))]
+    public void ScalarTable_MatchesModPow_ForRandomAndEdgeExponents(int windowBits)
+    {
+        AssertMatchesModPow(PowRadix.Build(G, windowBits, allowAvx512: false), windowBits, expectAvx512: false);
+    }
+
+    [Avx512Fact]
+    public void Avx512Table_MatchesModPow_ForRandomAndEdgeExponents()
+    {
+        // [Avx512Fact] has no theory counterpart, so the widths are looped over here.
+        foreach (int windowBits in new[] { 1, 4, 8, 12 })
+        {
+            AssertMatchesModPow(PowRadix.Build(G, windowBits), windowBits, expectAvx512: true);
+        }
+    }
+
+    [Avx512Fact]
+    public void Avx512Table_ArbitraryBase_MatchesTheScalarTable()
+    {
+        Random random = new(4242);
+        BigInteger basis = MontgomeryModPTests.RandomBelowP(random);
+        PowRadix digits = PowRadix.Build(basis, 5);
+        PowRadix limbs = PowRadix.Build(basis, 5, allowAvx512: false);
+
+        Assert.True(digits.UsesAvx512);
+        Assert.False(limbs.UsesAvx512);
+        for (int i = 0; i < 4; i++)
+        {
+            IntegerModQ exponent = new(MontgomeryModPTests.RandomBelowQ(random));
+            Assert.Equal(limbs.Pow(exponent), digits.Pow(exponent));
+        }
+    }
+
+    [Avx512Fact]
+    public void Avx512Table_IsUsedFromManyThreadsAtOnce()
+    {
+        // Every buffer is on the caller's stack; a shared scratch buffer would corrupt results here.
+        PowRadix radix = PowRadix.Build(G, 8);
+        IntegerModQ[] exponents = new IntegerModQ[64];
+        Random random = new(99);
+        for (int i = 0; i < exponents.Length; i++)
+        {
+            exponents[i] = new IntegerModQ(MontgomeryModPTests.RandomBelowQ(random));
+        }
+
+        IntegerModP[] results = new IntegerModP[exponents.Length];
+        Parallel.For(0, exponents.Length, new ParallelOptions { MaxDegreeOfParallelism = 16 }, i => results[i] = radix.Pow(exponents[i]));
+
+        for (int i = 0; i < exponents.Length; i++)
+        {
+            Assert.Equal(BigInteger.ModPow(G, exponents[i].ToBigInteger(), EGParameters.P), results[i].ToBigInteger());
+        }
+    }
+
+    private static void AssertMatchesModPow(PowRadix radix, int windowBits, bool expectAvx512)
+    {
+        Assert.Equal(expectAvx512, radix.UsesAvx512);
+
+        Random random = new(windowBits * 7919);
+        List<BigInteger> exponents = [BigInteger.Zero, BigInteger.One, Q - 1];
+        for (int i = 0; i < 3; i++)
+        {
+            exponents.Add(MontgomeryModPTests.RandomBelowQ(random));
+        }
+
+        foreach (BigInteger exponent in exponents)
+        {
+            BigInteger expected = BigInteger.ModPow(G, exponent, EGParameters.P);
+            Assert.Equal(expected, radix.Pow(new IntegerModQ(exponent)).ToBigInteger());
+        }
     }
 
     [Fact]

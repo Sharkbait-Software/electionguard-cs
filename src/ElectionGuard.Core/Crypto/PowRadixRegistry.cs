@@ -8,8 +8,9 @@ namespace ElectionGuard.Core.Crypto;
 /// Opt-in store of precomputed <see cref="PowRadix"/> tables, consulted by
 /// <see cref="MontgomeryModP"/>.
 ///
-/// Nothing is built unless a caller asks. Building the tables for g, K and K-hat costs a few
-/// hundred milliseconds and a few megabytes per base, which is the right trade for a process that
+/// Nothing is built unless a caller asks. Building the tables for g, K and K-hat costs tens to
+/// hundreds of milliseconds and tens of megabytes per base (see
+/// <see cref="PowRadix.EstimateTableSizeInBytes"/>), which is the right trade for a process that
 /// will encrypt ballots and the wrong one for a process that will not, so the decision is left to
 /// the caller rather than made in a constructor.
 ///
