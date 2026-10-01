@@ -407,3 +407,7 @@ perf/results/
 
 # BenchmarkDotNet output is for interactive investigation; the macro harness owns the time series.
 BenchmarkDotNet.Artifacts/
+
+# Claude Code worktrees are throwaway checkouts of this repository. Committing one would nest a
+# full second copy of the repo inside itself. The tracked .claude/skills content is unaffected.
+.claude/worktrees/
