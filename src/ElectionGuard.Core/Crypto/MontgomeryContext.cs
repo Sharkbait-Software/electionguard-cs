@@ -192,6 +192,104 @@ internal sealed class MontgomeryContext
     }
 
     /// <summary>
+    /// Montgomery squaring: result = (a * a * R^-1) mod p.
+    ///
+    /// Squarings are about three quarters of the multiplications in a table-free exponentiation (a
+    /// 256-bit exponent with a 4-bit window costs 256 squarings against 79 general multiplies), so
+    /// this is the hot path of every exponentiation whose base has no precomputed table -- which is
+    /// most of Verifications 6 and 7.
+    ///
+    /// CIOS cannot exploit a = b, because it interleaves each row of the product with a reduction
+    /// step. This instead separates the two (SOS, Separated Operand Scanning): it forms the full
+    /// 2s-limb square first, computing each cross product a[i] * a[j] (i &lt; j) once and doubling
+    /// the sum rather than computing it twice, then reduces. That is s(s+1)/2 limb products for the
+    /// square plus s^2 for the reduction, against 2s^2 for <see cref="Multiply"/>.
+    ///
+    /// <paramref name="a"/> must be reduced, and <paramref name="result"/> may alias it, because the
+    /// working value lives in a separate buffer until the final copy.
+    /// </summary>
+    internal void Square(ReadOnlySpan<ulong> a, Span<ulong> result)
+    {
+        int s = LimbCount;
+        ulong[] n = _modulusLimbs;
+        ulong n0 = N0Inv;
+
+        // The square occupies 2s limbs; the extra limb holds the reduction's final carry, which
+        // plays the same role as the overflow limb in Multiply.
+        int width = 2 * s + 1;
+        Span<ulong> t = width <= 2 * MaxStackAllocLimbs + 1 ? stackalloc ulong[2 * MaxStackAllocLimbs + 1] : new ulong[width];
+        t = t[..width];
+        t.Clear();
+
+        // Cross products, each pair once. Row i writes t[2i+1 .. i+s-1] and then sets t[i+s], which
+        // no earlier row has reached (row i-1 stops at t[i+s-1]), so assigning rather than adding
+        // the final carry is correct.
+        for (int i = 0; i < s - 1; i++)
+        {
+            ulong ai = a[i];
+            UInt128 carry = 0;
+            for (int j = i + 1; j < s; j++)
+            {
+                UInt128 sum = (UInt128)ai * a[j] + t[i + j] + (ulong)carry;
+                carry = sum >> BitsPerLimb;
+                t[i + j] = (ulong)sum;
+            }
+
+            t[i + s] = (ulong)carry;
+        }
+
+        // Double the cross products. They sum to less than a^2 / 2 < R^2 / 2, so no bit is shifted
+        // out of the top limb.
+        ulong shiftedOut = 0;
+        for (int k = 0; k < 2 * s; k++)
+        {
+            ulong limb = t[k];
+            t[k] = (limb << 1) | shiftedOut;
+            shiftedOut = limb >> 63;
+        }
+
+        // Add the diagonal terms a[i]^2 at limb 2i. The total is a^2 < R^2, so the carry out of the
+        // top limb is zero.
+        ulong diagonalCarry = 0;
+        for (int i = 0; i < s; i++)
+        {
+            UInt128 square = (UInt128)a[i] * a[i];
+
+            UInt128 low = (UInt128)t[2 * i] + (ulong)square + diagonalCarry;
+            t[2 * i] = (ulong)low;
+
+            UInt128 high = (UInt128)t[2 * i + 1] + (ulong)(square >> BitsPerLimb) + (ulong)(low >> BitsPerLimb);
+            t[2 * i + 1] = (ulong)high;
+            diagonalCarry = (ulong)(high >> BitsPerLimb);
+        }
+
+        // Montgomery reduction, one limb at a time: add m * p to zero limb i. Each row's carry lands
+        // on limb i+s, together with the overflow left there by the previous row; that sum is at most
+        // 2(2^64 - 1) + 1, so the overflow out of it is a single bit.
+        ulong overflow = 0;
+        for (int i = 0; i < s; i++)
+        {
+            ulong m = unchecked(t[i] * n0);
+            UInt128 carry = 0;
+            for (int j = 0; j < s; j++)
+            {
+                UInt128 sum = (UInt128)m * n[j] + t[i + j] + (ulong)carry;
+                carry = sum >> BitsPerLimb;
+                t[i + j] = (ulong)sum;
+            }
+
+            UInt128 top = (UInt128)t[i + s] + (ulong)carry + overflow;
+            t[i + s] = (ulong)top;
+            overflow = (ulong)(top >> BitsPerLimb);
+        }
+
+        // What remains is (a^2 + M*p) / R < 2p, held in t[s .. 2s] with the overflow bit on top --
+        // the same shape CIOS leaves, so the same final subtraction applies.
+        t[2 * s] = overflow;
+        ConditionalSubtractModulus(t.Slice(s, s + 1), result);
+    }
+
+    /// <summary>
     /// CIOS leaves the running sum in [0, 2p). Bring it into [0, p) with at most one subtraction.
     /// </summary>
     private void ConditionalSubtractModulus(ReadOnlySpan<ulong> t, Span<ulong> result)

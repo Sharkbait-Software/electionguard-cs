@@ -72,6 +72,22 @@ public class MontgomeryContextTests
         }
     }
 
+    [Fact]
+    public void For_SmallOddModulus_SquaresCorrectly()
+    {
+        // A one-limb modulus leaves Square with no cross products at all, which is the edge of its
+        // row loop.
+        using (EGParameters.OverrideScope(SmallParameters(), new GuardianParameters()))
+        {
+            for (int a = 0; a < 101; a++)
+            {
+                Assert.Equal(
+                    new IntegerModP(new BigInteger(a * a % 101)),
+                    MontgomeryModP.SquareMod(new IntegerModP(new BigInteger(a))));
+            }
+        }
+    }
+
     /// <summary>
     /// The limb conversions are the only byte-order-sensitive code in the Montgomery arithmetic, and
     /// the big-endian branch would otherwise ship without ever having run, since every machine this

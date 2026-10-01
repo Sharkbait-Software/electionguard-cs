@@ -143,10 +143,22 @@ public static class MontgomeryModP
         return new IntegerModP(context.FromMontgomery(left));
     }
 
-    /// <inheritdoc cref="MultiplyMod"/>
+    /// <summary>
+    /// One modular squaring through <see cref="MontgomeryContext.Square"/>, for tests that need to
+    /// exercise the dedicated squaring routine directly. See <see cref="MultiplyMod"/>.
+    /// </summary>
     internal static IntegerModP SquareMod(IntegerModP a)
     {
-        return MultiplyMod(a, a);
+        MontgomeryContext context = MontgomeryContext.Current;
+        int s = context.LimbCount;
+
+        Span<ulong> limbs = s <= MaxStackAllocLimbs ? stackalloc ulong[MaxStackAllocLimbs] : new ulong[s];
+        limbs = limbs[..s];
+
+        context.ToMontgomery(a.ToBigInteger(), limbs);
+        context.Square(limbs, limbs);
+
+        return new IntegerModP(context.FromMontgomery(limbs));
     }
 
     /// <summary>
@@ -179,6 +191,20 @@ public static class MontgomeryModP
     internal static void PowInto(BigInteger basis, ReadOnlySpan<byte> exponentBigEndian, MontgomeryContext context, Span<ulong> result)
     {
         int s = context.LimbCount;
+        Span<ulong> montgomeryBasis = s <= MaxStackAllocLimbs ? stackalloc ulong[MaxStackAllocLimbs] : new ulong[s];
+        montgomeryBasis = montgomeryBasis[..s];
+        context.ToMontgomery(basis.Mod(context.Modulus), montgomeryBasis);
+
+        PowMontgomeryInto(montgomeryBasis, exponentBigEndian, context, result);
+    }
+
+    /// <summary>
+    /// <see cref="PowInto"/> for a basis that is already in Montgomery form, for callers that have
+    /// computed it there and would otherwise convert out and straight back in.
+    /// </summary>
+    internal static void PowMontgomeryInto(ReadOnlySpan<ulong> montgomeryBasis, ReadOnlySpan<byte> exponentBigEndian, MontgomeryContext context, Span<ulong> result)
+    {
+        int s = context.LimbCount;
 
         // Both widths divide 8, so a byte always splits into a whole number of windows.
         int windowBits = exponentBigEndian.Length <= NarrowWindowMaxExponentBytes
@@ -195,7 +221,7 @@ public static class MontgomeryModP
 
         // window[i] = basis^i in Montgomery form.
         context.One.CopyTo(window[..s]);
-        context.ToMontgomery(basis.Mod(context.Modulus), window.Slice(s, s));
+        montgomeryBasis.CopyTo(window.Slice(s, s));
         for (int i = 2; i < windowSize; i++)
         {
             context.Multiply(window.Slice((i - 1) * s, s), window.Slice(s, s), window.Slice(i * s, s));
@@ -217,7 +243,7 @@ public static class MontgomeryModP
 
                 for (int square = 0; square < windowBits; square++)
                 {
-                    context.Multiply(accumulator, accumulator, accumulator);
+                    context.Square(accumulator, accumulator);
                 }
 
                 context.Multiply(accumulator, window.Slice(digit * s, s), accumulator);

@@ -160,6 +160,43 @@ public class MontgomeryAdversarialTests
         }
     }
 
+    [Fact]
+    public void Square_ManyRandomValues_MatchesBigInteger()
+    {
+        // Square has its own carry structure (doubled cross products plus a separate reduction), so
+        // it gets the same volume as Multiply rather than relying on the shaped corpus alone.
+        Random random = new(20260931);
+
+        for (int i = 0; i < 750; i++)
+        {
+            BigInteger a = MontgomeryModPTests.RandomBelowP(random);
+
+            Assert.Equal(new IntegerModP(a * a % P), MontgomeryModP.SquareMod(new IntegerModP(a)));
+        }
+    }
+
+    [Fact]
+    public void Square_AgreesWithMultiplyOnMontgomeryLimbs()
+    {
+        // Compares the two routines directly in Montgomery form, without the conversions in and out
+        // that SquareMod and MultiplyMod share, so a fault common to both conversions cannot hide a
+        // difference between the two arithmetic paths.
+        MontgomeryContext context = MontgomeryContext.Current;
+        int s = context.LimbCount;
+        ulong[] input = new ulong[s];
+        ulong[] squared = new ulong[s];
+        ulong[] multiplied = new ulong[s];
+
+        foreach (BigInteger a in AdversarialValues())
+        {
+            context.ToMontgomery(a, input);
+            context.Square(input, squared);
+            context.Multiply(input, input, multiplied);
+
+            Assert.Equal(multiplied, squared);
+        }
+    }
+
     /// <summary>
     /// Exponent shapes that stress the window-digit extraction: all-zero and all-ones bytes, and
     /// values whose windows straddle the 64-bit words the exponent is read out of.

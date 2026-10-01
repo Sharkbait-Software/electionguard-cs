@@ -38,6 +38,10 @@ public class CryptoBenchmarks
 
         _untabledBase = IntegerModP.PowModP(EGParameters.G, new IntegerModQ(ElectionGuardRandom.GetBytes(32)));
 
+        _subgroupBatch = Enumerable.Range(0, SubgroupBatchSize)
+            .Select(_ => IntegerModP.PowModP(EGParameters.G, ElectionGuardRandom.GetIntegerModQ()))
+            .ToList();
+
         PowRadixRegistry.Clear();
         PowRadixRegistry.Precompute(EGParameters.G);
     }
@@ -64,4 +68,29 @@ public class CryptoBenchmarks
 
     [Benchmark]
     public byte[] Hash() => EGHash.Hash(_hashKey, _hashMessage);
+
+    /// <summary>
+    /// The 75-selection famous-names-large ballot carries 150 ciphertext components for
+    /// Verification 6.A to check, so that is the batch size that matters for a real ballot.
+    /// </summary>
+    private const int SubgroupBatchSize = 150;
+
+    private List<IntegerModP> _subgroupBatch = null!;
+
+    /// <summary>Verification 6.A over a whole ballot, one exact x^q check per component.</summary>
+    [Benchmark]
+    public bool SubgroupMembershipExact150()
+    {
+        bool all = true;
+        foreach (IntegerModP value in _subgroupBatch)
+        {
+            all &= SubgroupMembership.IsMember(value);
+        }
+
+        return all;
+    }
+
+    /// <summary>The same check as one Jacobi pass plus one batched exponentiation.</summary>
+    [Benchmark]
+    public int SubgroupMembershipBatched150() => SubgroupMembership.IndexOfFirstNonMember(_subgroupBatch);
 }

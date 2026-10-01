@@ -12,6 +12,18 @@ public class SelectionEncryptionsWellFormedVerification
 {
     public void Verify(EncryptedBallot encryptedBallot, EncryptionRecord encryptionRecord)
     {
+        // 6.A for every selection on the ballot at once, before any proof is checked. Testing the
+        // ballot's alphas and betas as one batch is what makes this affordable; see
+        // SubgroupMembership for why the batch test is sound.
+        var components = encryptedBallot.Contests
+            .SelectMany(contest => contest.Choices)
+            .SelectMany(choice => new[] { choice.Alpha, choice.Beta })
+            .ToList();
+        if (SubgroupMembership.IndexOfFirstNonMember(components) >= 0)
+        {
+            throw new VerificationFailedException("6.A", "Value was not in Zpr.");
+        }
+
         foreach (var contest in encryptedBallot.Contests)
         {
             var manifestContest = encryptionRecord.Manifest.Contests.Single(x => x.Id == contest.Id);
@@ -60,24 +72,10 @@ public class SelectionEncryptionsWellFormedVerification
 
         var c = EGHash.HashModQ(encryptedBallot.SelectionEncryptionIdentifierHash, bytesToHash.ToArray());
 
-        VerifyIsInZpr(selection.Alpha);
-        VerifyIsInZpr(selection.Beta);
-
         var sumC = selection.Proofs.Select(x => x.Challenge).Sum();
         if (sumC != c)
         {
             throw new VerificationFailedException("6.D", "Sum of challenge values did not equal c.");
-        }
-    }
-
-    private void VerifyIsInZpr(IntegerModP value)
-    {
-        // 6.A
-        if (value <= 0
-            || value > EGParameters.P
-            || MontgomeryModP.PowModP(value, EGParameters.Q) != 1)
-        {
-            throw new VerificationFailedException("6.A", "Value was not in Zpr.");
         }
     }
 

@@ -56,7 +56,7 @@ The library models the ElectionGuard protocol as a straight-line pipeline, and t
   encrypting, and must apply the same rule (a contest whose selection total exceeds
   `SelectionLimit * OptionSelectionLimit` contributes nothing).
 - Use `MontgomeryModP.PowModP` for exponents that are full-width elements of Z_q — nonces,
-  challenges, responses, secret keys. It is ~2x `IntegerModP.PowModP` on its own and ~26x once
+  challenges, responses, secret keys. It is ~2.5x `IntegerModP.PowModP` on its own and ~26x once
   `BallotEncryptor.PrecomputePowerTables` has been called, because the bases are g, K and K-hat.
   Do **not** use it for small public exponents (a ballot weight, a guardian index, a loop counter):
   it walks the full width of Z_q regardless of the exponent's value, deliberately, so that the work
@@ -68,6 +68,11 @@ The library models the ElectionGuard protocol as a straight-line pipeline, and t
   Exponents that are not in Z_q (the `x^q mod p` subgroup checks in Verifications 2, 6 and 7) must
   use the `BigInteger` exponent overload: reducing q into `IntegerModQ` makes it zero and turns
   those checks into `x^0 = 1`, which passes for everything.
+- Verifications 6.A and 7.A check a whole ballot's ciphertext components at once through
+  `SubgroupMembership.IndexOfFirstNonMember`: an exact Jacobi-symbol pass, then a probabilistic
+  batch test (random 128-bit exponents, one multi-exponentiation, one `^q`). Its soundness rests on
+  p - 1 = 2·q·r' with r' a large prime, which holds for the spec's parameters only, so it falls back
+  to exact per-value checks under any other parameter set. A unit test pins that factorization.
 - `TallyAdmin.Decrypt` recovers each plaintext count by looping `i` from 0 to `BallotsCast` and
   computing a full `PowModP` per iteration, without breaking on a match. Cost is
   `(BallotsCast + 1) x choices` modular exponentiations, which makes large tallies impractical to
