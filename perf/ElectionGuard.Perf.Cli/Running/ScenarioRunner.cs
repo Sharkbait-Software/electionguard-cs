@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using ElectionGuard.Core.BallotEncryption;
@@ -563,12 +564,42 @@ public sealed class ScenarioRunner
         }
         else
         {
-            Parallel.ForEach(chunk, new ParallelOptions { MaxDegreeOfParallelism = parallelism }, ballot =>
+            // Scheduling, measured on a 16-core/32-thread machine (spike/scheduling):
+            //
+            // 1. Parallel.ForEach over an array partitions by index range and kept only ~72-75% of
+            //    the workers busy on this workload -- each item is roughly a second of CPU, so a
+            //    worker holding a range of several ballots strands the rest. Handing out one work
+            //    item at a time (NoBuffering) brings that to ~97% and was 1.27-1.30x faster at both
+            //    16 and 32 threads, with chunks of 200 and 500.
+            // 2. Each ballot is split into two independent items, Verification 6 (~75% of the cost)
+            //    and Verifications 7+8, queued largest-first, so the small items fill the tail of the
+            //    chunk instead of cores idling while the last whole ballots finish: a further ~3%
+            //    at a 500-ballot chunk, more at smaller ones.
+            //
+            // The verifications are independent of each other and of other ballots here (no
+            // chaining), so this changes scheduling only, not the work done.
+            var items = new (EncryptedBallot Ballot, bool Proofs)[chunk.Length * 2];
+            for (int i = 0; i < chunk.Length; i++)
             {
-                new SelectionEncryptionsWellFormedVerification().Verify(ballot, encryptionRecord);
-                new AdherenceToVoteLimitsVerification().Verify(ballot, encryptionRecord);
-                new ConfirmationCodeVerification().Verify(ballot, deviceHash, encryptionRecord, null);
-            });
+                items[i] = (chunk[i], true);
+                items[chunk.Length + i] = (chunk[i], false);
+            }
+
+            Parallel.ForEach(
+                Partitioner.Create(items, EnumerablePartitionerOptions.NoBuffering),
+                new ParallelOptions { MaxDegreeOfParallelism = parallelism },
+                item =>
+                {
+                    if (item.Proofs)
+                    {
+                        new SelectionEncryptionsWellFormedVerification().Verify(item.Ballot, encryptionRecord);
+                    }
+                    else
+                    {
+                        new AdherenceToVoteLimitsVerification().Verify(item.Ballot, encryptionRecord);
+                        new ConfirmationCodeVerification().Verify(item.Ballot, deviceHash, encryptionRecord, null);
+                    }
+                });
         }
     }
 
