@@ -236,16 +236,90 @@ public static class MontgomeryModP
             return;
         }
 
-        long maxBits = 0;
-        for (int k = 0; k < exponents.Length; k++)
-        {
-            maxBits = Math.Max(maxBits, exponents[k].ToBigInteger().GetBitLength());
-        }
-
-        if (maxBits == 0)
+        if (MaxExponentBits(exponents) == 0)
         {
             // Every exponent is zero, and basis^0 = 1 for every basis, including 0.
             results.Fill(new IntegerModP(BigInteger.One));
+            return;
+        }
+
+        if (allowAvx512 && Avx512Montgomery.TryGetCurrent(out Avx512Montgomery engine))
+        {
+            PowVariableTimeToResidues(basis, exponents, results, new Avx512MontgomeryArithmetic(engine));
+        }
+        else
+        {
+            PowVariableTimeToResidues(basis, exponents, results, new ScalarMontgomeryArithmetic(MontgomeryContext.Current));
+        }
+    }
+
+    /// <summary>
+    /// The shared-squaring exponentiation, converted out of Montgomery form into
+    /// <paramref name="results"/>. The Montgomery-form results go through a buffer rented from
+    /// <see cref="ArrayPool{T}.Shared"/>, so nothing is allocated but the results themselves.
+    /// </summary>
+    private static void PowVariableTimeToResidues<TArithmetic>(
+        BigInteger basis,
+        ReadOnlySpan<IntegerModQ> exponents,
+        Span<IntegerModP> results,
+        TArithmetic arithmetic)
+        where TArithmetic : struct, IMontgomeryArithmetic
+    {
+        int s = arithmetic.Width;
+        ulong[] montgomeryArray = ArrayPool<ulong>.Shared.Rent(exponents.Length * s);
+        try
+        {
+            Span<ulong> montgomery = montgomeryArray.AsSpan(0, exponents.Length * s);
+            PowVariableTimeMontgomery(basis, exponents, montgomery, arithmetic);
+            for (int k = 0; k < exponents.Length; k++)
+            {
+                results[k] = new IntegerModP(arithmetic.FromMontgomery(montgomery.Slice(k * s, s)));
+            }
+        }
+        finally
+        {
+            ArrayPool<ulong>.Shared.Return(montgomeryArray);
+        }
+    }
+
+    /// <summary>
+    /// <see cref="PowModPVariableTime(BigInteger, ReadOnlySpan{IntegerModQ}, Span{IntegerModP})"/>
+    /// leaving each result in Montgomery form, in <paramref name="arithmetic"/>'s representation, at
+    /// <c>results[k * Width .. (k + 1) * Width)</c>, for callers that will multiply the powers by
+    /// something else in that representation before converting out once (the range-proof checks of
+    /// Verifications 6 and 7). The same VARIABLE TIME, PUBLIC EXPONENTS ONLY restriction applies.
+    ///
+    /// Unlike the public entry point this never consults <see cref="PowRadixRegistry"/>: a table's
+    /// representation is fixed when it is built and need not match <paramref name="arithmetic"/>,
+    /// and the bases this serves, ciphertext components, never have one.
+    /// </summary>
+    internal static void PowVariableTimeMontgomery<TArithmetic>(
+        BigInteger basis,
+        ReadOnlySpan<IntegerModQ> exponents,
+        Span<ulong> results,
+        TArithmetic arithmetic)
+        where TArithmetic : struct, IMontgomeryArithmetic
+    {
+        int s = arithmetic.Width;
+        if (results.Length < exponents.Length * s)
+        {
+            throw new ArgumentException("There must be exactly one result slot per exponent.", nameof(results));
+        }
+
+        if (exponents.IsEmpty)
+        {
+            return;
+        }
+
+        long maxBits = MaxExponentBits(exponents);
+        if (maxBits == 0)
+        {
+            // Every exponent is zero, and basis^0 = 1 for every basis, including 0.
+            for (int k = 0; k < exponents.Length; k++)
+            {
+                arithmetic.One.CopyTo(results.Slice(k * s, s));
+            }
+
             return;
         }
 
@@ -254,27 +328,34 @@ public static class MontgomeryModP
         BigInteger p = EGParameters.P;
         BigInteger reduced = basis.Sign >= 0 && basis < p ? basis : basis.Mod(p);
 
-        if (allowAvx512 && Avx512Montgomery.TryGetCurrent(out Avx512Montgomery engine))
+        // typeof comparisons on a struct type parameter are JIT-time constants.
+        double squareCost = typeof(TArithmetic) == typeof(Avx512MontgomeryArithmetic) ? Avx512SquareCost : ScalarSquareCost;
+        int windowBits = ChooseSharedSquaringWindowBits(maxBits, exponents.Length, squareCost);
+        PowVariableTimeCore(reduced, exponents, results, maxBits, windowBits, arithmetic);
+    }
+
+    private static long MaxExponentBits(ReadOnlySpan<IntegerModQ> exponents)
+    {
+        long maxBits = 0;
+        for (int k = 0; k < exponents.Length; k++)
         {
-            int windowBits = ChooseSharedSquaringWindowBits(maxBits, exponents.Length, Avx512SquareCost);
-            PowVariableTimeCore(reduced, exponents, results, maxBits, windowBits, new Avx512MontgomeryArithmetic(engine));
+            maxBits = Math.Max(maxBits, exponents[k].ToBigInteger().GetBitLength());
         }
-        else
-        {
-            int windowBits = ChooseSharedSquaringWindowBits(maxBits, exponents.Length, ScalarSquareCost);
-            PowVariableTimeCore(reduced, exponents, results, maxBits, windowBits, new ScalarMontgomeryArithmetic(MontgomeryContext.Current));
-        }
+
+        return maxBits;
     }
 
     /// <summary>
     /// The Yao evaluation behind <see cref="PowModPVariableTime(BigInteger, ReadOnlySpan{IntegerModQ}, Span{IntegerModP})"/>,
     /// generic over the representation so that each engine gets its own compiled copy.
-    /// <paramref name="basis"/> is already in [0, p) and at least one exponent is non-zero.
+    /// <paramref name="basis"/> is already in [0, p) and at least one exponent is non-zero. Writes
+    /// each Montgomery-form result to its <see cref="IMontgomeryArithmetic.Width"/>-word slot of
+    /// <paramref name="results"/>.
     /// </summary>
     private static void PowVariableTimeCore<TArithmetic>(
         BigInteger basis,
         ReadOnlySpan<IntegerModQ> exponents,
-        Span<IntegerModP> results,
+        Span<ulong> results,
         long maxBits,
         int windowBits,
         TArithmetic arithmetic)
@@ -365,9 +446,15 @@ public static class MontgomeryModP
                     }
                 }
 
-                results[k] = accumulatorIsOne
-                    ? new IntegerModP(BigInteger.One)
-                    : new IntegerModP(arithmetic.FromMontgomery(accumulator));
+                Span<ulong> result = results.Slice(k * s, s);
+                if (accumulatorIsOne)
+                {
+                    arithmetic.One.CopyTo(result);
+                }
+                else
+                {
+                    accumulator.CopyTo(result);
+                }
             }
         }
         finally

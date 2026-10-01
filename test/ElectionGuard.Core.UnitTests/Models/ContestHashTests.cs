@@ -252,4 +252,64 @@ public class ContestHashTests
 
         Assert.Equal(expected, (byte[])hash);
     }
+
+    // The constructor builds its hash input in one pooled buffer, sized from the choices before
+    // writing them. A lazily evaluated sequence has no count, so it must be materialized once rather
+    // than enumerated twice; values of every width (zero, small, p - 1, multi-byte contest data,
+    // empty contest data) must come out padded exactly as ToByteArray pads them.
+    [Fact]
+    public void FullCtor_LazyChoicesAndEdgeWidths_MatchesDirectEGHashCall()
+    {
+        var selIdHash = new SelectionEncryptionIdentifierHash(Enumerable.Range(0, 32).Select(i => (byte)i).ToArray());
+        var p = EGParameters.CryptographicParameters.P;
+
+        static EncryptedValueWithProofs Field(IntegerModP alpha, IntegerModP beta) => new()
+        {
+            Alpha = alpha,
+            Beta = beta,
+            Proofs = Array.Empty<ChallengeResponsePair>(),
+        };
+
+        int enumerations = 0;
+        IEnumerable<EncryptedSelection> LazyChoices()
+        {
+            enumerations++;
+            yield return new EncryptedSelection { ChoiceId = "a", Alpha = new IntegerModP(0), Beta = new IntegerModP(p - 1), Proofs = [] };
+            yield return new EncryptedSelection { ChoiceId = "b", Alpha = new IntegerModP(1), Beta = new IntegerModP(p - 2), Proofs = [] };
+            yield return new EncryptedSelection { ChoiceId = "c", Alpha = new IntegerModP(256), Beta = new IntegerModP(65537), Proofs = [] };
+        }
+
+        var overVoteCount = Field(2, 3);
+        var nullVoteCount = Field(new IntegerModP(p - 3), 4);
+        var underVoteCount = Field(5, 6);
+        var writeInVoteCount = Field(7, 8);
+        var contestData = new EncryptedData
+        {
+            C0 = Enumerable.Range(0, 600).Select(i => (byte)(i * 7)).ToArray(),
+            C1 = Array.Empty<byte>(),
+            Challenge = new IntegerModQ(0),
+            Response = new IntegerModQ(EGParameters.CryptographicParameters.Q - 1),
+        };
+
+        var hash = new ContestHash(selIdHash, 12, LazyChoices(), overVoteCount, nullVoteCount, underVoteCount, writeInVoteCount, contestData);
+
+        var bytesToHash = new List<byte[]> { new byte[] { 0x28 }, 12.ToByteArray() };
+        foreach (var choice in LazyChoices())
+        {
+            bytesToHash.Add(choice.Alpha);
+            bytesToHash.Add(choice.Beta);
+        }
+        foreach (var field in new[] { overVoteCount, nullVoteCount, underVoteCount, writeInVoteCount })
+        {
+            bytesToHash.Add(field.Alpha);
+            bytesToHash.Add(field.Beta);
+        }
+        bytesToHash.Add(contestData.C0);
+        bytesToHash.Add(contestData.C1);
+        bytesToHash.Add(contestData.Challenge);
+        bytesToHash.Add(contestData.Response);
+
+        Assert.Equal(EGHash.Hash(selIdHash, bytesToHash.ToArray()), (byte[])hash);
+        Assert.Equal(2, enumerations);
+    }
 }

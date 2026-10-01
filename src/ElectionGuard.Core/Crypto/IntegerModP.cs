@@ -47,6 +47,18 @@ public struct IntegerModP : IEquatable<IntegerModP>
         return bytes;
     }
 
+    /// <summary>The fixed width, in bytes, of <see cref="ToByteArray"/>'s output.</summary>
+    internal const int ByteLength = 512;
+
+    /// <summary>
+    /// Writes the same 512 bytes as <see cref="ToByteArray"/> into the first 512 bytes of
+    /// <paramref name="destination"/>, without allocating, for building hash inputs in place.
+    /// </summary>
+    internal void WriteBigEndian(Span<byte> destination)
+    {
+        _i.WriteBigEndianPadded(destination[..ByteLength]);
+    }
+
     public BigInteger ToBigInteger()
     {
         return _i;

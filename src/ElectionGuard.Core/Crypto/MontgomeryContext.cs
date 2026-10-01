@@ -124,14 +124,76 @@ internal sealed class MontgomeryContext
         Span<ulong> plain = LimbCount <= MaxStackAllocLimbs ? stackalloc ulong[MaxStackAllocLimbs] : new ulong[LimbCount];
         plain = plain[..LimbCount];
 
+        FromMontgomeryInto(montgomery, plain);
+        return FromLimbs(plain);
+    }
+
+    /// <summary>
+    /// Converts a Montgomery-form value back to an ordinary residue in [0, p), leaving it as limbs in
+    /// <paramref name="plain"/> rather than building a BigInteger. <paramref name="plain"/> may alias
+    /// <paramref name="montgomery"/>.
+    /// </summary>
+    internal void FromMontgomeryInto(ReadOnlySpan<ulong> montgomery, Span<ulong> plain)
+    {
         Span<ulong> one = LimbCount <= MaxStackAllocLimbs ? stackalloc ulong[MaxStackAllocLimbs] : new ulong[LimbCount];
         one = one[..LimbCount];
         one.Clear();
         one[0] = 1;
 
-        // Multiplying by a plain 1 divides out the R factor.
+        // Multiplying by a plain 1 divides out the R factor. CIOS leaves the result fully reduced.
         Multiply(montgomery, one, plain);
-        return FromLimbs(plain);
+    }
+
+    /// <summary>
+    /// Writes a Montgomery-form value, converted back to an ordinary residue, as the fixed-width
+    /// big-endian bytes <see cref="IntegerModP.ToByteArray"/> would produce for it.
+    /// </summary>
+    internal void WriteBigEndian(ReadOnlySpan<ulong> montgomery, Span<byte> destination)
+    {
+        Span<ulong> plain = LimbCount <= MaxStackAllocLimbs ? stackalloc ulong[MaxStackAllocLimbs] : new ulong[LimbCount];
+        plain = plain[..LimbCount];
+
+        FromMontgomeryInto(montgomery, plain);
+        WriteLimbsBigEndian(plain, destination);
+    }
+
+    /// <summary>
+    /// Writes ordinary (not Montgomery-form) little-endian limbs as an unsigned big-endian integer
+    /// filling all of <paramref name="destination"/>, zero-padded on the left. For a 512-byte
+    /// destination these are exactly the bytes <see cref="IntegerModP.ToByteArray"/> produces for
+    /// the same value. Limbs past the end of the destination must be zero; a value too wide for it
+    /// throws, as ToByteArray does.
+    ///
+    /// The limbs are read as numbers, so this is correct on either host byte order.
+    /// </summary>
+    internal static void WriteLimbsBigEndian(ReadOnlySpan<ulong> limbs, Span<byte> destination)
+    {
+        destination.Clear();
+        for (int i = 0; i < limbs.Length; i++)
+        {
+            int end = destination.Length - i * sizeof(ulong);
+            ulong limb = limbs[i];
+            if (end >= sizeof(ulong))
+            {
+                BinaryPrimitives.WriteUInt64BigEndian(destination.Slice(end - sizeof(ulong), sizeof(ulong)), limb);
+                continue;
+            }
+
+            // The destination ends partway through, or before, this limb: whatever does not fit
+            // must be zero, or the value is too wide for the destination.
+            for (int b = 0; b < sizeof(ulong); b++, limb >>= 8)
+            {
+                int index = end - 1 - b;
+                if (index >= 0)
+                {
+                    destination[index] = (byte)limb;
+                }
+                else if ((byte)limb != 0)
+                {
+                    throw new ArgumentException("Value does not fit in the destination.", nameof(destination));
+                }
+            }
+        }
     }
 
     /// <summary>

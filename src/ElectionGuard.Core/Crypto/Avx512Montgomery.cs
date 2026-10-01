@@ -212,6 +212,31 @@ internal sealed partial class Avx512Montgomery
     }
 
     /// <summary>
+    /// Writes a Montgomery-form value in [0, 2p), converted back to an ordinary residue in [0, p), as
+    /// the fixed-width big-endian bytes <see cref="IntegerModP.ToByteArray"/> would produce for it,
+    /// without building a BigInteger. The same conversion as <see cref="FromMontgomery"/>, including
+    /// its one subtlety: a multiple of p comes out of the multiply as p itself and must be written as 0.
+    /// </summary>
+    internal void WriteBigEndian(ReadOnlySpan<ulong> montgomery, Span<byte> destination)
+    {
+        Span<ulong> plain = stackalloc ulong[Lanes];
+        Span<ulong> one = stackalloc ulong[Lanes];
+        one.Clear();
+        one[0] = 1;
+
+        Multiply(montgomery, one, plain);
+        if (plain.SequenceEqual(_modulusDigits))
+        {
+            destination.Clear();
+            return;
+        }
+
+        Span<ulong> limbs = stackalloc ulong[LimbsForDigits];
+        DigitsToLimbs(plain, limbs);
+        MontgomeryContext.WriteLimbsBigEndian(limbs, destination);
+    }
+
+    /// <summary>
     /// Whether a Montgomery-form value in [0, 2p) represents 1. The representation is redundant, so
     /// that is either R mod p or R mod p + p; fully carried digits are unique, so comparing digits
     /// is exact.
@@ -345,6 +370,17 @@ internal sealed partial class Avx512Montgomery
     internal static BigInteger FromDigits(ReadOnlySpan<ulong> digits)
     {
         Span<ulong> limbs = stackalloc ulong[LimbsForDigits];
+        DigitsToLimbs(digits, limbs);
+        return MontgomeryContext.FromLimbs(limbs);
+    }
+
+    /// <summary>
+    /// Repacks a fully carried digit vector as little-endian 64-bit limbs, into all
+    /// <see cref="LimbsForDigits"/> of <paramref name="limbs"/>.
+    /// </summary>
+    private static void DigitsToLimbs(ReadOnlySpan<ulong> digits, Span<ulong> limbs)
+    {
+        limbs = limbs[..LimbsForDigits];
         limbs.Clear();
         for (int k = 0; k < Lanes; k++)
         {
@@ -358,7 +394,5 @@ internal sealed partial class Avx512Montgomery
                 limbs[limb + 1] |= digit >> (64 - offset);
             }
         }
-
-        return MontgomeryContext.FromLimbs(limbs);
     }
 }

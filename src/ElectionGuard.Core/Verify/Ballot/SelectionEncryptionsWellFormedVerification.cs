@@ -15,27 +15,41 @@ public class SelectionEncryptionsWellFormedVerification
         // 6.A for every selection on the ballot at once, before any proof is checked. Testing the
         // ballot's alphas and betas as one batch is what makes this affordable; see
         // SubgroupMembership for why the batch test is sound.
-        var components = encryptedBallot.Contests
-            .SelectMany(contest => contest.Choices)
-            .SelectMany(choice => new[] { choice.Alpha, choice.Beta })
-            .ToList();
+        int selectionCount = 0;
+        foreach (var contest in encryptedBallot.Contests)
+        {
+            selectionCount += contest.Choices.Count;
+        }
+
+        var components = new List<IntegerModP>(2 * selectionCount);
+        foreach (var contest in encryptedBallot.Contests)
+        {
+            foreach (var choice in contest.Choices)
+            {
+                components.Add(choice.Alpha);
+                components.Add(choice.Beta);
+            }
+        }
+
         if (SubgroupMembership.IndexOfFirstNonMember(components) >= 0)
         {
             throw new VerificationFailedException("6.A", "Value was not in Zpr.");
         }
 
+        // Looks up the g and K tables once for the whole ballot rather than once per exponentiation.
+        var challenge = new RangeProofChallenge(encryptionRecord.ElectionPublicKeys.VoteEncryptionKey);
         foreach (var contest in encryptedBallot.Contests)
         {
             var manifestContest = encryptionRecord.Manifest.Contests.Single(x => x.Id == contest.Id);
             foreach (var choice in contest.Choices)
             {
                 var manifestChoice = manifestContest.Choices.Single(x => x.Id == choice.ChoiceId);
-                Verify(choice, manifestContest, manifestChoice, encryptionRecord, encryptedBallot);
+                Verify(choice, manifestContest, manifestChoice, challenge, encryptedBallot);
             }
         }
     }
 
-    private void Verify(EncryptedValueWithProofs selection, Contest contest, Choice choice, EncryptionRecord encryptionRecord, EncryptedBallot encryptedBallot)
+    private static void Verify(EncryptedValueWithProofs selection, Contest contest, Choice choice, RangeProofChallenge challenge, EncryptedBallot encryptedBallot)
     {
         if (selection.Proofs.Length != contest.OptionSelectionLimit + 1)
         {
@@ -44,56 +58,41 @@ public class SelectionEncryptionsWellFormedVerification
 
         // 6.B/C for every proof before any exponentiation. Nothing below can throw, so this
         // raises exactly the exception, for exactly the inputs, that checking proof by proof did.
-        int proofCount = selection.Proofs.Length;
-        IntegerModQ[] challenges = new IntegerModQ[proofCount];
-        for (int i = 0; i < proofCount; i++)
+        ChallengeResponsePair[] proofs = selection.Proofs;
+        for (int i = 0; i < proofs.Length; i++)
         {
-            VerifyIsInZq(selection.Proofs[i].Challenge);
-            VerifyIsInZq(selection.Proofs[i].Response);
-            challenges[i] = selection.Proofs[i].Challenge;
+            VerifyIsInZq(proofs[i].Challenge);
+            VerifyIsInZq(proofs[i].Response);
         }
 
-        // alpha and beta are each raised to every challenge c_j. The challenges are public proof
-        // data, so the verifier-only variable-time path, which shares one squaring chain across all
-        // of a base's exponents, is safe here. g^v and K^w stay on PowModP, which uses their tables.
-        IntegerModP[] alphaPowers = new IntegerModP[proofCount];
-        IntegerModP[] betaPowers = new IntegerModP[proofCount];
-        MontgomeryModP.PowModPVariableTime(selection.Alpha, challenges, alphaPowers);
-        MontgomeryModP.PowModPVariableTime(selection.Beta, challenges, betaPowers);
+        // c = H(H_I; 0x24, i, j, alpha, beta, a_0, b_0, ..., a_L, b_L), with
+        // a_j = g^v_j * alpha^c_j and b_j = K^(v_j - j * c_j) * beta^c_j. The prefix is everything
+        // before alpha; RangeProofChallenge computes the a_j and b_j and appends the rest.
+        Span<byte> prefix = stackalloc byte[9];
+        prefix[0] = 0x24;
+        RangeProofChallenge.WriteIndex(prefix.Slice(1, 4), contest.Index);
+        RangeProofChallenge.WriteIndex(prefix.Slice(5, 4), choice.Index);
 
-        List<(IntegerModP a, IntegerModP b)> calculatedValues = new();
-        for (int i = 0; i < proofCount; i++)
+        var c = challenge.Compute(
+            encryptedBallot.SelectionEncryptionIdentifierHash,
+            prefix,
+            selection.Alpha,
+            selection.Beta,
+            proofs);
+
+        IntegerModQ sumC = 0;
+        for (int i = 0; i < proofs.Length; i++)
         {
-            var crPair = selection.Proofs[i];
-
-            var a = MontgomeryModP.PowModP(EGParameters.G, crPair.Response) * alphaPowers[i];
-            var w = crPair.Response - i * crPair.Challenge;
-            var b = MontgomeryModP.PowModP(encryptionRecord.ElectionPublicKeys.VoteEncryptionKey, w) * betaPowers[i];
-            calculatedValues.Add((a, b));
+            sumC += proofs[i].Challenge;
         }
 
-        List<byte[]> bytesToHash = [
-                [0x24],
-                contest.Index.ToByteArray(),
-                choice.Index.ToByteArray(),
-                selection.Alpha,
-                selection.Beta];
-        foreach (var val in calculatedValues)
-        {
-            bytesToHash.Add(val.a);
-            bytesToHash.Add(val.b);
-        }
-
-        var c = EGHash.HashModQ(encryptedBallot.SelectionEncryptionIdentifierHash, bytesToHash.ToArray());
-
-        var sumC = selection.Proofs.Select(x => x.Challenge).Sum();
         if (sumC != c)
         {
             throw new VerificationFailedException("6.D", "Sum of challenge values did not equal c.");
         }
     }
 
-    private void VerifyIsInZq(IntegerModQ value)
+    private static void VerifyIsInZq(IntegerModQ value)
     {
         if (value <= 0
             || value > EGParameters.Q)

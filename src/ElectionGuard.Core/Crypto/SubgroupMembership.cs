@@ -60,6 +60,9 @@ public static class SubgroupMembership
     /// </summary>
     private const int MaxStackAllocWidth = Avx512Montgomery.Lanes;
 
+    /// <summary>q is serialized on the stack when it fits in this many bytes, which the spec's 32 do.</summary>
+    private const int MaxStackAllocExponentBytes = 64;
+
     /// <summary>Lists this short gain nothing from batching over the exact test.</summary>
     private const int MinBatchSize = 2;
 
@@ -156,12 +159,15 @@ public static class SubgroupMembership
         ulong[] bases = ArrayPool<ulong>.Shared.Rent(n * s);
         ulong[] buckets = ArrayPool<ulong>.Shared.Rent(bucketCount * s);
         UInt128[] exponents = ArrayPool<UInt128>.Shared.Rent(n);
+        byte[] randomArray = ArrayPool<byte>.Shared.Rent(n * (BatchExponentBits / 8));
         try
         {
-            byte[] randomBytes = ElectionGuardRandom.GetBytes(n * (BatchExponentBits / 8));
+            // A rented buffer rather than a fresh array. Every byte read below is overwritten here first.
+            Span<byte> randomBytes = randomArray.AsSpan(0, n * (BatchExponentBits / 8));
+            ElectionGuardRandom.Fill(randomBytes);
             for (int i = 0; i < n; i++)
             {
-                ReadOnlySpan<byte> bytes = randomBytes.AsSpan(i * 16, 16);
+                ReadOnlySpan<byte> bytes = randomBytes.Slice(i * 16, 16);
                 exponents[i] = new UInt128(
                     BinaryPrimitives.ReadUInt64LittleEndian(bytes[8..]),
                     BinaryPrimitives.ReadUInt64LittleEndian(bytes));
@@ -277,10 +283,12 @@ public static class SubgroupMembership
             // q itself, as a BigInteger: reduced into Z_q it would be zero, and x^0 = 1 accepts anything.
             Span<ulong> raised = s <= MaxStackAllocWidth ? stackalloc ulong[MaxStackAllocWidth] : new ulong[s];
             raised = raised[..s];
-            arithmetic.PowMontgomeryInto(
-                accumulator,
-                EGParameters.Q.ToByteArray(isUnsigned: true, isBigEndian: true),
-                raised);
+            BigInteger q = EGParameters.Q;
+            Span<byte> qBuffer = stackalloc byte[MaxStackAllocExponentBytes];
+            ReadOnlySpan<byte> qBytes = q.TryWriteBytes(qBuffer, out int qLength, isUnsigned: true, isBigEndian: true)
+                ? qBuffer[..qLength]
+                : q.ToByteArray(isUnsigned: true, isBigEndian: true);
+            arithmetic.PowMontgomeryInto(accumulator, qBytes, raised);
 
             return arithmetic.IsOne(raised);
         }
@@ -289,6 +297,8 @@ public static class SubgroupMembership
             ArrayPool<ulong>.Shared.Return(bases);
             ArrayPool<ulong>.Shared.Return(buckets);
             ArrayPool<UInt128>.Shared.Return(exponents);
+            // The batch exponents are this verifier's coins; there is no reason to leave them behind.
+            ArrayPool<byte>.Shared.Return(randomArray, clearArray: true);
         }
     }
 
@@ -325,7 +335,11 @@ public static class SubgroupMembership
         x = x[..s];
         y = y[..s];
 
-        MontgomeryContext.WriteLimbs(value % context.Modulus, x, !BitConverter.IsLittleEndian);
+        // The batch test only asks about values already known to be in (0, p), and reducing those
+        // anyway would allocate a 4096-bit quotient and remainder per value. Anything else is still
+        // reduced exactly as before.
+        BigInteger reduced = value.Sign >= 0 && value < context.Modulus ? value : value % context.Modulus;
+        MontgomeryContext.WriteLimbs(reduced, x, !BitConverter.IsLittleEndian);
         context.ModulusLimbs.CopyTo(y);
 
         return Jacobi(x, y);

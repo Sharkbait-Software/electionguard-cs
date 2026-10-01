@@ -28,4 +28,10 @@ public static class ElectionGuardRandom
     {
         return RandomNumberGenerator.GetBytes(numBytes);
     }
+
+    /// <summary><see cref="GetBytes"/> into a caller-supplied buffer, for hot paths that pool theirs.</summary>
+    internal static void Fill(Span<byte> destination)
+    {
+        RandomNumberGenerator.Fill(destination);
+    }
 }

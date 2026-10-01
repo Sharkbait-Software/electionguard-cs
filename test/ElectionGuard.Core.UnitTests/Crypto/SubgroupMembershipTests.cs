@@ -58,6 +58,20 @@ public class SubgroupMembershipTests
     }
 
     [Fact]
+    public void Jacobi_ValuesOutsideZeroToP_AreStillReducedFirst()
+    {
+        // Values in [0, p) skip the reduction, which is the case the batch test hits for every value.
+        // Anything else must still be reduced, as it always was.
+        MontgomeryContext context = MontgomeryContext.Current;
+        BigInteger value = MontgomeryModPTests.RandomBelowP(new Random(20261001));
+
+        Assert.Equal(0, SubgroupMembership.Jacobi(P, context));
+        Assert.Equal(1, SubgroupMembership.Jacobi(P + 1, context));
+        Assert.Equal(SubgroupMembership.Jacobi(value, context), SubgroupMembership.Jacobi(value + P, context));
+        Assert.Equal(SubgroupMembership.Jacobi(value, context), SubgroupMembership.Jacobi(value + 5 * P, context));
+    }
+
+    [Fact]
     public void Jacobi_MatchesReferenceForSmallOddModuli()
     {
         // Composite moduli too, which exercise the gcd > 1 (symbol 0) exit and reciprocity between

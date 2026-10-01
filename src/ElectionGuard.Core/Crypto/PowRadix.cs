@@ -284,6 +284,30 @@ public sealed class PowRadix
     /// </summary>
     public IntegerModP Pow(IntegerModQ exponent)
     {
+        if (Engine is not null)
+        {
+            Span<ulong> accumulator = stackalloc ulong[Avx512Montgomery.Lanes];
+            PowMontgomeryInto(exponent, accumulator);
+            return new IntegerModP(Engine.FromMontgomery(accumulator));
+        }
+
+        int limbs = Context.LimbCount;
+        Span<ulong> limbAccumulator = limbs <= MaxStackAllocLimbs ? stackalloc ulong[MaxStackAllocLimbs] : new ulong[limbs];
+        limbAccumulator = limbAccumulator[..limbs];
+
+        PowMontgomeryInto(exponent, limbAccumulator);
+        return new IntegerModP(Context.FromMontgomery(limbAccumulator));
+    }
+
+    /// <summary>
+    /// <see cref="Pow"/>, leaving the result in Montgomery form in the table's own representation -
+    /// <see cref="Avx512Montgomery"/> digits in [0, 2p) when <see cref="UsesAvx512"/>, fully reduced
+    /// <see cref="MontgomeryContext"/> limbs otherwise - for callers that will multiply it by another
+    /// value in that representation before converting out once. <paramref name="result"/> must be
+    /// at least as wide as that representation.
+    /// </summary>
+    internal void PowMontgomeryInto(IntegerModQ exponent, Span<ulong> result)
+    {
         // The exponent as little-endian 64-bit words, with one guard word so that a window
         // straddling a word boundary can always read the next one.
         int words = (ExponentBits + 63) / 64;
@@ -293,17 +317,12 @@ public sealed class PowRadix
 
         if (Engine is not null)
         {
-            Span<ulong> accumulator = stackalloc ulong[Avx512Montgomery.Lanes];
-            PowDigits(e, accumulator);
-            return new IntegerModP(Engine.FromMontgomery(accumulator));
+            PowDigits(e, result[..Avx512Montgomery.Lanes]);
         }
-
-        int limbs = Context.LimbCount;
-        Span<ulong> limbAccumulator = limbs <= MaxStackAllocLimbs ? stackalloc ulong[MaxStackAllocLimbs] : new ulong[limbs];
-        limbAccumulator = limbAccumulator[..limbs];
-
-        PowLimbs(e, limbAccumulator);
-        return new IntegerModP(Context.FromMontgomery(limbAccumulator));
+        else
+        {
+            PowLimbs(e, result[..Context.LimbCount]);
+        }
     }
 
     private void ReadExponentWords(BigInteger exponent, Span<ulong> words)

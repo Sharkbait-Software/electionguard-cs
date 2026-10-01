@@ -1,0 +1,269 @@
+using ElectionGuard.Core.BallotEncryption;
+using ElectionGuard.Core.Crypto;
+using ElectionGuard.Core.Models;
+using System.Buffers;
+using System.Buffers.Binary;
+using System.Numerics;
+
+namespace ElectionGuard.Core.Verify.Ballot;
+
+/// <summary>
+/// The arithmetic of the range-proof checks of Verifications 6 and 7, done in Montgomery form.
+///
+/// <see cref="Compute"/> recomputes the challenge of a range proof for one ciphertext (alpha, beta):
+/// c = H(H_I; prefix, alpha, beta, a_0, b_0, ..., a_L, b_L) with a_j = g^v_j * alpha^c_j and
+/// b_j = K^w_j * beta^c_j, w_j = v_j - j * c_j. The verifier needs a_j and b_j only as hash input, so
+/// rather than producing each power as an <see cref="IntegerModP"/> and multiplying them with
+/// BigInteger <c>*</c> and <c>% p</c> (about 16 us and 1.6 KB per product), both powers are left in
+/// the same Montgomery representation - <see cref="Avx512Montgomery"/> digits where the hardware has
+/// AVX-512F, <see cref="MontgomeryContext"/> limbs otherwise - multiplied there, and converted out
+/// once, straight into the hash buffer. alpha^c_j and beta^c_j come from the shared-squaring
+/// multi-exponentiation; g^v_j and K^w_j from their <see cref="PowRadix"/> tables when those were
+/// precomputed in the matching representation, and from the table-free exponentiation otherwise.
+///
+/// <see cref="Aggregate"/> computes the contest aggregate ciphertext of Verification 7, the product
+/// of a contest's selection ciphertexts, the same way.
+///
+/// This changes how the numbers are computed, not which numbers: the hash input is byte-for-byte
+/// what the straightforward construction builds, and unit tests pin that on both engines, with and
+/// without tables. It performs no validation; the verifications check the proofs' challenges and
+/// responses before calling it, so the exceptions they raise are unchanged.
+///
+/// An instance is immutable and holds no working state, so one may be shared by parallel callers.
+/// It is meant to be built once per ballot, so the table lookups happen once rather than once per
+/// exponentiation.
+/// </summary>
+internal sealed class RangeProofChallenge
+{
+    private const int ModPBytes = IntegerModP.ByteLength;
+
+    /// <summary>
+    /// Single-value buffers are stack-allocated up to this width, which covers both representations
+    /// of the spec's p: 64 scalar limbs or 144 AVX-512 digits.
+    /// </summary>
+    private const int MaxStackAllocWidth = Avx512Montgomery.Lanes;
+
+    private readonly MontgomeryContext _context;
+    private readonly Avx512Montgomery? _engine;
+    private readonly BigInteger _g;
+    private readonly BigInteger _k;
+    private readonly PowRadix? _gTable;
+    private readonly PowRadix? _kTable;
+
+    public RangeProofChallenge(IntegerModP voteEncryptionKey)
+        : this(voteEncryptionKey, allowAvx512: true)
+    {
+    }
+
+    /// <summary>
+    /// With <paramref name="allowAvx512"/> false the scalar representation is used even where
+    /// AVX-512F is available, so that tests can check it on every machine.
+    /// </summary>
+    internal RangeProofChallenge(IntegerModP voteEncryptionKey, bool allowAvx512)
+    {
+        _context = MontgomeryContext.Current;
+        _engine = allowAvx512 && Avx512Montgomery.TryGetCurrent(out Avx512Montgomery engine) ? engine : null;
+        _g = new IntegerModP(EGParameters.G).ToBigInteger();
+        _k = voteEncryptionKey.ToBigInteger();
+        _gTable = MatchingTable(_g);
+        _kTable = MatchingTable(_k);
+    }
+
+    /// <summary>Whether the AVX-512 representation is in use, for tests.</summary>
+    internal bool UsesAvx512 => _engine is not null;
+
+    /// <summary>Whether g and K have tables in the representation in use, for tests.</summary>
+    internal bool UsesTables => _gTable is not null && _kTable is not null;
+
+    /// <summary>
+    /// The registered table for <paramref name="basis"/>, if there is one in the representation this
+    /// instance computes in. A table's representation is fixed when it is built, so a table built
+    /// for AVX-512 is no use to a scalar computation, or the reverse; that basis then goes table-free.
+    /// </summary>
+    private PowRadix? MatchingTable(BigInteger basis)
+    {
+        return PowRadixRegistry.TryGet(basis, out PowRadix table) && table.UsesAvx512 == (_engine is not null)
+            ? table
+            : null;
+    }
+
+    /// <summary>
+    /// Computes H(key; prefix, alpha, beta, a_0, b_0, ..., a_L, b_L) mod q, where L + 1 is the
+    /// number of proofs. <paramref name="prefix"/> is everything hashed before alpha.
+    /// </summary>
+    public IntegerModQ Compute(
+        byte[] key,
+        ReadOnlySpan<byte> prefix,
+        IntegerModP alpha,
+        IntegerModP beta,
+        ReadOnlySpan<ChallengeResponsePair> proofs)
+    {
+        return _engine is not null
+            ? Compute(new Avx512MontgomeryArithmetic(_engine), key, prefix, alpha, beta, proofs)
+            : Compute(new ScalarMontgomeryArithmetic(_context), key, prefix, alpha, beta, proofs);
+    }
+
+    private IntegerModQ Compute<TArithmetic>(
+        TArithmetic arithmetic,
+        byte[] key,
+        ReadOnlySpan<byte> prefix,
+        IntegerModP alpha,
+        IntegerModP beta,
+        ReadOnlySpan<ChallengeResponsePair> proofs)
+        where TArithmetic : struct, IMontgomeryArithmetic
+    {
+        int m = proofs.Length;
+        int s = arithmetic.Width;
+        int length = prefix.Length + ModPBytes * (2 + 2 * m);
+
+        byte[] messageArray = ArrayPool<byte>.Shared.Rent(length);
+        ulong[] powersArray = ArrayPool<ulong>.Shared.Rent(Math.Max(1, 2 * m * s));
+        IntegerModQ[] challengesArray = ArrayPool<IntegerModQ>.Shared.Rent(Math.Max(1, m));
+        try
+        {
+            Span<IntegerModQ> challenges = challengesArray.AsSpan(0, m);
+            for (int j = 0; j < m; j++)
+            {
+                challenges[j] = proofs[j].Challenge;
+            }
+
+            // alpha and beta are each raised to every challenge c_j. The challenges are public proof
+            // data, so the verifier-only variable-time path, which shares one squaring chain across
+            // all of a base's exponents, is safe here.
+            Span<ulong> alphaPowers = powersArray.AsSpan(0, m * s);
+            Span<ulong> betaPowers = powersArray.AsSpan(m * s, m * s);
+            MontgomeryModP.PowVariableTimeMontgomery(alpha.ToBigInteger(), challenges, alphaPowers, arithmetic);
+            MontgomeryModP.PowVariableTimeMontgomery(beta.ToBigInteger(), challenges, betaPowers, arithmetic);
+
+            // g and K in Montgomery form, needed only for a base without a matching table.
+            Span<ulong> gMontgomery = s <= MaxStackAllocWidth ? stackalloc ulong[MaxStackAllocWidth] : new ulong[s];
+            Span<ulong> kMontgomery = s <= MaxStackAllocWidth ? stackalloc ulong[MaxStackAllocWidth] : new ulong[s];
+            Span<ulong> product = s <= MaxStackAllocWidth ? stackalloc ulong[MaxStackAllocWidth] : new ulong[s];
+            gMontgomery = gMontgomery[..s];
+            kMontgomery = kMontgomery[..s];
+            product = product[..s];
+            if (_gTable is null)
+            {
+                arithmetic.ToMontgomery(_g, gMontgomery);
+            }
+
+            if (_kTable is null)
+            {
+                arithmetic.ToMontgomery(_k, kMontgomery);
+            }
+
+            Span<byte> exponentBytes = stackalloc byte[IntegerModQ.ByteLength];
+
+            Span<byte> message = messageArray.AsSpan(0, length);
+            prefix.CopyTo(message);
+            int offset = prefix.Length;
+            alpha.WriteBigEndian(message.Slice(offset, ModPBytes));
+            offset += ModPBytes;
+            beta.WriteBigEndian(message.Slice(offset, ModPBytes));
+            offset += ModPBytes;
+
+            for (int j = 0; j < m; j++)
+            {
+                ChallengeResponsePair proof = proofs[j];
+
+                // a_j = g^v_j * alpha^c_j
+                FixedBasePow(arithmetic, _gTable, gMontgomery, proof.Response, exponentBytes, product);
+                arithmetic.Multiply(product, alphaPowers.Slice(j * s, s), product);
+                arithmetic.WriteBigEndian(product, message.Slice(offset, ModPBytes));
+                offset += ModPBytes;
+
+                // b_j = K^w_j * beta^c_j, w_j = v_j - j * c_j
+                IntegerModQ w = proof.Response - j * proof.Challenge;
+                FixedBasePow(arithmetic, _kTable, kMontgomery, w, exponentBytes, product);
+                arithmetic.Multiply(product, betaPowers.Slice(j * s, s), product);
+                arithmetic.WriteBigEndian(product, message.Slice(offset, ModPBytes));
+                offset += ModPBytes;
+            }
+
+            return EGHash.HashModQConcatenated(key, message);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(messageArray);
+            ArrayPool<ulong>.Shared.Return(powersArray);
+            ArrayPool<IntegerModQ>.Shared.Return(challengesArray, clearArray: true);
+        }
+    }
+
+    /// <summary>
+    /// basis^exponent in Montgomery form: from the table when there is one, and otherwise by the
+    /// same table-free exponentiation <see cref="MontgomeryModP.PowModP(BigInteger, IntegerModQ)"/>
+    /// uses, over the exponent padded to the full width of Z_q.
+    /// </summary>
+    private static void FixedBasePow<TArithmetic>(
+        TArithmetic arithmetic,
+        PowRadix? table,
+        ReadOnlySpan<ulong> montgomeryBasis,
+        IntegerModQ exponent,
+        Span<byte> exponentBytes,
+        Span<ulong> result)
+        where TArithmetic : struct, IMontgomeryArithmetic
+    {
+        if (table is not null)
+        {
+            table.PowMontgomeryInto(exponent, result);
+            return;
+        }
+
+        exponent.WriteBigEndian(exponentBytes);
+        arithmetic.PowMontgomeryInto(montgomeryBasis, exponentBytes, result);
+    }
+
+    /// <summary>
+    /// The aggregate ciphertext of a contest, (prod alpha_i, prod beta_i) over its selections, as
+    /// <c>Select(x =&gt; x.Alpha).Product()</c> computes it but in Montgomery form, entering it once
+    /// per value and leaving it once per product. An empty list throws, as Product does.
+    /// </summary>
+    public (IntegerModP Alpha, IntegerModP Beta) Aggregate(IReadOnlyList<EncryptedValueWithProofs> ciphertexts)
+    {
+        if (ciphertexts.Count == 0)
+        {
+            throw new InvalidOperationException("Sequence contains no elements");
+        }
+
+        return _engine is not null
+            ? Aggregate(new Avx512MontgomeryArithmetic(_engine), ciphertexts)
+            : Aggregate(new ScalarMontgomeryArithmetic(_context), ciphertexts);
+    }
+
+    private static (IntegerModP Alpha, IntegerModP Beta) Aggregate<TArithmetic>(TArithmetic arithmetic, IReadOnlyList<EncryptedValueWithProofs> ciphertexts)
+        where TArithmetic : struct, IMontgomeryArithmetic
+    {
+        if (ciphertexts.Count == 1)
+        {
+            // Nothing to multiply, so no reason to enter Montgomery form.
+            return (ciphertexts[0].Alpha, ciphertexts[0].Beta);
+        }
+
+        int s = arithmetic.Width;
+        Span<ulong> alpha = s <= MaxStackAllocWidth ? stackalloc ulong[MaxStackAllocWidth] : new ulong[s];
+        Span<ulong> beta = s <= MaxStackAllocWidth ? stackalloc ulong[MaxStackAllocWidth] : new ulong[s];
+        Span<ulong> factor = s <= MaxStackAllocWidth ? stackalloc ulong[MaxStackAllocWidth] : new ulong[s];
+        alpha = alpha[..s];
+        beta = beta[..s];
+        factor = factor[..s];
+
+        arithmetic.ToMontgomery(ciphertexts[0].Alpha.ToBigInteger(), alpha);
+        arithmetic.ToMontgomery(ciphertexts[0].Beta.ToBigInteger(), beta);
+        for (int i = 1; i < ciphertexts.Count; i++)
+        {
+            arithmetic.ToMontgomery(ciphertexts[i].Alpha.ToBigInteger(), factor);
+            arithmetic.Multiply(alpha, factor, alpha);
+            arithmetic.ToMontgomery(ciphertexts[i].Beta.ToBigInteger(), factor);
+            arithmetic.Multiply(beta, factor, beta);
+        }
+
+        return (new IntegerModP(arithmetic.FromMontgomery(alpha)), new IntegerModP(arithmetic.FromMontgomery(beta)));
+    }
+
+    /// <summary>Writes a 4-byte big-endian integer, as <c>int.ToByteArray()</c> produces.</summary>
+    public static void WriteIndex(Span<byte> destination, int index)
+    {
+        BinaryPrimitives.WriteInt32BigEndian(destination, index);
+    }
+}

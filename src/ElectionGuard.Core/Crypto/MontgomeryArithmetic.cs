@@ -29,6 +29,16 @@ internal interface IMontgomeryArithmetic
 
     /// <summary>Whether a Montgomery-form value represents 1.</summary>
     bool IsOne(ReadOnlySpan<ulong> value);
+
+    /// <summary>The Montgomery form of 1.</summary>
+    ReadOnlySpan<ulong> One { get; }
+
+    /// <summary>
+    /// Converts a Montgomery-form value back to an ordinary residue in [0, p) and writes it as the
+    /// fixed-width big-endian bytes <see cref="IntegerModP.ToByteArray"/> would produce, without
+    /// building a BigInteger.
+    /// </summary>
+    void WriteBigEndian(ReadOnlySpan<ulong> value, Span<byte> destination);
 }
 
 /// <summary>64-bit limbs, fully reduced, so 1 has exactly one representation.</summary>
@@ -48,6 +58,10 @@ internal readonly struct ScalarMontgomeryArithmetic(MontgomeryContext context) :
         => MontgomeryModP.PowMontgomeryInto(basis, exponentBigEndian, context, result);
 
     public bool IsOne(ReadOnlySpan<ulong> value) => value.SequenceEqual(context.One);
+
+    public ReadOnlySpan<ulong> One => context.One;
+
+    public void WriteBigEndian(ReadOnlySpan<ulong> value, Span<byte> destination) => context.WriteBigEndian(value, destination);
 }
 
 /// <summary>
@@ -71,4 +85,8 @@ internal readonly struct Avx512MontgomeryArithmetic(Avx512Montgomery engine) : I
         => engine.PowMontgomeryInto(basis, exponentBigEndian, result);
 
     public bool IsOne(ReadOnlySpan<ulong> value) => engine.IsOne(value);
+
+    public ReadOnlySpan<ulong> One => engine.One;
+
+    public void WriteBigEndian(ReadOnlySpan<ulong> value, Span<byte> destination) => engine.WriteBigEndian(value, destination);
 }

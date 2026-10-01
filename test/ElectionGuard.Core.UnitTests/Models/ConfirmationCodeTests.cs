@@ -68,6 +68,28 @@ public class ConfirmationCodeTests
         Assert.Equal(expected, (byte[])code);
     }
 
+    [Fact]
+    public void Constructor_HandComputed_WithChainingFieldAndLazyHashes_MatchesDirectEGHashCall()
+    {
+        var selIdHash = CreateSelIdHash();
+        var contestHash1 = new ContestHash(Enumerable.Range(0, 32).Select(i => (byte)i).ToArray());
+        var contestHash2 = CreateContestHash(0x02);
+        var extendedBaseHash = CreateExtendedBaseHash(3, 4);
+        var deviceHash = new VotingDeviceInformationHash(extendedBaseHash, "device");
+        var chainingField = new ChainingField(ChainingMode.Simple, deviceHash, extendedBaseHash, null);
+
+        IEnumerable<ContestHash> Lazy()
+        {
+            yield return contestHash1;
+            yield return contestHash2;
+        }
+
+        var code = new ConfirmationCode(selIdHash, Lazy(), chainingField);
+        var expected = EGHash.Hash(selIdHash, new byte[] { 0x29 }, contestHash1, contestHash2, chainingField);
+
+        Assert.Equal(expected, (byte[])code);
+    }
+
     // Was a quirk-pinning test for a GENUINE BUG (now fixed): ConfirmationCode's constructor used
     // to accept a ChainingField? parameter but never fold it into the hash computation. Per §3.4.2
     // formula (71), HC = H(HI; 0x29, chi_1,...,chi_mB, BC) -- the chaining field BC is a required

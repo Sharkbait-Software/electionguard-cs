@@ -47,6 +47,18 @@ public struct IntegerModQ : IEquatable<IntegerModQ>
         return bytes;
     }
 
+    /// <summary>The fixed width, in bytes, of <see cref="ToByteArray"/>'s output.</summary>
+    internal const int ByteLength = 32;
+
+    /// <summary>
+    /// Writes the same 32 bytes as <see cref="ToByteArray"/> into the first 32 bytes of
+    /// <paramref name="destination"/>, without allocating.
+    /// </summary>
+    internal void WriteBigEndian(Span<byte> destination)
+    {
+        _i.WriteBigEndianPadded(destination[..ByteLength]);
+    }
+
     public BigInteger ToBigInteger()
     {
         return _i;

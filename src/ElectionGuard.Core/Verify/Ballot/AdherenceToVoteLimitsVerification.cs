@@ -12,17 +12,22 @@ public class AdherenceToVoteLimitsVerification
 {
     public void Verify(EncryptedBallot encryptedBallot, EncryptionRecord encryptionRecord)
     {
-        // The aggregate ciphertext of each contest, the product of its selections' ciphertexts.
-        var aggregates = encryptedBallot.Contests
-            .Select(contest => (
-                alpha: contest.Choices.Select(x => x.Alpha).Product(),
-                beta: contest.Choices.Select(x => x.Beta).Product()))
-            .ToList();
+        // Looks up the g and K tables once for the whole ballot rather than once per exponentiation.
+        var challenge = new RangeProofChallenge(encryptionRecord.ElectionPublicKeys.VoteEncryptionKey);
+
+        // The aggregate ciphertext of each contest, the product of its selections' ciphertexts,
+        // held as the flat list (alpha_0, beta_0, alpha_1, beta_1, ...) the batch test takes.
+        var components = new List<IntegerModP>(2 * encryptedBallot.Contests.Count);
+        foreach (var contest in encryptedBallot.Contests)
+        {
+            var (alpha, beta) = challenge.Aggregate(contest.Choices);
+            components.Add(alpha);
+            components.Add(beta);
+        }
 
         // 7.A for every contest on the ballot at once, before any proof is checked. Testing the
         // aggregates as one batch is what makes this affordable; see SubgroupMembership for why the
         // batch test is sound.
-        var components = aggregates.SelectMany(x => new[] { x.alpha, x.beta }).ToList();
         if (SubgroupMembership.IndexOfFirstNonMember(components) >= 0)
         {
             throw new VerificationFailedException("7.A", "Value was not in Zpr.");
@@ -32,11 +37,11 @@ public class AdherenceToVoteLimitsVerification
         {
             var contest = encryptedBallot.Contests[i];
             var manifestContest = encryptionRecord.Manifest.Contests.Single(x => x.Id == contest.Id);
-            Verify(contest, manifestContest, aggregates[i].alpha, aggregates[i].beta, encryptionRecord, encryptedBallot);
+            Verify(contest, manifestContest, components[2 * i], components[2 * i + 1], challenge, encryptedBallot);
         }
     }
 
-    private void Verify(EncryptedContest encryptedContest, Contest contest, IntegerModP alpha, IntegerModP beta, EncryptionRecord encryptionRecord, EncryptedBallot encryptedBallot)
+    private static void Verify(EncryptedContest encryptedContest, Contest contest, IntegerModP alpha, IntegerModP beta, RangeProofChallenge challenge, EncryptedBallot encryptedBallot)
     {
         if (encryptedContest.Proofs.Length != contest.SelectionLimit + 1)
         {
@@ -45,56 +50,40 @@ public class AdherenceToVoteLimitsVerification
 
         // 7.B/C for every proof before any exponentiation. Nothing below can throw, so this
         // raises exactly the exception, for exactly the inputs, that checking proof by proof did.
-        int proofCount = encryptedContest.Proofs.Length;
-        IntegerModQ[] challenges = new IntegerModQ[proofCount];
-        for (int i = 0; i < proofCount; i++)
+        ChallengeResponsePair[] proofs = encryptedContest.Proofs;
+        for (int i = 0; i < proofs.Length; i++)
         {
-            VerifyIsInZq(encryptedContest.Proofs[i].Challenge);
-            VerifyIsInZq(encryptedContest.Proofs[i].Response);
-            challenges[i] = encryptedContest.Proofs[i].Challenge;
+            VerifyIsInZq(proofs[i].Challenge);
+            VerifyIsInZq(proofs[i].Response);
         }
 
-        // The aggregate alpha and beta are each raised to every challenge c_j. The challenges are
-        // public proof data, so the verifier-only variable-time path, which shares one squaring
-        // chain across all of a base's exponents, is safe here. g^v and K^w stay on PowModP, which
-        // uses their tables.
-        IntegerModP[] alphaPowers = new IntegerModP[proofCount];
-        IntegerModP[] betaPowers = new IntegerModP[proofCount];
-        MontgomeryModP.PowModPVariableTime(alpha, challenges, alphaPowers);
-        MontgomeryModP.PowModPVariableTime(beta, challenges, betaPowers);
+        // c = H(H_I; 0x24, i, alpha, beta, a_0, b_0, ..., a_L, b_L) over the aggregate (alpha, beta),
+        // with a_j = g^v_j * alpha^c_j and b_j = K^(v_j - j * c_j) * beta^c_j. The prefix is
+        // everything before alpha; RangeProofChallenge computes the a_j and b_j and appends the rest.
+        Span<byte> prefix = stackalloc byte[5];
+        prefix[0] = 0x24;
+        RangeProofChallenge.WriteIndex(prefix.Slice(1, 4), contest.Index);
 
-        List<(IntegerModP a, IntegerModP b)> calculatedValues = new();
-        for (int i = 0; i < proofCount; i++)
+        var c = challenge.Compute(
+            encryptedBallot.SelectionEncryptionIdentifierHash,
+            prefix,
+            alpha,
+            beta,
+            proofs);
+
+        IntegerModQ sumC = 0;
+        for (int i = 0; i < proofs.Length; i++)
         {
-            var crPair = encryptedContest.Proofs[i];
-
-            var a = MontgomeryModP.PowModP(EGParameters.G, crPair.Response) * alphaPowers[i];
-            var w = crPair.Response - i * crPair.Challenge;
-            var b = MontgomeryModP.PowModP(encryptionRecord.ElectionPublicKeys.VoteEncryptionKey, w) * betaPowers[i];
-            calculatedValues.Add((a, b));
+            sumC += proofs[i].Challenge;
         }
 
-        List<byte[]> bytesToHash = [
-                [0x24],
-                contest.Index.ToByteArray(),
-                alpha,
-                beta];
-        foreach (var val in calculatedValues)
-        {
-            bytesToHash.Add(val.a);
-            bytesToHash.Add(val.b);
-        }
-
-        var c = EGHash.HashModQ(encryptedBallot.SelectionEncryptionIdentifierHash, bytesToHash.ToArray());
-
-        var sumC = encryptedContest.Proofs.Select(x => x.Challenge).Sum();
         if (sumC != c)
         {
             throw new VerificationFailedException("7.D", "Sum of challenge values did not equal c.");
         }
     }
 
-    private void VerifyIsInZq(IntegerModQ value)
+    private static void VerifyIsInZq(IntegerModQ value)
     {
         if (value <= 0
             || value > EGParameters.Q)
