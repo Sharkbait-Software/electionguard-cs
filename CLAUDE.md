@@ -78,6 +78,11 @@ The library models the ElectionGuard protocol as a straight-line pipeline, and t
   **variable-time and verifier-only**: its work depends on the exponents' digits, so it is safe only
   for public values such as the proof challenges c_j of Verifications 6 and 7. Never call it from
   `BallotEncryption`, `KeyGeneration` or `Tally`, or with a nonce or secret key.
+- Verifications 6 and 7 compute their commitments through `RangeProofChallenge`, which multiplies
+  g^v by alpha^c (and K^w by beta^c) in one engine representation and writes the bytes straight into
+  the hash input. Its helpers (`PowRadix.PowMontgomeryInto`, `MontgomeryModP.PowVariableTimeMontgomery`)
+  return values in the active engine's own form -- AVX-512 digits or scalar limbs -- so only combine
+  them with values in that same form.
 - `TallyAdmin.Decrypt` recovers each plaintext count by looping `i` from 0 to `BallotsCast` and
   computing a full `PowModP` per iteration, without breaking on a match. Cost is
   `(BallotsCast + 1) x choices` modular exponentiations, which makes large tallies impractical to
