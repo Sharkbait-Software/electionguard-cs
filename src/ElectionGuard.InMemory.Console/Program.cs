@@ -110,6 +110,12 @@ try
 
     var ballots = Directory.GetFiles(Path.Combine(inputDirectory, "ballots"));
 
+    // Note 3.5: every exponentiation performed while encrypting and proving ballot components has a
+    // base of g, K or K-hat, so build tables of their powers once before encrypting anything. This
+    // is opt-in in the library because it costs memory and a moment of setup; a process about to
+    // encrypt a directory full of ballots is exactly the case where it pays for itself.
+    BallotEncryptor.PrecomputePowerTables(encryptionRecord);
+
     ConcurrentBag<EncryptedBallot> encryptedBallots = new ConcurrentBag<EncryptedBallot>();
 
     Parallel.ForEach(ballots, ballotFile =>

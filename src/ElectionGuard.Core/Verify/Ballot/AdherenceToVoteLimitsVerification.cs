@@ -37,11 +37,11 @@ public class AdherenceToVoteLimitsVerification
             VerifyIsInZq(crPair.Challenge);
             VerifyIsInZq(crPair.Response);
 
-            var a = IntegerModP.PowModP(EGParameters.G, crPair.Response)
-                * IntegerModP.PowModP(alpha, crPair.Challenge);
+            var a = MontgomeryModP.PowModP(EGParameters.G, crPair.Response)
+                * MontgomeryModP.PowModP(alpha, crPair.Challenge);
             var w = crPair.Response - i * crPair.Challenge;
-            var b = IntegerModP.PowModP(encryptionRecord.ElectionPublicKeys.VoteEncryptionKey, w)
-                * IntegerModP.PowModP(beta, crPair.Challenge);
+            var b = MontgomeryModP.PowModP(encryptionRecord.ElectionPublicKeys.VoteEncryptionKey, w)
+                * MontgomeryModP.PowModP(beta, crPair.Challenge);
             calculatedValues.Add((a, b));
         }
 
@@ -73,7 +73,7 @@ public class AdherenceToVoteLimitsVerification
         // 6.A
         if (value <= 0
             || value > EGParameters.P
-            || IntegerModP.PowModP(value, EGParameters.Q) != 1)
+            || MontgomeryModP.PowModP(value, EGParameters.Q) != 1)
         {
             throw new VerificationFailedException("7.A", "Value was not in Zpr.");
         }

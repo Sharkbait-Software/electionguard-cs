@@ -44,8 +44,11 @@ public class EncryptedTally
                 
                 if(encryptedBallot.Weight > 1)
                 {
-                    alpha = IntegerModP.PowModP(alpha, encryptedBallot.Weight);
-                    beta = IntegerModP.PowModP(beta, encryptedBallot.Weight);
+                    // A ballot weight is a small public integer, not a nonce, so BigInteger.ModPow's
+                    // exponent-magnitude scaling beats the Montgomery path's fixed full-width cost.
+                    // Same reasoning as the discrete-log loop in TallyGuardian.
+                    alpha = IntegerModP.PowModP(alpha, new IntegerModQ(encryptedBallot.Weight));
+                    beta = IntegerModP.PowModP(beta, new IntegerModQ(encryptedBallot.Weight));
                 }
 
                 aggregateChoice.A *= alpha;

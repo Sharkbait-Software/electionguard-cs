@@ -10,4 +10,16 @@
     <PackageReference Include="protobuf-net" Version="3.2.52" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!--
+      The Montgomery limb arithmetic is an implementation detail of MontgomeryModP.PowModP,
+      so MontgomeryContext and the multiply/round-trip helpers are internal. The tests still need to
+      reach them directly: a defect in carry or borrow propagation is best caught by driving one
+      multiplication with hand-picked operands, not by inferring it from an exponentiation.
+    -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ElectionGuard.Core.UnitTests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
 </Project>

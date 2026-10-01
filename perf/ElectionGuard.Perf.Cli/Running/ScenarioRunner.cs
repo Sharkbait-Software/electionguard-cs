@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using System.Globalization;
 using ElectionGuard.Core.BallotEncryption;
+using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.Models;
 using ElectionGuard.Core.Tally;
 using ElectionGuard.Core.Verify.Ballot;
@@ -29,8 +31,14 @@ public sealed class ScenarioRunner
     private readonly PerfScenario _scenario;
     private readonly Manifest _manifest;
     private readonly Action<string> _log;
+    private readonly int _powRadixWindowBits;
 
-    public ScenarioRunner(PerfScenario scenario, Manifest manifest, Action<string>? log = null)
+    /// <param name="powRadixWindowBits">
+    /// Bits per window for the Note 3.5 precomputed power tables. Zero skips precomputation
+    /// entirely, which measures the table-free Montgomery path. Null takes
+    /// <see cref="PowRadix.DefaultWindowBits"/>.
+    /// </param>
+    public ScenarioRunner(PerfScenario scenario, Manifest manifest, Action<string>? log = null, int? powRadixWindowBits = null)
     {
         // Constructed directly rather than through ScenarioLoader (as every test here does), a
         // scenario carries no guarantee of validity -- e.g. a ChunkSize of 0 would produce an empty
@@ -40,6 +48,15 @@ public sealed class ScenarioRunner
         _scenario = scenario;
         _manifest = manifest;
         _log = log ?? (_ => { });
+
+        _powRadixWindowBits = powRadixWindowBits ?? PowRadix.DefaultWindowBits;
+        if (_powRadixWindowBits < 0 || (_powRadixWindowBits > 0 && _powRadixWindowBits > PowRadix.MaxWindowBits))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(powRadixWindowBits),
+                _powRadixWindowBits,
+                $"Window width must be 0 (no tables) or between {PowRadix.MinWindowBits} and {PowRadix.MaxWindowBits}.");
+        }
     }
 
     public RunOutcome Run()
@@ -115,6 +132,41 @@ public sealed class ScenarioRunner
                 BallotsEncrypted = 0,
                 RepresentativeBallot = null,
             };
+        }
+
+        // Note 3.5: every exponentiation performed while encrypting and proving ballot components
+        // has a base of g, K or K-hat, so tables of powers of those three are built once here and
+        // reused for every ballot. The library leaves this opt-in, but the harness always opts in:
+        // measuring encryption without it would be measuring a configuration no real encryptor
+        // should run. Built before the encrypt phase opens so the one-time cost is reported on its
+        // own rather than charged to the first chunk.
+        // Tables are keyed by their base, and every run generates fresh guardian keys, so without
+        // this each run in a long-lived process would leave ~8 MB of tables for keys nothing will
+        // ever use again. The registry is caller-owned by design; this caller's unit of ownership
+        // is one scenario run.
+        PowRadixRegistry.Clear();
+
+        notes["powRadixWindowBits"] = _powRadixWindowBits.ToString(CultureInfo.InvariantCulture);
+
+        if (_powRadixWindowBits > 0)
+        {
+            var powRadixStopwatch = Stopwatch.StartNew();
+            BallotEncryptor.PrecomputePowerTables(records.EncryptionRecord, _powRadixWindowBits);
+            powRadixStopwatch.Stop();
+
+            long powRadixBytes = PowRadixRegistry.TotalTableSizeInBytes;
+            notes["powRadixBuildMs"] = powRadixStopwatch.Elapsed.TotalMilliseconds.ToString("F1", CultureInfo.InvariantCulture);
+            notes["powRadixBytes"] = powRadixBytes.ToString(CultureInfo.InvariantCulture);
+            _log($"  precomputed power tables ({_powRadixWindowBits}-bit window) in {powRadixStopwatch.Elapsed.TotalMilliseconds:F0} ms ({powRadixBytes / (1024.0 * 1024.0):F0} MB)");
+        }
+        else
+        {
+            // Not a no-op path: encryption, verification and the tally still run on Montgomery
+            // limbs, just without a table. This is what isolates the table's contribution from the
+            // Montgomery representation's.
+            notes["powRadixBuildMs"] = "0.0";
+            notes["powRadixBytes"] = "0";
+            _log("  precomputed power tables disabled (table-free Montgomery)");
         }
 
         // --- Stage 1: streaming main loop ---------------------------------------------

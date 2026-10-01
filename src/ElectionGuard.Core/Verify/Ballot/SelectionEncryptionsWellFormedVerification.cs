@@ -38,11 +38,11 @@ public class SelectionEncryptionsWellFormedVerification
             VerifyIsInZq(crPair.Challenge);
             VerifyIsInZq(crPair.Response);
 
-            var a = IntegerModP.PowModP(EGParameters.G, crPair.Response)
-                * IntegerModP.PowModP(selection.Alpha, crPair.Challenge);
+            var a = MontgomeryModP.PowModP(EGParameters.G, crPair.Response)
+                * MontgomeryModP.PowModP(selection.Alpha, crPair.Challenge);
             var w = crPair.Response - i * crPair.Challenge;
-            var b = IntegerModP.PowModP(encryptionRecord.ElectionPublicKeys.VoteEncryptionKey, w)
-                * IntegerModP.PowModP(selection.Beta, crPair.Challenge);
+            var b = MontgomeryModP.PowModP(encryptionRecord.ElectionPublicKeys.VoteEncryptionKey, w)
+                * MontgomeryModP.PowModP(selection.Beta, crPair.Challenge);
             calculatedValues.Add((a, b));
         }
 
@@ -75,7 +75,7 @@ public class SelectionEncryptionsWellFormedVerification
         // 6.A
         if (value <= 0
             || value > EGParameters.P
-            || IntegerModP.PowModP(value, EGParameters.Q) != 1)
+            || MontgomeryModP.PowModP(value, EGParameters.Q) != 1)
         {
             throw new VerificationFailedException("6.A", "Value was not in Zpr.");
         }

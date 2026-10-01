@@ -19,11 +19,23 @@ public static class RunRecordStore
 
     /// <summary>
     /// Bounded so a genuinely stuck lock (e.g. an editor or antivirus scanner holding the file open
-    /// indefinitely) fails loudly after roughly a second of total backoff rather than hanging the CLI.
+    /// indefinitely) fails loudly rather than hanging the CLI.
+    ///
+    /// This is a time budget rather than an attempt count on purpose. A fixed count of linearly
+    /// growing sleeps is a fixed wall-clock budget, and the wall-clock time an append needs grows
+    /// with the number of writers contending for the exclusive lock. Sixteen writers appending a
+    /// hundred records each -- what the concurrency test does -- could exhaust twenty attempts on a
+    /// machine that was also busy doing something else, and the append would throw even though
+    /// nothing was actually stuck. That made the failure look like flakiness in the test rather than
+    /// a policy that does not scale with contention.
     /// </summary>
-    private const int MaxAttempts = 20;
+    private static readonly TimeSpan RetryBudget = TimeSpan.FromSeconds(10);
 
-    private static readonly TimeSpan InitialRetryDelay = TimeSpan.FromMilliseconds(5);
+    /// <summary>
+    /// Backoff is jittered and capped. Without jitter, writers that collide once tend to wake
+    /// together and collide again; the randomness is what breaks up the convoy.
+    /// </summary>
+    private const int MaxRetryDelayMs = 25;
 
     /// <summary>
     /// Appends one record, safe against other processes/threads doing the same to the same file at
@@ -77,8 +89,10 @@ public static class RunRecordStore
         var line = JsonSerializer.Serialize(record, PerfJson.LineOptions);
         var bytes = Utf8NoBom.GetBytes(line + Environment.NewLine);
 
-        var delay = InitialRetryDelay;
-        for (int attempt = 1; attempt <= MaxAttempts; attempt++)
+        long deadline = Environment.TickCount64 + (long)RetryBudget.TotalMilliseconds;
+        int attempt = 0;
+
+        while (true)
         {
             try
             {
@@ -87,10 +101,14 @@ public static class RunRecordStore
                 stream.Write(bytes, 0, bytes.Length);
                 return;
             }
-            catch (IOException) when (attempt < MaxAttempts)
+            catch (IOException) when (Environment.TickCount64 < deadline)
             {
-                Thread.Sleep(delay);
-                delay += InitialRetryDelay;
+                // Exponential up to the cap, then a random wait within it. Sleeping a jittered
+                // amount matters more than the exact curve: it is what stops every blocked writer
+                // retrying in step.
+                attempt++;
+                int ceiling = Math.Min(MaxRetryDelayMs, 1 << Math.Min(attempt, 5));
+                Thread.Sleep(Random.Shared.Next(1, ceiling + 1));
             }
         }
     }

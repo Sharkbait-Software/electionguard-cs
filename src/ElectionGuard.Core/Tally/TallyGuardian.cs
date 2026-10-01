@@ -36,7 +36,7 @@ public class TallyGuardian
 
             foreach (var choice in contest.Value.Choices)
             {
-                var mi = IntegerModP.PowModP(choice.Value.A, _shares.VoteEncryptionKeyShare);
+                var mi = MontgomeryModP.PowModP(choice.Value.A, _shares.VoteEncryptionKeyShare);
                 partialContest.Choices[choice.Key] = new PartialTallyChoiceDecryption
                 {
                     Mi = mi,
@@ -83,7 +83,7 @@ public class TallyAdmin
                     var partialChoice = partialContest.Choices[encryptedChoice.Key];
                     var lagrangeCoefficient = lagrangeCoefficients[partialDecryption.GuardianIndex];
 
-                    var miwi = IntegerModP.PowModP(partialChoice.Mi, lagrangeCoefficient);
+                    var miwi = MontgomeryModP.PowModP(partialChoice.Mi, lagrangeCoefficient);
                     if(m == 0)
                     {
                         m = miwi;
@@ -99,7 +99,17 @@ public class TallyAdmin
                 int result = -1;
                 for (int i = 0; i <= encryptedTally.BallotsCast; i++)
                 {
-                    var maybeT = IntegerModP.PowModP(publicKeys.VoteEncryptionKey, i);
+                    // Deliberately NOT the Montgomery path, despite K being a fixed base.
+                    //
+                    // The exponent here is the loop counter, so it is tiny -- around ten bits for a
+                    // thousand ballots -- and public. BigInteger.ModPow scales with the magnitude of
+                    // the exponent and finishes such a case in roughly fifteen multiplications. The
+                    // Montgomery path deliberately does not scale that way: it walks the full width
+                    // of Z_q whatever the exponent's value, because varying the work with a secret
+                    // nonce is a leak. That is the right trade where the exponent is a nonce and the
+                    // wrong one here, and measurement agrees -- routing this loop through Montgomery
+                    // made DecryptTally ten times slower.
+                    var maybeT = IntegerModP.PowModP(publicKeys.VoteEncryptionKey, new IntegerModQ(i));
                     if (maybeT == t)
                     {
                         result = i;

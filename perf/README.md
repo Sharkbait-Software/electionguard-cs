@@ -41,7 +41,28 @@ prints that command's options. Both exit 0.
 
 `--parallelism 1` is the single-threaded baseline: it isolates an algorithmic improvement from a
 scheduling one. `--repeat 5` performs the run N times and tags each record with a shared repeat-group
-id. When `compare` selects a run that belongs to a repeat group -- whether by default or via
+id.
+
+`--window-bits N` sets the width of the Note 3.5 precomputed power tables, which the harness always
+builds before the timed work and reports as `powRadixBuildMs` / `powRadixBytes`. `--window-bits 0`
+skips the tables entirely, which is not a return to the old behaviour: every exponentiation still
+runs on Montgomery limbs, so this isolates what the *table* contributes from what the *representation*
+contributes. Measured on `smoke`, against the pre-Montgomery baseline of 30.5 ms/ballot to encrypt
+and 30.2 ms/ballot to verify:
+
+| `--window-bits` | table build | table size | encrypt | verify | peak working set |
+| --- | --- | --- | --- | --- | --- |
+| 0 (no tables)   | –        | –       | 16.93 ms | 15.39 ms | 102 MB |
+| 8               | 40 ms    | 12 MB   | 1.68 ms  | 9.97 ms  | 94 MB |
+| 12 *(default)*  | 233 ms   | 132 MB  | 1.18 ms  | 9.73 ms  | 241 MB |
+| 16              | 2,910 ms | 1,536 MB| 0.89 ms  | 9.58 ms  | 1,619 MB |
+
+Encryption keeps scaling with window width because every one of its exponentiations is on g, K or
+K-hat. Verification flattens out around 3x because roughly half of its exponentiations are on
+per-ballot bases -- the ciphertext's own alpha and beta, and the guardians' commitments -- which are
+different for every ballot and so can never be tabled; those get only the ~2x from Montgomery form.
+16 costs 12x the memory of 12 to buy a further 25% on encryption alone, which is why the default is
+12. When `compare` selects a run that belongs to a repeat group -- whether by default or via
 `--baseline`/`--candidate` -- it automatically expands to the whole group and judges the per-metric
 medians instead of the single selected run, excluding any member whose correctness check failed.
 

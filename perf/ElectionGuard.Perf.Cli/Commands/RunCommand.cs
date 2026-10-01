@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.Models;
 using ElectionGuard.Perf.Cli.Configuration;
 using ElectionGuard.Perf.Cli.Reporting;
@@ -61,6 +62,11 @@ public sealed class RunCommand : Command<RunCommand.Settings>
         [Description("Skip the serialization sub-benchmark.")]
         public bool NoSerialization { get; set; }
 
+        [CommandOption("--window-bits <N>")]
+        [TypeConverter(typeof(WholeNumberConverter))]
+        [Description("Bits per window for the Note 3.5 precomputed power tables. 0 disables them and measures the table-free Montgomery path.")]
+        public int? WindowBits { get; set; }
+
         [CommandOption("--repeat <N>")]
         [TypeConverter(typeof(WholeNumberConverter))]
         [Description("Run N times, sharing a repeat group.")]
@@ -93,6 +99,16 @@ public sealed class RunCommand : Command<RunCommand.Settings>
                 "Refusing to record a Debug-build result. Rebuild with -c Release, or pass --allow-debug " +
                 "to record it anyway (the record will say Debug, and compare will refuse to weigh it " +
                 "against a Release run).");
+            return 2;
+        }
+
+        // Checked here rather than left to PowRadix so a bad width is a usage error (exit 2) like
+        // every other malformed option, instead of an exception out of the middle of a run.
+        if (settings.WindowBits is int windowBits
+            && (windowBits < 0 || (windowBits > 0 && windowBits > PowRadix.MaxWindowBits)))
+        {
+            Console.Error.WriteLine(
+                $"--window-bits must be 0 (no tables) or between {PowRadix.MinWindowBits} and {PowRadix.MaxWindowBits}, got {windowBits}.");
             return 2;
         }
 
@@ -148,7 +164,7 @@ public sealed class RunCommand : Command<RunCommand.Settings>
     {
         Console.WriteLine($"Running scenario '{scenario.Id}' ({scenario.BallotCount:N0} ballots)...");
 
-        var outcome = new ScenarioRunner(scenario, manifest, Console.WriteLine).Run();
+        var outcome = new ScenarioRunner(scenario, manifest, Console.WriteLine, settings.WindowBits).Run();
 
         // A setup-time failure (DKG, encryption-record construction, warmup) is caught inside
         // ScenarioRunner.Run and returned as a PARTIAL outcome with an EMPTY Phases dictionary --

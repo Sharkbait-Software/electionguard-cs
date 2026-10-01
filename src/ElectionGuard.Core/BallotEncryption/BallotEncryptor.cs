@@ -19,6 +19,39 @@ public class BallotEncryptor
     private readonly string _deviceId;
     private readonly VotingDeviceInformationHash _deviceHash;
 
+    /// <summary>
+    /// Opt in to the precomputed power tables of Note 3.5.
+    ///
+    /// The note observes that every exponentiation performed while encrypting and proving ballot
+    /// components has a base of either g or K, so tables of powers of those bases can be built once
+    /// and reused, and holding them in Montgomery form makes them faster still. This builds exactly
+    /// those tables: the generator g, the vote encryption key K, and the other-ballot-data
+    /// encryption key K-hat.
+    ///
+    /// This is not done automatically, because it is not free: at the v2.1.0 parameter sizes the
+    /// default window costs about 4 MB and a few hundred milliseconds per base. That is the right
+    /// trade for a process that is about to encrypt ballots and the wrong one for a process that is
+    /// not, so the choice belongs to the caller. Encryption is correct either way; without tables
+    /// it simply runs the table-free Montgomery path instead.
+    ///
+    /// Calling this more than once for the same record and width is cheap: existing tables are kept.
+    ///
+    /// The tables live in <see cref="PowRadixRegistry"/> until something clears them, and they are
+    /// keyed by base, so a process that encrypts for a second election adds a second set rather
+    /// than replacing the first. A long-lived process that moves between elections should call
+    /// <see cref="PowRadixRegistry.Clear"/> when it leaves one behind.
+    /// </summary>
+    public static void PrecomputePowerTables(EncryptionRecord encryptionRecord, int windowBits = PowRadix.DefaultWindowBits)
+    {
+        ArgumentNullException.ThrowIfNull(encryptionRecord);
+
+        PowRadixRegistry.Precompute(
+            windowBits,
+            EGParameters.G,
+            encryptionRecord.ElectionPublicKeys.VoteEncryptionKey.ToBigInteger(),
+            encryptionRecord.ElectionPublicKeys.OtherBallotDataEncryptionKey.ToBigInteger());
+    }
+
     public EncryptedBallot Encrypt(Ballot ballot, ConfirmationCode? previousConfirmationCode)
     {
         Validate(ballot);
@@ -116,7 +149,7 @@ public class BallotEncryptor
         var keyPair = KeyPair.GenerateRandom();
         IntegerModQ epsilon = keyPair.SecretKey;
         IntegerModP alpha = keyPair.PublicKey;
-        IntegerModP beta = IntegerModP.PowModP(_encryptionRecord.ElectionPublicKeys.OtherBallotDataEncryptionKey, epsilon);
+        IntegerModP beta = MontgomeryModP.PowModP(_encryptionRecord.ElectionPublicKeys.OtherBallotDataEncryptionKey, epsilon);
         var symmetricKey = EGHash.Hash(selectionEncryptionIdentifierHash,
             [0x22],
             alpha,
@@ -251,8 +284,8 @@ public class BallotEncryptor
     private EncryptedValue EncryptContestValue(int valueToEncrypt, SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, BallotNonce ballotNonce, int contestIndex, int? choiceIndex = null)
     {
         IntegerModQ encryptionNonce = new EncryptionNonce(selectionEncryptionIdentifierHash, ballotNonce, contestIndex, choiceIndex);
-        var alpha = IntegerModP.PowModP(EGParameters.G, encryptionNonce);
-        var beta = IntegerModP.PowModP(_encryptionRecord.ElectionPublicKeys.VoteEncryptionKey, encryptionNonce + valueToEncrypt);
+        var alpha = MontgomeryModP.PowModP(EGParameters.G, encryptionNonce);
+        var beta = MontgomeryModP.PowModP(_encryptionRecord.ElectionPublicKeys.VoteEncryptionKey, encryptionNonce + valueToEncrypt);
         return new EncryptedValue
         {
             Alpha = alpha,
@@ -296,13 +329,13 @@ public class BallotEncryptor
             IntegerModQ? cj = null;
             if (valueToEncrypt == i)
             {
-                b = IntegerModP.PowModP(electionPublicKeys.VoteEncryptionKey, u);
+                b = MontgomeryModP.PowModP(electionPublicKeys.VoteEncryptionKey, u);
             }
             else
             {
                 cj = ElectionGuardRandom.GetIntegerModQ();
                 var t = u + (valueToEncrypt - i) * cj.Value;
-                b = IntegerModP.PowModP(electionPublicKeys.VoteEncryptionKey, t);
+                b = MontgomeryModP.PowModP(electionPublicKeys.VoteEncryptionKey, t);
             }
             commitments.Add((u, a, b, cj));
         }
@@ -367,8 +400,8 @@ public class BallotEncryptor
             contestIndex.ToByteArray(),
             ballotNonce);
 
-        var alpha = IntegerModP.PowModP(EGParameters.G, encryptionNonce);
-        var beta = IntegerModP.PowModP(_encryptionRecord.ElectionPublicKeys.OtherBallotDataEncryptionKey, encryptionNonce);
+        var alpha = MontgomeryModP.PowModP(EGParameters.G, encryptionNonce);
+        var beta = MontgomeryModP.PowModP(_encryptionRecord.ElectionPublicKeys.OtherBallotDataEncryptionKey, encryptionNonce);
         var secretKey = EGHash.Hash(selectionEncryptionIdentifierHash,
             [0x26],
             contestIndex.ToByteArray(),

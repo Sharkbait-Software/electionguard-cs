@@ -81,7 +81,7 @@ public class Guardian
             IntegerModQ epsilon = keyPair.SecretKey;
             IntegerModP alpha = keyPair.PublicKey;
 
-            IntegerModP beta = IntegerModP.PowModP(guardian.CommunicationPublicKey, epsilon);
+            IntegerModP beta = MontgomeryModP.PowModP(guardian.CommunicationPublicKey, epsilon);
             var symmetricKey = EGHash.Hash(EGParameters.ParameterBaseHash,
                 [0x11],
                 Index,
@@ -140,7 +140,7 @@ public class Guardian
 
         foreach (var encryptedShare in encryptedShares)
         {
-            var gamma = IntegerModP.PowModP(EGParameters.G, encryptedShare.Response) * IntegerModP.PowModP(new IntegerModP(encryptedShare.C0), encryptedShare.Challenge);
+            var gamma = MontgomeryModP.PowModP(EGParameters.G, encryptedShare.Response) * MontgomeryModP.PowModP(new IntegerModP(encryptedShare.C0), encryptedShare.Challenge);
             var cBar = EGHash.HashModQ(EGParameters.ParameterBaseHash,
                 [0x12],
                 encryptedShare.SourceIndex,
@@ -156,7 +156,7 @@ public class Guardian
             }
 
             var alpha = new IntegerModP(encryptedShare.C0);
-            var beta = IntegerModP.PowModP(alpha, _keys.CommunicationKeyPair.SecretKey);
+            var beta = MontgomeryModP.PowModP(alpha, _keys.CommunicationKeyPair.SecretKey);
 
             var k = EGHash.HashModQ(EGParameters.ParameterBaseHash,
                 [0x11],
@@ -240,7 +240,7 @@ public class Guardian
         // Verify decrypted shares against that guardians' commitments.
         foreach (var polynomial in _voteEncryptionSharePolynomials)
         {
-            IntegerModP p = IntegerModP.PowModP(EGParameters.G, polynomial.Value);
+            IntegerModP p = MontgomeryModP.PowModP(EGParameters.G, polynomial.Value);
             IntegerModP p2 = guardians.Single(x => x.Index == polynomial.SourceIndex)
                 .VoteEncryptionCommitments
                     .Select((x, j) => IntegerModP.PowModP(x, BigInteger.Pow(Index.Index, j)))
@@ -253,7 +253,7 @@ public class Guardian
 
         foreach (var polynomial in _otherBallotDataEncryptionSharePolynomials)
         {
-            IntegerModP p = IntegerModP.PowModP(EGParameters.G, polynomial.Value);
+            IntegerModP p = MontgomeryModP.PowModP(EGParameters.G, polynomial.Value);
             IntegerModP p2 = guardians.Single(x => x.Index == polynomial.SourceIndex)
                 .OtherBallotDataEncryptionCommitments
                     .Select((x, j) => IntegerModP.PowModP(x, BigInteger.Pow(Index.Index, j)))
