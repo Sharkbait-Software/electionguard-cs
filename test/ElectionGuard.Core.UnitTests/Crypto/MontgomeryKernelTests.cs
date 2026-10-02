@@ -97,7 +97,7 @@ public class MontgomeryKernelTests
     private static ulong[] Limbs(BigInteger value, int limbCount)
     {
         ulong[] limbs = new ulong[limbCount];
-        MontgomeryContext.WriteLimbs(value, limbs, swapLimbBytes: !BitConverter.IsLittleEndian);
+        MontgomeryContext.WriteLimbs(value, limbs);
         return limbs;
     }
 

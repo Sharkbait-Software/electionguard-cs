@@ -1,6 +1,5 @@
 using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.Models;
-using System.Buffers.Binary;
 using System.Numerics;
 
 namespace ElectionGuard.Core.UnitTests.Crypto;
@@ -88,25 +87,11 @@ public class MontgomeryContextTests
         }
     }
 
-    /// <summary>
-    /// The limb conversions are the only byte-order-sensitive code in the Montgomery arithmetic, and
-    /// the big-endian branch would otherwise ship without ever having run, since every machine this
-    /// is developed and tested on is little-endian.
-    ///
-    /// Note what running the swap on a little-endian machine does and does not show. It does not
-    /// simulate a big-endian host: there the swap compensates for the host reading each limb's bytes
-    /// in the opposite order, whereas here it simply byte-reverses limbs that were already correct.
-    /// What it does show is that the write and the read agree, which is the mistake actually
-    /// available to make -- swapping on one side and forgetting on the other.
-    /// </summary>
-    public static TheoryData<bool> BothSwapSettings => [false, true];
-
-    [Theory]
-    [MemberData(nameof(BothSwapSettings))]
-    public void LimbConversion_WriteAndRead_AreInversesUnderEitherSwapSetting(bool swapLimbBytes)
+    [Fact]
+    public void LimbConversion_WriteAndRead_AreInverses()
     {
         int limbCount = MontgomeryContext.Current.LimbCount;
-        Random random = new(swapLimbBytes ? 1 : 2);
+        Random random = new(1);
 
         foreach (BigInteger value in new[]
         {
@@ -124,57 +109,25 @@ public class MontgomeryContextTests
         })
         {
             ulong[] limbs = new ulong[limbCount];
-            MontgomeryContext.WriteLimbs(value, limbs, swapLimbBytes);
+            MontgomeryContext.WriteLimbs(value, limbs);
 
-            Assert.Equal(value, MontgomeryContext.FromLimbs(limbs, swapLimbBytes));
+            Assert.Equal(value, MontgomeryContext.FromLimbs(limbs));
+            Assert.Equal(new IntegerModP(value), MontgomeryModP.RoundTrip(new IntegerModP(value)));
         }
     }
 
     [Fact]
-    public void LimbConversion_BigEndianHost_DiffersFromLittleEndianByExactlyAPerLimbByteSwap()
+    public void LimbConversion_LimbZeroIsLeastSignificant()
     {
-        // This is the property that makes the big-endian path correct rather than merely
-        // self-consistent. A big-endian host reinterprets each limb's bytes in the opposite order, so
-        // compensating for it must be exactly a per-limb reversal and nothing else -- not a reversal
-        // of the whole buffer, which would also reverse the order of the limbs themselves.
         int limbCount = MontgomeryContext.Current.LimbCount;
-        BigInteger value = RandomBelowP(new Random(31415));
-
-        ulong[] littleEndian = new ulong[limbCount];
-        ulong[] bigEndian = new ulong[limbCount];
-        MontgomeryContext.WriteLimbs(value, littleEndian, swapLimbBytes: false);
-        MontgomeryContext.WriteLimbs(value, bigEndian, swapLimbBytes: true);
-
-        for (int i = 0; i < limbCount; i++)
-        {
-            Assert.Equal(BinaryPrimitives.ReverseEndianness(littleEndian[i]), bigEndian[i]);
-        }
-    }
-
-    [Fact]
-    public void LimbConversion_DefaultOverloads_FollowTheActualHost()
-    {
-        // Ties the explicitly-driven conversions above to the ones production actually calls. Writing
-        // with the flag this host needs must be readable by the overload that chooses for itself, and
-        // the full path through ToMontgomery/FromMontgomery -- which uses only the parameterless
-        // overloads -- must agree. Without this, the theory above could be self-consistent while
-        // production took a different branch.
-        int limbCount = MontgomeryContext.Current.LimbCount;
-        BigInteger value = RandomBelowP(new Random(2718));
+        BigInteger value = (new BigInteger(0x1122334455667788UL) << 64) | 0x0102030405060708UL;
 
         ulong[] limbs = new ulong[limbCount];
-        MontgomeryContext.WriteLimbs(value, limbs, swapLimbBytes: !BitConverter.IsLittleEndian);
+        MontgomeryContext.WriteLimbs(value, limbs);
 
-        Assert.Equal(value, MontgomeryContext.FromLimbs(limbs));
-        Assert.Equal(new IntegerModP(value), MontgomeryModP.RoundTrip(new IntegerModP(value)));
-    }
-
-    [Fact]
-    public void Construction_DoesNotRequireALittleEndianHost()
-    {
-        // An earlier version refused to construct anywhere but little-endian. The limb conversions
-        // now handle either, so the restriction is gone; this records that it should stay gone.
-        Assert.Equal(P, MontgomeryContext.Current.Modulus);
+        Assert.Equal(0x0102030405060708UL, limbs[0]);
+        Assert.Equal(0x1122334455667788UL, limbs[1]);
+        Assert.All(limbs[2..], limb => Assert.Equal(0UL, limb));
     }
 
     private static BigInteger RandomBelowP(Random random)

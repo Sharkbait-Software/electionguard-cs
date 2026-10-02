@@ -339,8 +339,7 @@ internal sealed partial class Avx512Montgomery
 
     /// <summary>
     /// Writes a non-negative value below 2^(29 * 144) as <see cref="Lanes"/> 29-bit digits, least
-    /// significant first, by way of the 64-bit limbs <see cref="MontgomeryContext"/> already knows
-    /// how to produce on either endianness.
+    /// significant first, by way of the 64-bit limbs <see cref="MontgomeryContext"/> produces.
     /// </summary>
     internal static void WriteDigits(BigInteger value, Span<ulong> digits)
     {
@@ -350,7 +349,7 @@ internal sealed partial class Avx512Montgomery
         }
 
         Span<ulong> limbs = stackalloc ulong[LimbsForDigits];
-        MontgomeryContext.WriteLimbs(value, limbs, !BitConverter.IsLittleEndian);
+        MontgomeryContext.WriteLimbs(value, limbs);
         for (int k = 0; k < Lanes; k++)
         {
             int bit = k * DigitBits;

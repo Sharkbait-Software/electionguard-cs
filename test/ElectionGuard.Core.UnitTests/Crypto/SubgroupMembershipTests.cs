@@ -126,7 +126,7 @@ public class SubgroupMembershipTests
         ulong[] x = new ulong[context.LimbCount];
         foreach (BigInteger value in values.Where(v => !v.IsZero))
         {
-            MontgomeryContext.WriteLimbs(value, x, !BitConverter.IsLittleEndian);
+            MontgomeryContext.WriteLimbs(value, x);
 
             Assert.True(SubgroupMembership.TryJacobiDivsteps(x, context.ModulusLimbs, out int symbol));
 

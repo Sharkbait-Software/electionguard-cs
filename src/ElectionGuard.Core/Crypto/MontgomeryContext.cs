@@ -23,10 +23,9 @@ namespace ElectionGuard.Core.Crypto;
 /// costs. On ulong limbs it is worth roughly 2x, which is why this operates on <see cref="ulong"/>
 /// spans rather than on <see cref="BigInteger"/>.
 ///
-/// The arithmetic itself is endian-agnostic: it only ever reads and writes limbs as numbers. Byte
-/// order matters in exactly two places, converting a <see cref="BigInteger"/> to limbs and back,
-/// where the limb span is reinterpreted as bytes. Both handle either host, by reversing each limb's
-/// bytes on a big-endian one. See <see cref="WriteLimbs(BigInteger, Span{ulong}, bool)"/>.
+/// Limbs are little-endian: limb 0 is the least significant, and converting a
+/// <see cref="BigInteger"/> to limbs and back reinterprets the limb span as bytes in host order,
+/// which this library requires to be little-endian. See <see cref="WriteLimbs(BigInteger, Span{ulong})"/>.
 /// </summary>
 internal sealed class MontgomeryContext
 {
@@ -164,8 +163,6 @@ internal sealed class MontgomeryContext
     /// destination these are exactly the bytes <see cref="IntegerModP.ToByteArray"/> produces for
     /// the same value. Limbs past the end of the destination must be zero; a value too wide for it
     /// throws, as ToByteArray does.
-    ///
-    /// The limbs are read as numbers, so this is correct on either host byte order.
     /// </summary>
     internal static void WriteLimbsBigEndian(ReadOnlySpan<ulong> limbs, Span<byte> destination)
     {
@@ -659,75 +656,26 @@ internal sealed class MontgomeryContext
     }
 
     /// <summary>
-    /// True when a limb's bytes must be reversed after reinterpreting the span, that is on a
-    /// big-endian host. <see cref="BitConverter.IsLittleEndian"/> is a JIT-time constant, so the
-    /// swap loops below are eliminated entirely on a little-endian build.
-    /// </summary>
-    private static bool SwapLimbBytes => !BitConverter.IsLittleEndian;
-
-    /// <summary>
     /// Writes a non-negative value into <paramref name="limbs"/> as little-endian 64-bit limbs.
     ///
     /// Reinterpreting the ulong span as bytes is what makes this one copy rather than a shift-and-or
-    /// loop over every byte, with no intermediate array. The catch is that the reinterpretation is
-    /// the host's byte order, while BigInteger was asked for little-endian: on a little-endian host
-    /// those agree and nothing more is needed, and on a big-endian one each limb comes out
-    /// byte-reversed, so reversing it again puts it right.
+    /// loop over every byte, with no intermediate array: BigInteger's little-endian bytes are already
+    /// the limbs' in-memory layout on the little-endian hosts this library supports.
     /// </summary>
-    private static void WriteLimbs(BigInteger value, Span<ulong> limbs)
-    {
-        WriteLimbs(value, limbs, SwapLimbBytes);
-    }
-
-    /// <summary>
-    /// <paramref name="swapLimbBytes"/> is a parameter rather than read from
-    /// <see cref="BitConverter.IsLittleEndian"/> so that tests can drive the big-endian path on a
-    /// little-endian machine, which is otherwise code that ships without ever having run.
-    /// </summary>
-    internal static void WriteLimbs(BigInteger value, Span<ulong> limbs, bool swapLimbBytes)
+    internal static void WriteLimbs(BigInteger value, Span<ulong> limbs)
     {
         limbs.Clear();
         if (!value.TryWriteBytes(MemoryMarshal.AsBytes(limbs), out _, isUnsigned: true, isBigEndian: false))
         {
             throw new ArgumentException("Value does not fit in the requested number of limbs.", nameof(value));
         }
-
-        if (swapLimbBytes)
-        {
-            for (int i = 0; i < limbs.Length; i++)
-            {
-                limbs[i] = BinaryPrimitives.ReverseEndianness(limbs[i]);
-            }
-        }
     }
 
+    /// <inheritdoc cref="WriteLimbs(BigInteger, Span{ulong})"/>
     internal static BigInteger FromLimbs(ReadOnlySpan<ulong> limbs)
-    {
-        return FromLimbs(limbs, SwapLimbBytes);
-    }
-
-    /// <inheritdoc cref="WriteLimbs(BigInteger, Span{ulong}, bool)"/>
-    internal static BigInteger FromLimbs(ReadOnlySpan<ulong> limbs, bool swapLimbBytes)
     {
         // isUnsigned means a set top bit is read as magnitude rather than sign, so unlike a signed
         // conversion this needs no extra zero byte on the end.
-        if (!swapLimbBytes)
-        {
-            return new BigInteger(MemoryMarshal.AsBytes(limbs), isUnsigned: true, isBigEndian: false);
-        }
-
-        // Reversing into a scratch copy, because the caller's limbs are the live value and must not
-        // be disturbed. This is the big-endian path, so it never runs on a little-endian build.
-        Span<ulong> reversed = limbs.Length <= MaxStackAllocLimbs
-            ? stackalloc ulong[MaxStackAllocLimbs]
-            : new ulong[limbs.Length];
-        reversed = reversed[..limbs.Length];
-
-        for (int i = 0; i < limbs.Length; i++)
-        {
-            reversed[i] = BinaryPrimitives.ReverseEndianness(limbs[i]);
-        }
-
-        return new BigInteger(MemoryMarshal.AsBytes(reversed), isUnsigned: true, isBigEndian: false);
+        return new BigInteger(MemoryMarshal.AsBytes(limbs), isUnsigned: true, isBigEndian: false);
     }
 }

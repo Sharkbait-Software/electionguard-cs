@@ -339,7 +339,7 @@ public static class SubgroupMembership
         // anyway would allocate a 4096-bit quotient and remainder per value. Anything else is still
         // reduced exactly as before.
         BigInteger reduced = value.Sign >= 0 && value < context.Modulus ? value : value % context.Modulus;
-        MontgomeryContext.WriteLimbs(reduced, x, !BitConverter.IsLittleEndian);
+        MontgomeryContext.WriteLimbs(reduced, x);
         context.ModulusLimbs.CopyTo(y);
 
         return Jacobi(x, y);

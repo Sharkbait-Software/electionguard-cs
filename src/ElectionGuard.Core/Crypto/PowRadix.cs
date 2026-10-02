@@ -1,6 +1,5 @@
 using ElectionGuard.Core.Extensions;
 using ElectionGuard.Core.Models;
-using System.Buffers.Binary;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics;
@@ -332,14 +331,6 @@ public sealed class PowRadix
         if (!exponent.TryWriteBytes(bytes, out _, isUnsigned: true, isBigEndian: false))
         {
             throw new ArgumentOutOfRangeException(nameof(exponent), $"Exponent is wider than the {ExponentBits} bits this table was built for.");
-        }
-
-        if (!BitConverter.IsLittleEndian)
-        {
-            for (int i = 0; i < words.Length; i++)
-            {
-                words[i] = BinaryPrimitives.ReverseEndianness(words[i]);
-            }
         }
     }
 
