@@ -9,13 +9,15 @@ namespace ElectionGuard.Core.Verify.Tally;
 /// </summary>
 public class BallotAggregationVerification
 {
-    public void Verify(List<EncryptedBallot> ballots, Manifest manifest, EncryptedTally encryptedTally)
+    /// <summary>
+    /// Recomputes the aggregate from <paramref name="ballots"/> on up to
+    /// <paramref name="maxDegreeOfParallelism"/> threads (-1, the default, for no limit) and checks
+    /// it against <paramref name="encryptedTally"/>.
+    /// </summary>
+    public void Verify(IReadOnlyList<EncryptedBallot> ballots, Manifest manifest, EncryptedTally encryptedTally, int maxDegreeOfParallelism = -1)
     {
         var expectedEncryptedTally = new EncryptedTally(manifest);
-        foreach(var ballot in ballots)
-        {
-            expectedEncryptedTally.AddBallot(ballot);
-        }
+        expectedEncryptedTally.AddBallots(ballots, maxDegreeOfParallelism);
 
         foreach (var contest in encryptedTally.Contests)
         {

@@ -315,3 +315,189 @@ public class TallyAdminTests
         Assert.Equal(0, decryptedTally.Contests["contest-1"].Choices["choice-2"].VoteCount);
     }
 }
+
+/// <summary>
+/// TallyAdmin.Decrypt across the whole [0, BallotsCast] search range. Rather than encrypting a ballot
+/// per vote, each aggregate is set directly to an ElGamal encryption of a chosen count v under the
+/// election key, (g^xi, K^(v + xi)), so counts at every giant-step boundary of the discrete-log
+/// search are cheap to reach. BallotsCast is raised to the bound with placeholder ballots whose
+/// ciphertexts the setters then overwrite.
+/// </summary>
+public class TallyAdminSearchRangeTests
+{
+    private const int BallotsCast = 40;
+
+    private static EncryptedBallot CreatePlaceholderBallot(string ballotId, IEnumerable<string> choiceIds)
+    {
+        var placeholderProofs = Array.Empty<ChallengeResponsePair>();
+        var placeholderCounter = new EncryptedValueWithProofs { Alpha = 1, Beta = 1, Proofs = placeholderProofs };
+
+        return new EncryptedBallot
+        {
+            Id = ballotId,
+            SelectionEncryptionIdentifier = new SelectionEncryptionIdentifier(new byte[] { 0x02 }),
+            SelectionEncryptionIdentifierHash = new SelectionEncryptionIdentifierHash(new byte[] { 0x03 }),
+            BallotStyleId = "ballot-style-1",
+            Contests = new List<EncryptedContest>
+            {
+                new EncryptedContest
+                {
+                    Id = "contest-1",
+                    Choices = choiceIds
+                        .Select(choiceId => new EncryptedSelection { ChoiceId = choiceId, Alpha = 1, Beta = 1, Proofs = placeholderProofs })
+                        .ToList(),
+                    Proofs = placeholderProofs,
+                    OvervoteCount = placeholderCounter,
+                    NullvoteCount = placeholderCounter,
+                    UndervoteCount = placeholderCounter,
+                    WriteInVoteCount = placeholderCounter,
+                    ContestData = null,
+                    ContestHash = new ContestHash(new byte[] { 0x01 }),
+                },
+            },
+            ConfirmationCode = new ConfirmationCode(new byte[] { 0x04 }),
+            Weight = 1,
+            DeviceId = "device-1",
+        };
+    }
+
+    private static DecryptedTally DecryptCounts(int count1, int count2, int maxDegreeOfParallelism = -1)
+    {
+        return DecryptCounts([count1, count2], maxDegreeOfParallelism);
+    }
+
+    /// <summary>
+    /// Decrypts a one-contest tally whose choice-(i+1) encrypts counts[i]. More than two counts adds
+    /// choices to the minimal manifest. A null count plants a partial decryption of zero for that
+    /// choice instead, as only a corrupt share could.
+    /// </summary>
+    private static DecryptedTally DecryptCounts(int?[] counts, int maxDegreeOfParallelism = -1)
+    {
+        EGParameters.Init(new CryptographicParameters(), new GuardianParameters());
+        var guardianSet = ElectionFixtureBuilder.CreateGuardianSet();
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest();
+        var choices = manifest.Contests[0].Choices;
+        for (int i = choices.Count; i < counts.Length; i++)
+        {
+            choices.Add(new Choice { Id = $"choice-{i + 1}", Name = $"Choice {i + 1}", Index = i });
+        }
+
+        var choiceIds = choices.Select(x => x.Id).ToList();
+        var tally = new EncryptedTally(manifest);
+        tally.AddBallots(Enumerable.Range(0, BallotsCast).Select(i => CreatePlaceholderBallot($"ballot-{i}", choiceIds)).ToList());
+        Assert.Equal(BallotsCast, tally.BallotsCast);
+
+        IntegerModP k = guardianSet.ElectionPublicKeys.VoteEncryptionKey;
+        for (int i = 0; i < counts.Length; i++)
+        {
+            int nonce = 987654321 + 7919 * i;
+            var choice = tally.Contests["contest-1"].Choices[choiceIds[i]];
+            choice.A = IntegerModP.PowModP(EGParameters.G, new IntegerModQ(nonce));
+            choice.B = IntegerModP.PowModP(k, new IntegerModQ((counts[i] ?? 0) + nonce));
+        }
+
+        var partials = guardianSet.Guardians
+            .Take(2)
+            .Select(guardian => new TallyGuardian(guardian.Index, guardianSet.SecretShares[guardian.Index]).Decrypt(tally, maxDegreeOfParallelism))
+            .ToList();
+
+        for (int i = 0; i < counts.Length; i++)
+        {
+            if (counts[i] is null)
+            {
+                partials[0].Contests["contest-1"].Choices[choiceIds[i]] = new PartialTallyDecryption.PartialTallyChoiceDecryption { Mi = 0 };
+            }
+        }
+
+        return new TallyAdmin().Decrypt(partials, tally, guardianSet.ElectionPublicKeys, maxDegreeOfParallelism);
+    }
+
+    [Fact]
+    public void Decrypt_ManyChoices_RecoversEveryCount()
+    {
+        // Seven choices, so the batch inversion in TallyAdmin peels several inverses off the shared
+        // product rather than the one a two-choice tally needs.
+        int?[] counts = [40, 0, 13, 1, 27, 39, 7];
+
+        var decrypted = DecryptCounts(counts);
+
+        for (int i = 0; i < counts.Length; i++)
+        {
+            Assert.Equal(counts[i], decrypted.Contests["contest-1"].Choices[$"choice-{i + 1}"].VoteCount);
+        }
+    }
+
+    [Fact]
+    public void Decrypt_ZeroPartialDecryption_ThrowsPlainException()
+    {
+        // A zero M has no inverse; it must fail with the same plain Exception as any other
+        // undecryptable choice, not an ArgumentException from the inversion.
+        var exception = Assert.Throws<Exception>(() => DecryptCounts([3, null, 5]));
+
+        Assert.Equal("Tally did not decrypt successfully.", exception.Message);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(7)]
+    public void InvertAll_MatchesIndividualInverses(int count)
+    {
+        EGParameters.Init(new CryptographicParameters(), new GuardianParameters());
+        var random = new Random(count);
+        var values = Enumerable.Range(0, count).Select(_ =>
+        {
+            byte[] bytes = new byte[520];
+            random.NextBytes(bytes);
+            return new IntegerModP(new System.Numerics.BigInteger(bytes, isUnsigned: true) % (EGParameters.P - 1) + 1);
+        }).ToArray();
+
+        var inverses = TallyAdmin.InvertAll(values);
+
+        for (int i = 0; i < count; i++)
+        {
+            Assert.Equal(new IntegerModP(1), values[i] * inverses[i]);
+        }
+    }
+
+    [Theory]
+    [InlineData(0, BallotsCast)]
+    [InlineData(1, BallotsCast - 1)]
+    [InlineData(9, 10)]
+    [InlineData(11, 19)]
+    [InlineData(20, 21)]
+    [InlineData(29, 30)]
+    [InlineData(31, 39)]
+    public void Decrypt_CountsAcrossTheSearchRange_AreRecovered(int count1, int count2)
+    {
+        // Two choices and 41 candidates put the giant step at ceil(sqrt(82)) = 10, so these cover
+        // both ends of the range and both sides of several giant-step boundaries.
+        var decrypted = DecryptCounts(count1, count2);
+
+        Assert.Equal(count1, decrypted.Contests["contest-1"].Choices["choice-1"].VoteCount);
+        Assert.Equal(count2, decrypted.Contests["contest-1"].Choices["choice-2"].VoteCount);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(3)]
+    public void Decrypt_LimitedParallelism_RecoversTheSameCounts(int maxDegreeOfParallelism)
+    {
+        var decrypted = DecryptCounts(17, 3, maxDegreeOfParallelism);
+
+        Assert.Equal(17, decrypted.Contests["contest-1"].Choices["choice-1"].VoteCount);
+        Assert.Equal(3, decrypted.Contests["contest-1"].Choices["choice-2"].VoteCount);
+    }
+
+    [Theory]
+    [InlineData(BallotsCast + 1)]
+    [InlineData(BallotsCast + 9)]
+    [InlineData(1000)]
+    public void Decrypt_CountAboveBallotsCast_ThrowsPlainException(int count)
+    {
+        var exception = Assert.Throws<Exception>(() => DecryptCounts(5, count));
+
+        Assert.Equal("Tally did not decrypt successfully.", exception.Message);
+    }
+}

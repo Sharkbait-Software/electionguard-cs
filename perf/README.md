@@ -124,11 +124,13 @@ a budget-exceeded phase, so it can never be read as a legitimate (and possibly z
 by a later `compare` — which in any case refuses to judge an `error`/`failed` record at all, per
 above.
 
-Budgets exist because the code under measurement is expected to get faster. `large` currently
-budgets `DecryptTally` at 30 minutes, which it will exhaust: `TallyAdmin` performs `BallotsCast + 1`
-modular exponentiations per choice and does not stop on a match, so a million-ballot decryption is
-not currently practical. That is a recorded fact about a real limitation rather than a hung machine,
-and when the algorithm improves, raising the budget is a one-line edit to `large.json`.
+Budgets exist because the code under measurement is expected to get faster, and a phase that is
+impractical today should produce a record rather than a hung machine. `DecryptTally` was the
+example: `TallyAdmin` used to perform `BallotsCast + 1` modular exponentiations per choice, which
+made a million-ballot decryption impossible inside `large`'s 30-minute budget. It now recovers each
+count with a baby-step giant-step search sharing one table across choices, about
+2·sqrt(choices x BallotsCast) multiplies in all, and `xsmall`'s decryption fell from 28.5 s to about
+50 ms; the budget stays as a backstop.
 
 ## Why the harness streams
 

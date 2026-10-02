@@ -255,10 +255,7 @@ public sealed class ScenarioRunner
 
                 using (aggregate.Enter())
                 {
-                    foreach (var encryptedBallot in encryptedChunk)
-                    {
-                        encryptedTally.AddBallot(encryptedBallot);
-                    }
+                    encryptedTally.AddBallots(encryptedChunk, parallelism);
                 }
 
                 aggregate.RecordBallots(chunkSize);
@@ -296,7 +293,7 @@ public sealed class ScenarioRunner
                         // timed-out verification is ABANDONED, not cancelled -- it keeps running until it
                         // finishes on its own.
                         var verifyTask = Task.Run(() =>
-                            new BallotAggregationVerification().Verify(retainedBallots, _manifest, encryptedTally));
+                            new BallotAggregationVerification().Verify(retainedBallots, _manifest, encryptedTally, parallelism));
 
                         if (verifyTask.Wait(tallyVerifyBudget.Value))
                         {
@@ -309,7 +306,7 @@ public sealed class ScenarioRunner
                     }
                     else
                     {
-                        new BallotAggregationVerification().Verify(retainedBallots, _manifest, encryptedTally);
+                        new BallotAggregationVerification().Verify(retainedBallots, _manifest, encryptedTally, parallelism);
                         tallyVerify.RecordBallots(retainedBallots.Count);
                     }
                 }
@@ -401,10 +398,11 @@ public sealed class ScenarioRunner
                     guardianSet.Guardians
                         .Take(_scenario.Guardians.K)
                         .Select(guardian => new TallyGuardian(guardian.Index, guardianSet.SecretShares[guardian.Index])
-                            .Decrypt(encryptedTally))
+                            .Decrypt(encryptedTally, parallelism))
                         .ToList(),
                     encryptedTally,
-                    guardianSet.ElectionPublicKeys);
+                    guardianSet.ElectionPublicKeys,
+                    parallelism);
 
             DecryptedTally? decryptedTally = null;
             bool decryptTimedOut = false;
@@ -415,11 +413,10 @@ public sealed class ScenarioRunner
                 {
                     if (decryptBudget.HasValue)
                     {
-                        // TallyAdmin.Decrypt brute-forces a discrete log per choice with no early exit
-                        // and no CancellationToken, so the only way to bound its wall time is to run it
-                        // on another thread and stop waiting. When the budget expires the task is
-                        // ABANDONED, not cancelled: it keeps running on a thread-pool thread until it
-                        // finishes on its own, however long that takes. In this CLI the process exits
+                        // TallyAdmin.Decrypt has no CancellationToken, so the only way to bound its wall
+                        // time is to run it on another thread and stop waiting. When the budget expires
+                        // the task is ABANDONED, not cancelled: it keeps running on a thread-pool thread
+                        // until it finishes on its own, however long that takes. In this CLI the process exits
                         // shortly after Run() returns, which reclaims the thread; a long-lived host that
                         // embedded this runner would keep burning a core for the abandoned decryption's
                         // entire remaining run time.

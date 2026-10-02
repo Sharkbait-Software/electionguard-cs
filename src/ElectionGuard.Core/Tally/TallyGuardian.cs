@@ -18,44 +18,63 @@ public class TallyGuardian
     private readonly GuardianIndex _index;
     private readonly GuardianSecretShares _shares;
 
-    public PartialTallyDecryption Decrypt(EncryptedTally encryptedTally)
+    /// <summary>
+    /// This guardian's partial decryption M_i = A^s_i of every aggregate choice, computed on up to
+    /// <paramref name="maxDegreeOfParallelism"/> threads (-1, the default, for no limit). Each
+    /// choice's exponentiation is independent of every other's.
+    /// </summary>
+    public PartialTallyDecryption Decrypt(EncryptedTally encryptedTally, int maxDegreeOfParallelism = -1)
     {
+        var choices = AggregateChoices(encryptedTally);
+        var shares = new IntegerModP[choices.Length];
+        Parallel.For(0, choices.Length, new ParallelOptions { MaxDegreeOfParallelism = maxDegreeOfParallelism }, i =>
+        {
+            shares[i] = MontgomeryModP.PowModP(choices[i].Aggregate.A, _shares.VoteEncryptionKeyShare);
+        });
+
         var partialTally = new PartialTallyDecryption
         {
             GuardianIndex = _index,
             Contests = new Dictionary<string, PartialTallyContestDecryption>(),
         };
 
-        foreach (var contest in encryptedTally.Contests)
+        for (int i = 0; i < choices.Length; i++)
         {
-            var partialContest = new PartialTallyContestDecryption
+            if (!partialTally.Contests.TryGetValue(choices[i].ContestId, out var partialContest))
             {
-                Choices = new Dictionary<string, PartialTallyChoiceDecryption>(),
-            };
-            partialTally.Contests[contest.Key] = partialContest;
-
-            foreach (var choice in contest.Value.Choices)
-            {
-                var mi = MontgomeryModP.PowModP(choice.Value.A, _shares.VoteEncryptionKeyShare);
-                partialContest.Choices[choice.Key] = new PartialTallyChoiceDecryption
+                partialContest = new PartialTallyContestDecryption
                 {
-                    Mi = mi,
+                    Choices = new Dictionary<string, PartialTallyChoiceDecryption>(),
                 };
+                partialTally.Contests[choices[i].ContestId] = partialContest;
             }
+
+            partialContest.Choices[choices[i].ChoiceId] = new PartialTallyChoiceDecryption
+            {
+                Mi = shares[i],
+            };
         }
 
         return partialTally;
+    }
+
+    /// <summary>Every aggregate choice of the tally, contest by contest, in the tally's own order.</summary>
+    internal static (string ContestId, string ChoiceId, EncryptedTally.EncryptedAggregateChoice Aggregate)[] AggregateChoices(EncryptedTally encryptedTally)
+    {
+        return encryptedTally.Contests
+            .SelectMany(contest => contest.Value.Choices.Select(choice => (contest.Key, choice.Key, choice.Value)))
+            .ToArray();
     }
 }
 
 public class TallyAdmin
 {
-    public DecryptedTally Decrypt(List<PartialTallyDecryption> partialDecryptions, EncryptedTally encryptedTally, ElectionPublicKeys publicKeys)
+    /// <summary>
+    /// Combines threshold-many partial decryptions into the decrypted tally (§3.6), working on up to
+    /// <paramref name="maxDegreeOfParallelism"/> threads (-1, the default, for no limit).
+    /// </summary>
+    public DecryptedTally Decrypt(List<PartialTallyDecryption> partialDecryptions, EncryptedTally encryptedTally, ElectionPublicKeys publicKeys, int maxDegreeOfParallelism = -1)
     {
-        var decryptedTally = new DecryptedTally
-        {
-            Contests = new Dictionary<string, DecryptedContest>(),
-        };
         partialDecryptions = partialDecryptions.OrderBy(x => x.GuardianIndex.Index).ToList();
 
         var availableGuardians = partialDecryptions.Select(x => x.GuardianIndex).ToList();
@@ -66,70 +85,118 @@ public class TallyAdmin
             lagrangeCoefficients[partialDecryptions[i].GuardianIndex] = coefficient;
         }
 
-        foreach (var encryptedContest in encryptedTally.Contests)
+        var choices = TallyGuardian.AggregateChoices(encryptedTally);
+        var options = new ParallelOptions { MaxDegreeOfParallelism = maxDegreeOfParallelism };
+
+        // M = prod M_i^w_i for every choice. These exponentiations are most of what is left of
+        // decryption, and every choice's are independent of every other's.
+        var combined = new IntegerModP[choices.Length];
+        Parallel.For(0, choices.Length, options, c =>
         {
-            var decryptedContest = new DecryptedContest
+            IntegerModP m = 1;
+            foreach (var partialDecryption in partialDecryptions)
             {
-                Choices = new Dictionary<string, DecryptedChoice>(),
-            };
-            decryptedTally.Contests[encryptedContest.Key] = decryptedContest;
-
-            foreach (var encryptedChoice in encryptedContest.Value.Choices)
-            {
-                IntegerModP m = 0;
-                foreach(var partialDecryption in partialDecryptions)
-                {
-                    var partialContest = partialDecryption.Contests[encryptedContest.Key];
-                    var partialChoice = partialContest.Choices[encryptedChoice.Key];
-                    var lagrangeCoefficient = lagrangeCoefficients[partialDecryption.GuardianIndex];
-
-                    var miwi = MontgomeryModP.PowModP(partialChoice.Mi, lagrangeCoefficient);
-                    if(m == 0)
-                    {
-                        m = miwi;
-                    }
-                    else
-                    {
-                        m *= miwi;
-                    }
-                }
-
-                var t = encryptedChoice.Value.B / m;
-
-                int result = -1;
-                for (int i = 0; i <= encryptedTally.BallotsCast; i++)
-                {
-                    // Deliberately NOT the Montgomery path, despite K being a fixed base.
-                    //
-                    // The exponent here is the loop counter, so it is tiny -- around ten bits for a
-                    // thousand ballots -- and public. BigInteger.ModPow scales with the magnitude of
-                    // the exponent and finishes such a case in roughly fifteen multiplications. The
-                    // Montgomery path deliberately does not scale that way: it walks the full width
-                    // of Z_q whatever the exponent's value, because varying the work with a secret
-                    // nonce is a leak. That is the right trade where the exponent is a nonce and the
-                    // wrong one here, and measurement agrees -- routing this loop through Montgomery
-                    // made DecryptTally ten times slower.
-                    var maybeT = IntegerModP.PowModP(publicKeys.VoteEncryptionKey, new IntegerModQ(i));
-                    if (maybeT == t)
-                    {
-                        result = i;
-                    }
-                }
-
-                if (result == -1)
-                {
-                    throw new Exception($"Tally did not decrypt successfully.");
-                }
-
-                var decryptedChoice = new DecryptedChoice
-                {
-                    VoteCount = result,
-                };
-                decryptedContest.Choices[encryptedChoice.Key] = decryptedChoice;
+                var partialChoice = partialDecryption.Contests[choices[c].ContestId].Choices[choices[c].ChoiceId];
+                var lagrangeCoefficient = lagrangeCoefficients[partialDecryption.GuardianIndex];
+                m *= MontgomeryModP.PowModP(partialChoice.Mi, lagrangeCoefficient);
             }
+
+            combined[c] = m;
+        });
+
+        // T = B / M. A zero M, which only a corrupt share can produce, has no inverse and no count
+        // to recover.
+        if (combined.Any(m => m == 0))
+        {
+            throw new Exception($"Tally did not decrypt successfully.");
+        }
+
+        var inverses = InvertAll(combined);
+
+        // One table for every choice: each count lies in [0, BallotsCast], and K is the same base
+        // throughout. See BoundedDiscreteLog for why this replaced trying every candidate. The count
+        // is published once decrypted, so the variable-time search, which stops as soon as it finds
+        // it, gives nothing away.
+        var discreteLog = new BoundedDiscreteLog(publicKeys.VoteEncryptionKey, encryptedTally.BallotsCast, choices.Length);
+        var counts = new int[choices.Length];
+        int failures = 0;
+        Parallel.For(0, choices.Length, options, c =>
+        {
+            var t = choices[c].Aggregate.B * inverses[c];
+            if (!discreteLog.TryFind(t, out counts[c]))
+            {
+                Interlocked.Increment(ref failures);
+            }
+        });
+
+        // Thrown here rather than inside the loop, where Parallel.For would wrap it in an
+        // AggregateException.
+        if (failures > 0)
+        {
+            throw new Exception($"Tally did not decrypt successfully.");
+        }
+
+        var decryptedTally = new DecryptedTally
+        {
+            Contests = new Dictionary<string, DecryptedContest>(),
+        };
+
+        for (int c = 0; c < choices.Length; c++)
+        {
+            if (!decryptedTally.Contests.TryGetValue(choices[c].ContestId, out var decryptedContest))
+            {
+                decryptedContest = new DecryptedContest
+                {
+                    Choices = new Dictionary<string, DecryptedChoice>(),
+                };
+                decryptedTally.Contests[choices[c].ContestId] = decryptedContest;
+            }
+
+            decryptedContest.Choices[choices[c].ChoiceId] = new DecryptedChoice
+            {
+                VoteCount = counts[c],
+            };
         }
 
         return decryptedTally;
+    }
+
+    /// <summary>
+    /// The inverse of every value, all nonzero, for the price of one inversion and three
+    /// multiplications per value (Montgomery's trick): invert the product of them all, then peel
+    /// each value's inverse off it from the back. A Euclidean inversion of a 4096-bit residue costs
+    /// about as much as 25 multiplications and allocates a BigInteger per division step, so inverting
+    /// each choice separately allocated more than the rest of decryption put together.
+    ///
+    /// The values are combined partial decryptions, which are published, so the variable-time
+    /// inversion is safe here.
+    /// </summary>
+    internal static IntegerModP[] InvertAll(IntegerModP[] values)
+    {
+        var inverses = new IntegerModP[values.Length];
+        if (values.Length == 0)
+        {
+            return inverses;
+        }
+
+        // prefix[i] = values[0] * ... * values[i].
+        var prefix = new IntegerModP[values.Length];
+        prefix[0] = values[0];
+        for (int i = 1; i < values.Length; i++)
+        {
+            prefix[i] = prefix[i - 1] * values[i];
+        }
+
+        // Invariant at the top of each iteration: remaining = (values[0] * ... * values[i])^-1.
+        var remaining = new IntegerModP(prefix[^1].ToBigInteger().ModInverseVariableTime(EGParameters.P));
+        for (int i = values.Length - 1; i > 0; i--)
+        {
+            inverses[i] = remaining * prefix[i - 1];
+            remaining *= values[i];
+        }
+
+        inverses[0] = remaining;
+        return inverses;
     }
 
     private IntegerModQ CalculateLagrangeCoefficient(GuardianIndex i, IEnumerable<GuardianIndex> availableGuardians)

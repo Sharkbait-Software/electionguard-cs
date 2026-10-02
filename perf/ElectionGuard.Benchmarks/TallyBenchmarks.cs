@@ -5,9 +5,9 @@ using ElectionGuard.Core.Tally;
 namespace ElectionGuard.Benchmarks;
 
 /// <summary>
-/// TallyAdmin.Decrypt performs BallotsCast + 1 modular exponentiations per choice and does not stop
-/// on a match, so parameterising by ballot count plots that curve directly. Keep the parameter
-/// values small: they are the cost, not the workload.
+/// TallyAdmin.Decrypt's discrete-log search is baby-step giant-step over [0, BallotsCast], so its cost
+/// grows with the square root of the ballot count; parameterising by ballot count plots that curve
+/// directly. The fixed cost per choice (combining partial decryptions) dominates at these sizes.
 /// </summary>
 [MemoryDiagnoser]
 public class TallyBenchmarks

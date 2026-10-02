@@ -3,6 +3,7 @@ using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.Models;
 using ElectionGuard.Core.Tally;
 using ElectionGuard.Testing.Common;
+using System.Numerics;
 
 namespace ElectionGuard.Core.UnitTests.Tally;
 
@@ -218,5 +219,129 @@ public class EncryptedTallyTests
         });
         tally.AddBallot(ballot2);
         Assert.Equal(2, tally.BallotsCast);
+    }
+
+    /// <summary>Hand-crafted ballots with random ciphertext components and a mix of weights.</summary>
+    private static List<EncryptedBallot> CreateRandomBallots(int count, int seed)
+    {
+        var random = new Random(seed);
+        IntegerModP RandomResidue()
+        {
+            byte[] bytes = new byte[520];
+            random.NextBytes(bytes);
+            return new IntegerModP(new BigInteger(bytes, isUnsigned: true));
+        }
+
+        return Enumerable.Range(0, count)
+            .Select(i => CreateHandCraftedBallot($"ballot-{i}", new()
+            {
+                ["choice-1"] = (RandomResidue(), RandomResidue()),
+                ["choice-2"] = (RandomResidue(), RandomResidue()),
+            }, weight: i % 5 == 0 ? 3 : 1))
+            .ToList();
+    }
+
+    [Theory]
+    [InlineData(0, -1)]
+    [InlineData(5, -1)]
+    [InlineData(16, -1)]
+    [InlineData(17, -1)]
+    [InlineData(200, -1)]
+    [InlineData(200, 1)]
+    [InlineData(200, 3)]
+    public void AddBallots_MatchesAddBallotOneAtATime(int ballotCount, int maxDegreeOfParallelism)
+    {
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest();
+        var ballots = CreateRandomBallots(ballotCount, seed: ballotCount);
+
+        var sequential = new EncryptedTally(manifest);
+        foreach (var ballot in ballots)
+        {
+            sequential.AddBallot(ballot);
+        }
+
+        var batched = new EncryptedTally(manifest);
+        batched.AddBallots(ballots, maxDegreeOfParallelism);
+
+        Assert.Equal(ballotCount, batched.BallotsCast);
+        foreach (var choiceId in new[] { "choice-1", "choice-2" })
+        {
+            var expected = sequential.Contests["contest-1"].Choices[choiceId];
+            var actual = batched.Contests["contest-1"].Choices[choiceId];
+            Assert.Equal(expected.A, actual.A);
+            Assert.Equal(expected.B, actual.B);
+        }
+    }
+
+    [Fact]
+    public void AddBallots_MatchesBigIntegerProduct()
+    {
+        // Independent of AddBallot: the aggregate is the plain product of every alpha (and beta),
+        // each raised to its ballot's weight.
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest();
+        var ballots = CreateRandomBallots(100, seed: 7);
+
+        var tally = new EncryptedTally(manifest);
+        tally.AddBallots(ballots);
+
+        BigInteger p = EGParameters.P;
+        BigInteger expectedA = BigInteger.One;
+        BigInteger expectedB = BigInteger.One;
+        foreach (var ballot in ballots)
+        {
+            var selection = ballot.Contests[0].Choices.Single(x => x.ChoiceId == "choice-2");
+            expectedA = expectedA * BigInteger.ModPow(selection.Alpha, ballot.Weight, p) % p;
+            expectedB = expectedB * BigInteger.ModPow(selection.Beta, ballot.Weight, p) % p;
+        }
+
+        var choice = tally.Contests["contest-1"].Choices["choice-2"];
+        Assert.Equal(expectedA, choice.A.ToBigInteger());
+        Assert.Equal(expectedB, choice.B.ToBigInteger());
+    }
+
+    [Fact]
+    public void AddBallots_AfterAddBallot_Accumulates()
+    {
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest();
+        var ballots = CreateRandomBallots(60, seed: 11);
+
+        var sequential = new EncryptedTally(manifest);
+        foreach (var ballot in ballots)
+        {
+            sequential.AddBallot(ballot);
+        }
+
+        var mixed = new EncryptedTally(manifest);
+        mixed.AddBallot(ballots[0]);
+        mixed.AddBallots(ballots.Skip(1).Take(40).ToList());
+        mixed.AddBallots(ballots.Skip(41).ToList());
+
+        Assert.Equal(60, mixed.BallotsCast);
+        var expected = sequential.Contests["contest-1"].Choices["choice-1"];
+        var actual = mixed.Contests["contest-1"].Choices["choice-1"];
+        Assert.Equal(expected.A, actual.A);
+        Assert.Equal(expected.B, actual.B);
+    }
+
+    [Fact]
+    public void AggregateSetter_RestartsTheProduct()
+    {
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest();
+        var tally = new EncryptedTally(manifest);
+        tally.AddBallots(CreateRandomBallots(30, seed: 13));
+
+        var choice = tally.Contests["contest-1"].Choices["choice-1"];
+        choice.A = new IntegerModP(7);
+        choice.B = new IntegerModP(11);
+        Assert.Equal(new IntegerModP(7), choice.A);
+        Assert.Equal(new IntegerModP(11), choice.B);
+
+        tally.AddBallot(CreateHandCraftedBallot("ballot-x", new()
+        {
+            ["choice-1"] = (new IntegerModP(13), new IntegerModP(17)),
+            ["choice-2"] = (new IntegerModP(1), new IntegerModP(1)),
+        }));
+        Assert.Equal(new IntegerModP(7 * 13), choice.A);
+        Assert.Equal(new IntegerModP(11 * 17), choice.B);
     }
 }

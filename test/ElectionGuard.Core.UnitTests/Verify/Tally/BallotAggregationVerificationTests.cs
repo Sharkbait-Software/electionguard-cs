@@ -95,4 +95,23 @@ public class BallotAggregationVerificationTests
         Assert.IsType<Exception>(exception);
         Assert.IsNotType<VerificationFailedException>(exception);
     }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(1)]
+    [InlineData(4)]
+    public void Verify_ManyBallots_ValidTallyPassesAndAMissingBallotIsDetected(int maxDegreeOfParallelism)
+    {
+        // Enough ballots for EncryptedTally.AddBallots to split the recomputation across workers.
+        // The scenario's two ballots repeat; aggregation does not care whether ballots are distinct.
+        var scenario = Build();
+        var ballots = Enumerable.Range(0, 20).SelectMany(_ => scenario.Ballots).ToList();
+        var tally = ElectionFixtureBuilder.CreateEncryptedTally(scenario.Manifest, ballots.ToArray());
+        var verification = new BallotAggregationVerification();
+
+        Assert.Null(Record.Exception(() => verification.Verify(ballots, scenario.Manifest, tally, maxDegreeOfParallelism)));
+
+        var missingOne = ballots.Skip(1).ToList();
+        Assert.Throws<Exception>(() => verification.Verify(missingOne, scenario.Manifest, tally, maxDegreeOfParallelism));
+    }
 }
