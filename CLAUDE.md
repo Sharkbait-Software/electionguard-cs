@@ -69,13 +69,24 @@ The library models the ElectionGuard protocol as a straight-line pipeline, and t
   Exponents that are not in Z_q (the `x^q mod p` subgroup checks in Verifications 2, 6 and 7) must
   use the `BigInteger` exponent overload: reducing q into `IntegerModQ` makes it zero and turns
   those checks into `x^0 = 1`, which passes for everything.
-- Verifications 6.A and 7.A check a whole ballot's ciphertext components at once through
-  `SubgroupMembership.IndexOfFirstNonMember`: an exact Jacobi-symbol pass, then a probabilistic
-  batch test (random 128-bit exponents, one multi-exponentiation, one `^q`). Its soundness rests on
-  p - 1 = 2·q·r' with r' a large prime, which holds for the spec's parameters only, so it falls back
-  to exact per-value checks under any other parameter set. A unit test pins that factorization.
+- Verifications 6.A and 7.A are normally decided exactly, for free, on the squaring chains the
+  range-proof checks walk anyway: q = 2^256 - 189, so for x != 0, x^q = 1 iff x^(2^256) = x^189,
+  and `MontgomeryModP.PowVariableTimeMontgomeryCheckingMembership` carries alpha's and beta's chains
+  to 2^256 and gathers x^189 from them (`TryGetChainMembershipShape` gates this on q = 2^t - c with
+  few set bits in c). That reorders work but must not reorder failures -- 6.A/7.A for any value is
+  reported before anything else -- so `VerifyFused` runs only when every structural check (manifest
+  lookups, proof count, Z_q ranges) passes; otherwise `VerifyInOrder`, the original order, runs.
+  The fused path stops at the first 6.D/7.D and runs the batch test below over the whole ballot
+  before reporting it. Tampering alpha or beta also breaks its proof, so only a forged *valid* proof
+  for a non-member (`NonMemberRangeProof` in the tests: -alpha with even challenges) shows the fused
+  check is applied at all. The batch test, `SubgroupMembership.IndexOfFirstNonMember`, remains for
+  those paths: an exact Jacobi-symbol pass, then a probabilistic batch test (random 128-bit
+  exponents, one multi-exponentiation, one `^q`). Its soundness rests on p - 1 = 2·q·r' with r' a
+  large prime, which holds for the spec's parameters only, so it falls back to exact per-value
+  checks under any other parameter set. A unit test pins that factorization.
 - `MontgomeryModP.PowModPVariableTime` raises one base to several exponents over one shared
-  squaring chain (Yao/BGMW, w = 4), ~38% fewer Montgomery ops per base at two exponents. It is
+  squaring chain (Yao/BGMW with right-to-left sliding windows, odd digits, w = 4), walking
+  x^(2^i) once and keeping only the current power plus 2^(w-1) buckets per exponent. It is
   **variable-time and verifier-only**: its work depends on the exponents' digits, so it is safe only
   for public values such as the proof challenges c_j of Verifications 6 and 7. Never call it from
   `BallotEncryption`, `KeyGeneration` or `Tally`, or with a nonce or secret key.

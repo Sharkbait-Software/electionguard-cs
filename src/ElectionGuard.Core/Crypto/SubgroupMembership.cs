@@ -11,8 +11,11 @@ namespace ElectionGuard.Core.Crypto;
 ///
 /// The exact test, x^q mod p = 1, is a full exponentiation with no precomputed table, since the
 /// base is different on every ballot. A ballot carries hundreds of such values, so these checks were
-/// about a third of ballot verification. <see cref="IndexOfFirstNonMember"/> instead tests a whole
-/// list at once, in two parts:
+/// about a third of ballot verification. Verifications 6 and 7 now normally decide membership
+/// exactly on the squaring chains their range-proof checks walk anyway (see
+/// <see cref="MontgomeryModP.PowVariableTimeMontgomeryCheckingMembership"/>), and reach this class
+/// only on their in-order and failure paths. <see cref="IndexOfFirstNonMember"/> tests a whole list
+/// at once, in two parts:
 ///
 /// 1. The Jacobi symbol of each value. p - 1 = 2 * q * r', with q and r' odd primes, so every member
 ///    of the subgroup is a quadratic residue and has symbol 1. Any value whose symbol is not 1 is

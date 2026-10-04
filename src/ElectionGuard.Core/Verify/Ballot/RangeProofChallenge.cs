@@ -27,7 +27,10 @@ namespace ElectionGuard.Core.Verify.Ballot;
 /// This changes how the numbers are computed, not which numbers: the hash input is byte-for-byte
 /// what the straightforward construction builds, and unit tests pin that on both engines, with and
 /// without tables. It performs no validation; the verifications check the proofs' challenges and
-/// responses before calling it, so the exceptions they raise are unchanged.
+/// responses before calling it, so the exceptions they raise are unchanged. The one overload that
+/// reports anything else, <see cref="Compute(byte[], ReadOnlySpan{byte}, IntegerModP, IntegerModP, ReadOnlySpan{ChallengeResponsePair}, out bool)"/>,
+/// also says whether alpha and beta lie in Z_p^r, read off the squaring chains it walks anyway, and
+/// leaves acting on that to the caller.
 ///
 /// An instance is immutable and holds no working state, so one may be shared by parallel callers.
 /// It is meant to be built once per ballot, so the table lookups happen once rather than once per
@@ -99,9 +102,32 @@ internal sealed class RangeProofChallenge
         ReadOnlySpan<ChallengeResponsePair> proofs)
     {
         return _engine is not null
-            ? Compute(new Avx512MontgomeryArithmetic(_engine), key, prefix, alpha, beta, proofs)
-            : Compute(new ScalarMontgomeryArithmetic(_context), key, prefix, alpha, beta, proofs);
+            ? Compute(new Avx512MontgomeryArithmetic(_engine), key, prefix, alpha, beta, proofs, checkMembership: false, out _)
+            : Compute(new ScalarMontgomeryArithmetic(_context), key, prefix, alpha, beta, proofs, checkMembership: false, out _);
     }
+
+    /// <summary>
+    /// <see cref="Compute(byte[], ReadOnlySpan{byte}, IntegerModP, IntegerModP, ReadOnlySpan{ChallengeResponsePair})"/>,
+    /// also deciding exactly whether alpha and beta are both in Z_p^r (Verifications 6.A and 7.A),
+    /// from the squaring chains that raise them to the challenges. See
+    /// <see cref="MontgomeryModP.PowVariableTimeMontgomeryCheckingMembership"/>. Only for an active q
+    /// that <see cref="CanCheckMembership"/> accepts.
+    /// </summary>
+    public IntegerModQ Compute(
+        byte[] key,
+        ReadOnlySpan<byte> prefix,
+        IntegerModP alpha,
+        IntegerModP beta,
+        ReadOnlySpan<ChallengeResponsePair> proofs,
+        out bool componentsAreMembers)
+    {
+        return _engine is not null
+            ? Compute(new Avx512MontgomeryArithmetic(_engine), key, prefix, alpha, beta, proofs, checkMembership: true, out componentsAreMembers)
+            : Compute(new ScalarMontgomeryArithmetic(_context), key, prefix, alpha, beta, proofs, checkMembership: true, out componentsAreMembers);
+    }
+
+    /// <summary>Whether the active q allows the membership-checking overload of Compute.</summary>
+    public static bool CanCheckMembership => MontgomeryModP.TryGetChainMembershipShape(out _);
 
     private IntegerModQ Compute<TArithmetic>(
         TArithmetic arithmetic,
@@ -109,7 +135,9 @@ internal sealed class RangeProofChallenge
         ReadOnlySpan<byte> prefix,
         IntegerModP alpha,
         IntegerModP beta,
-        ReadOnlySpan<ChallengeResponsePair> proofs)
+        ReadOnlySpan<ChallengeResponsePair> proofs,
+        bool checkMembership,
+        out bool componentsAreMembers)
         where TArithmetic : struct, IMontgomeryArithmetic
     {
         int m = proofs.Length;
@@ -132,8 +160,18 @@ internal sealed class RangeProofChallenge
             // all of a base's exponents, is safe here.
             Span<ulong> alphaPowers = powersArray.AsSpan(0, m * s);
             Span<ulong> betaPowers = powersArray.AsSpan(m * s, m * s);
-            MontgomeryModP.PowVariableTimeMontgomery(alpha.ToBigInteger(), challenges, alphaPowers, arithmetic);
-            MontgomeryModP.PowVariableTimeMontgomery(beta.ToBigInteger(), challenges, betaPowers, arithmetic);
+            if (checkMembership)
+            {
+                bool alphaIsMember = MontgomeryModP.PowVariableTimeMontgomeryCheckingMembership(alpha, challenges, alphaPowers, arithmetic);
+                bool betaIsMember = MontgomeryModP.PowVariableTimeMontgomeryCheckingMembership(beta, challenges, betaPowers, arithmetic);
+                componentsAreMembers = alphaIsMember && betaIsMember;
+            }
+            else
+            {
+                MontgomeryModP.PowVariableTimeMontgomery(alpha.ToBigInteger(), challenges, alphaPowers, arithmetic);
+                MontgomeryModP.PowVariableTimeMontgomery(beta.ToBigInteger(), challenges, betaPowers, arithmetic);
+                componentsAreMembers = false;
+            }
 
             // g and K in Montgomery form, needed only for a base without a matching table.
             Span<ulong> gMontgomery = s <= MaxStackAllocWidth ? stackalloc ulong[MaxStackAllocWidth] : new ulong[s];

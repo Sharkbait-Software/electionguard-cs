@@ -140,20 +140,18 @@ public static class MontgomeryModP
     }
 
     /// <summary>
-    /// Largest Yao window considered by <see cref="ChooseSharedSquaringWindowBits"/>. Above this the
-    /// 2^w - 1 bucket-combining multiplies dominate for any exponent size this library uses, and it
-    /// keeps every digit within two bytes of the exponent.
+    /// Largest sliding window considered by <see cref="ChooseSlidingWindowBits"/>. Above this the
+    /// bucket-combining multiplies dominate for any exponent size this library uses, and it keeps
+    /// every digit within a byte.
     /// </summary>
-    private const int MaxSharedSquaringWindowBits = 8;
+    private const int MaxSlidingWindowBits = 8;
 
     /// <summary>
-    /// Cost of a squaring relative to a multiply on <see cref="MontgomeryContext"/>: its SOS squaring
-    /// does s(s+1)/2 + s^2 limb products against CIOS's 2s^2, about three quarters at 64 limbs.
-    /// <see cref="Avx512Montgomery"/> has no squaring shortcut, so there it is 1.
+    /// Most set bits c may have, for q = 2^t - c, for the membership check of
+    /// <see cref="PowVariableTimeMontgomeryCheckingMembership"/>: each costs a multiply per base.
+    /// The spec's c = 189 has six.
     /// </summary>
-    private const double ScalarSquareCost = 0.75;
-
-    private const double Avx512SquareCost = 1.0;
+    private const int MaxMembershipRemainderBits = 16;
 
     /// <summary>
     /// Single-value buffers of the shared-squaring path are stack-allocated up to this width, which
@@ -161,7 +159,7 @@ public static class MontgomeryModP
     /// </summary>
     private const int MaxStackAllocWidth = Avx512Montgomery.Lanes;
 
-    /// <summary>Digit buffers of the shared-squaring path longer than this go on the heap.</summary>
+    /// <summary>Digit buffers of the shared-squaring path longer than this are rented rather than stack-allocated.</summary>
     private const int MaxStackAllocDigits = 1024;
 
     /// <summary>
@@ -178,17 +176,18 @@ public static class MontgomeryModP
     ///
     /// Raising one base to m exponents with the table-free window costs m full squaring chains
     /// (256 squarings each for a 256-bit exponent). This instead uses Yao's method, the fixed-base
-    /// algorithm of Brickell, Gordon, McCurley and Wilson with a table built on the fly: write each
-    /// exponent e in base 2^w as sum d_i 2^(w i), compute x_i = basis^(2^(w i)) once (about 252
-    /// squarings in total at w = 4, shared by every exponent), and then evaluate
+    /// algorithm of Brickell, Gordon, McCurley and Wilson with the table built on the fly: walk the
+    /// chain x_i = basis^(2^i) once (about 255 squarings, shared by every exponent), and for each
+    /// exponent multiply each x_i into a bucket chosen by the exponent's digit at bit i, then raise
+    /// each bucket to its digit by a running product:
     ///
-    ///   basis^e = prod_{d = 1}^{2^w - 1} ( prod_{i : d_i = d} x_i )^d
+    ///   basis^e = prod_d ( prod_{i : d_i = d} x_i )^d
     ///
-    /// with the running-product trick: walking d downward, B accumulates the x_i whose digit is d
-    /// and A multiplies in B after every step, so each x_i ends up raised to its own digit. That is
-    /// one multiply per non-zero digit plus 2^w - 1 to combine, about 75 multiplies per 256-bit
-    /// exponent at w = 4 and no squarings at all. For the m = 2 of a selection limit of 1 that is
-    /// 252 squarings + ~150 multiplies per base, against 512 squarings + ~158 multiplies separately.
+    /// The digits are right-to-left sliding windows, odd and at most w bits, so a 256-bit exponent
+    /// has about 256 / (w + 1) of them. At w = 4 that is about 51 multiplies to fill the buckets and
+    /// 16 to combine them, and no squarings at all. For the m = 2 of a selection limit of 1 that is
+    /// about 255 squarings + ~135 multiplies per base, against 512 squarings + ~158 multiplies
+    /// separately, and about 7% fewer operations than the fixed 4-bit windows this used before.
     ///
     /// On hardware with AVX-512F the whole computation stays in <see cref="Avx512Montgomery"/>'s
     /// representation: the base is converted in once, the chain and the combines use its multiply,
@@ -328,10 +327,88 @@ public static class MontgomeryModP
         BigInteger p = EGParameters.P;
         BigInteger reduced = basis.Sign >= 0 && basis < p ? basis : basis.Mod(p);
 
-        // typeof comparisons on a struct type parameter are JIT-time constants.
-        double squareCost = typeof(TArithmetic) == typeof(Avx512MontgomeryArithmetic) ? Avx512SquareCost : ScalarSquareCost;
-        int windowBits = ChooseSharedSquaringWindowBits(maxBits, exponents.Length, squareCost);
-        PowVariableTimeCore(reduced, exponents, results, maxBits, windowBits, arithmetic);
+        PowVariableTimeCore(reduced, exponents, results, maxBits, ChooseSlidingWindowBits(maxBits), arithmetic, membershipShape: null);
+    }
+
+    /// <summary>
+    /// <see cref="PowVariableTimeMontgomery"/>, also deciding, exactly, whether
+    /// <paramref name="basis"/> lies in Z_p^r: true when 0 &lt; basis &lt; p and basis^q = 1. The
+    /// subgroup test rides on the squaring chain the exponentiation walks anyway (see
+    /// <see cref="PowVariableTimeCore"/>), so it costs a handful of multiplies rather than the
+    /// exponentiation by q it replaces. Only available when q = 2^t - c for a c with few set bits;
+    /// callers check <see cref="TryGetChainMembershipShape"/> first. The same VARIABLE TIME, PUBLIC
+    /// EXPONENTS ONLY restriction applies to <paramref name="exponents"/>; the basis's membership is
+    /// decided by a comparison whose outcome is the public result.
+    /// </summary>
+    internal static bool PowVariableTimeMontgomeryCheckingMembership<TArithmetic>(
+        IntegerModP basis,
+        ReadOnlySpan<IntegerModQ> exponents,
+        Span<ulong> results,
+        TArithmetic arithmetic)
+        where TArithmetic : struct, IMontgomeryArithmetic
+    {
+        if (results.Length < exponents.Length * arithmetic.Width)
+        {
+            throw new ArgumentException("There must be exactly one result slot per exponent.", nameof(results));
+        }
+
+        if (!TryGetChainMembershipShape(out ChainMembershipShape shape))
+        {
+            throw new InvalidOperationException("The active q does not have the shape the chain membership check needs.");
+        }
+
+        BigInteger value = basis.ToBigInteger();
+        long maxBits = MaxExponentBits(exponents);
+        bool congruent = PowVariableTimeCore(value, exponents, results, maxBits, ChooseSlidingWindowBits(Math.Max(1, maxBits)), arithmetic, shape);
+
+        // basis = 0 satisfies 0^(2^t) = 0^c too; it is not in the group at all.
+        return congruent && value.Sign > 0 && value < EGParameters.P;
+    }
+
+    /// <summary>
+    /// q written as 2^<see cref="PowerOfTwo"/> - <see cref="Remainder"/>, with t the bit length of q,
+    /// for the chain membership check.
+    /// </summary>
+    internal readonly record struct ChainMembershipShape(int PowerOfTwo, ulong Remainder);
+
+    private sealed record MembershipShapeEntry(BigInteger Q, ChainMembershipShape? Shape);
+
+    private static MembershipShapeEntry? _membershipShape;
+
+    /// <summary>
+    /// Whether the active q is 2^t - c for a c with at most <see cref="MaxMembershipRemainderBits"/>
+    /// set bits, which the chain membership check needs; the spec's q = 2^256 - 189 is. Recomputed
+    /// only when <see cref="EGParameters"/> is pointed at a different q.
+    /// </summary>
+    internal static bool TryGetChainMembershipShape(out ChainMembershipShape shape)
+    {
+        BigInteger q = EGParameters.Q;
+        MembershipShapeEntry? entry = _membershipShape;
+        if (entry is null || entry.Q != q)
+        {
+            entry = new MembershipShapeEntry(q, ComputeMembershipShape(q));
+            Volatile.Write(ref _membershipShape, entry);
+        }
+
+        shape = entry.Shape.GetValueOrDefault();
+        return entry.Shape.HasValue;
+    }
+
+    private static ChainMembershipShape? ComputeMembershipShape(BigInteger q)
+    {
+        if (q.Sign <= 0)
+        {
+            return null;
+        }
+
+        int t = (int)q.GetBitLength();
+        BigInteger c = (BigInteger.One << t) - q;
+        if (c.Sign <= 0 || c.GetBitLength() > 63 || BitOperations.PopCount((ulong)c) > MaxMembershipRemainderBits)
+        {
+            return null;
+        }
+
+        return new ChainMembershipShape(t, (ulong)c);
     }
 
     private static long MaxExponentBits(ReadOnlySpan<IntegerModQ> exponents)
@@ -346,177 +423,256 @@ public static class MontgomeryModP
     }
 
     /// <summary>
-    /// The Yao evaluation behind <see cref="PowModPVariableTime(BigInteger, ReadOnlySpan{IntegerModQ}, Span{IntegerModP})"/>,
+    /// The evaluation behind <see cref="PowModPVariableTime(BigInteger, ReadOnlySpan{IntegerModQ}, Span{IntegerModP})"/>,
     /// generic over the representation so that each engine gets its own compiled copy.
-    /// <paramref name="basis"/> is already in [0, p) and at least one exponent is non-zero. Writes
-    /// each Montgomery-form result to its <see cref="IMontgomeryArithmetic.Width"/>-word slot of
-    /// <paramref name="results"/>.
+    /// <paramref name="basis"/> is already in [0, p). Writes each Montgomery-form result to its
+    /// <see cref="IMontgomeryArithmetic.Width"/>-word slot of <paramref name="results"/>.
+    ///
+    /// Yao's method with right-to-left sliding windows. Each exponent is recoded, from its least
+    /// significant bit up, into odd digits d of at most <paramref name="windowBits"/> bits, each at
+    /// the position i of its lowest bit, so e = sum d * 2^i: about bits / (w + 1) digits rather than
+    /// the bits / w of fixed windows. The chain basis^(2^i) is then walked once, from i = 0 up to the
+    /// highest digit position, and each power is multiplied into the bucket of every exponent with a
+    /// digit at that position; bucket d of an exponent ends up as the product of the powers carrying
+    /// digit d. Nothing of the chain is kept but the current power. Finally each exponent's buckets
+    /// are combined as prod B_d^d over the 2^(w - 1) odd d. Writing d = 2m + 1, that is
+    /// (prod B_d^m)^2 * prod B_d; walking m downward, A gathers the buckets and R multiplies in A
+    /// after every step but the last, which leaves R = prod B_d^m and A = prod B_d.
+    ///
+    /// With <paramref name="membershipShape"/> set, the same walk also decides whether the basis
+    /// lies in the order-q subgroup: q = 2^t - c, so for basis x invertible mod p, x^q = 1 exactly
+    /// when x^(2^t) = x^c. The walk is carried on to i = t, x^c is gathered from the chain powers at
+    /// c's set bits like one more exponent, and the two are compared. For the spec's
+    /// q = 2^256 - 189 that is at most a few more squarings, five multiplies and a comparison. The
+    /// basis 0 also satisfies the identity, so excluding it is the caller's job.
     /// </summary>
-    private static void PowVariableTimeCore<TArithmetic>(
+    private static bool PowVariableTimeCore<TArithmetic>(
         BigInteger basis,
         ReadOnlySpan<IntegerModQ> exponents,
         Span<ulong> results,
         long maxBits,
         int windowBits,
-        TArithmetic arithmetic)
+        TArithmetic arithmetic,
+        ChainMembershipShape? membershipShape)
         where TArithmetic : struct, IMontgomeryArithmetic
     {
         int s = arithmetic.Width;
-        int digitMask = (1 << windowBits) - 1;
-        int digitCount = (int)((maxBits + windowBits - 1) / windowBits);
+        int exponentCount = exponents.Length;
+        int positions = (int)maxBits;
+        int bucketsPerExponent = 1 << (windowBits - 1);
+        int bucketCount = exponentCount * bucketsPerExponent;
 
-        // Rented arrays hold stale data. That is harmless here: row 0 is written by ToMontgomery and
-        // every later row by the squaring that derives it, each before anything reads it.
-        ulong[] chainArray = ArrayPool<ulong>.Shared.Rent(digitCount * s);
+        // digitAt[k * positions + i] is exponent k's odd digit at bit i, or 0.
+        int digitLength = exponentCount * positions;
+        byte[]? rentedDigits = digitLength > MaxStackAllocDigits ? ArrayPool<byte>.Shared.Rent(digitLength) : null;
+        Span<byte> digitAt = rentedDigits is null ? stackalloc byte[MaxStackAllocDigits] : rentedDigits;
+        digitAt = digitAt[..digitLength];
+
+        Span<byte> exponentBuffer = stackalloc byte[ZqExponentBytes];
+        int lastPosition = -1;
+        for (int k = 0; k < exponentCount; k++)
+        {
+            BigInteger exponent = exponents[k].ToBigInteger();
+            ReadOnlySpan<byte> bytes = TryWriteBigEndian(exponent, exponentBuffer, padToLength: true, out _)
+                ? exponentBuffer
+                // Only reachable under a non-spec q wider than 256 bits.
+                : exponent.ToByteArray(isUnsigned: true, isBigEndian: true);
+            lastPosition = Math.Max(lastPosition, RecodeSlidingWindow(bytes, windowBits, digitAt.Slice(k * positions, positions)));
+        }
+
+        int chainEnd = lastPosition;
+        if (membershipShape is { } shape)
+        {
+            chainEnd = Math.Max(chainEnd, shape.PowerOfTwo);
+        }
+
+        // Rented arrays hold stale data, which is harmless: a bucket is only read once its flag says
+        // it has been written.
+        ulong[] bucketArray = ArrayPool<ulong>.Shared.Rent(Math.Max(1, bucketCount * s));
+        bool[] bucketFilledArray = ArrayPool<bool>.Shared.Rent(Math.Max(1, bucketCount));
         try
         {
-            Span<ulong> chain = chainArray.AsSpan(0, digitCount * s);
+            Span<ulong> buckets = bucketArray.AsSpan(0, bucketCount * s);
+            Span<bool> bucketFilled = bucketFilledArray.AsSpan(0, bucketCount);
+            bucketFilled.Clear();
 
-            // chain[i] = basis^(2^(w i)) in Montgomery form: the only squarings, done once for all
-            // exponents.
-            arithmetic.ToMontgomery(basis, chain[..s]);
-            for (int i = 1; i < digitCount; i++)
+            Span<ulong> power = s <= MaxStackAllocWidth ? stackalloc ulong[MaxStackAllocWidth] : new ulong[s];
+            Span<ulong> residue = s <= MaxStackAllocWidth ? stackalloc ulong[MaxStackAllocWidth] : new ulong[s];
+            power = power[..s];
+            residue = residue[..s];
+            bool residueFilled = false;
+            bool isMember = false;
+
+            arithmetic.ToMontgomery(basis, power);
+            for (int i = 0; ; i++)
             {
-                Span<ulong> next = chain.Slice(i * s, s);
-                arithmetic.Square(chain.Slice((i - 1) * s, s), next);
-                for (int square = 1; square < windowBits; square++)
+                if (i < positions)
                 {
-                    arithmetic.Square(next, next);
+                    for (int k = 0; k < exponentCount; k++)
+                    {
+                        int digit = digitAt[k * positions + i];
+                        if (digit != 0)
+                        {
+                            // Digits are odd, so digit >> 1 indexes the odd values 1, 3, 5, ...
+                            int bucket = k * bucketsPerExponent + (digit >> 1);
+                            MultiplyInto(arithmetic, buckets.Slice(bucket * s, s), ref bucketFilled[bucket], power);
+                        }
+                    }
                 }
+
+                if (membershipShape is { } check)
+                {
+                    if (i < 64 && ((check.Remainder >> i) & 1) != 0)
+                    {
+                        MultiplyInto(arithmetic, residue, ref residueFilled, power);
+                    }
+
+                    if (i == check.PowerOfTwo)
+                    {
+                        // power = basis^(2^t), residue = basis^c, and c > 0, so residue is filled.
+                        isMember = arithmetic.AreCongruent(power, residue);
+                    }
+                }
+
+                if (i >= chainEnd)
+                {
+                    break;
+                }
+
+                arithmetic.Square(power, power);
             }
 
-            Span<ulong> bucket = s <= MaxStackAllocWidth ? stackalloc ulong[MaxStackAllocWidth] : new ulong[s];
-            Span<ulong> accumulator = s <= MaxStackAllocWidth ? stackalloc ulong[MaxStackAllocWidth] : new ulong[s];
-            bucket = bucket[..s];
-            accumulator = accumulator[..s];
-
-            Span<byte> digits = digitCount <= MaxStackAllocDigits ? stackalloc byte[MaxStackAllocDigits] : new byte[digitCount];
-            digits = digits[..digitCount];
-
-            Span<byte> exponentBuffer = stackalloc byte[ZqExponentBytes];
-
-            for (int k = 0; k < exponents.Length; k++)
+            Span<ulong> gathered = s <= MaxStackAllocWidth ? stackalloc ulong[MaxStackAllocWidth] : new ulong[s];
+            Span<ulong> weighted = s <= MaxStackAllocWidth ? stackalloc ulong[MaxStackAllocWidth] : new ulong[s];
+            gathered = gathered[..s];
+            weighted = weighted[..s];
+            for (int k = 0; k < exponentCount; k++)
             {
-                BigInteger exponent = exponents[k].ToBigInteger();
-                ReadOnlySpan<byte> bytes = TryWriteBigEndian(exponent, exponentBuffer, padToLength: true, out _)
-                    ? exponentBuffer
-                    // Only reachable under a non-spec q wider than 256 bits.
-                    : exponent.ToByteArray(isUnsigned: true, isBigEndian: true);
-                ReadDigits(bytes, windowBits, digits);
-
-                // While either running product is still 1, the first factor is copied in rather
-                // than multiplied, saving a multiply each. Both are branches on the exponent's
-                // digits, which is fine only because the exponent is public.
-                bool bucketIsOne = true;
-                bool accumulatorIsOne = true;
-                for (int d = digitMask; d >= 1; d--)
+                // While a running product is still 1 the first factor is copied in rather than
+                // multiplied. These are branches on the exponent's digits, which is fine only because
+                // the exponent is public.
+                bool gatheredFilled = false;
+                bool weightedFilled = false;
+                for (int m = bucketsPerExponent - 1; m >= 0; m--)
                 {
-                    for (int i = 0; i < digitCount; i++)
+                    int bucket = k * bucketsPerExponent + m;
+                    if (bucketFilled[bucket])
                     {
-                        if (digits[i] != d)
-                        {
-                            continue;
-                        }
-
-                        ReadOnlySpan<ulong> power = chain.Slice(i * s, s);
-                        if (bucketIsOne)
-                        {
-                            power.CopyTo(bucket);
-                            bucketIsOne = false;
-                        }
-                        else
-                        {
-                            arithmetic.Multiply(bucket, power, bucket);
-                        }
+                        MultiplyInto(arithmetic, gathered, ref gatheredFilled, buckets.Slice(bucket * s, s));
                     }
 
-                    if (bucketIsOne)
+                    if (m >= 1 && gatheredFilled)
                     {
-                        continue;
-                    }
-
-                    if (accumulatorIsOne)
-                    {
-                        bucket.CopyTo(accumulator);
-                        accumulatorIsOne = false;
-                    }
-                    else
-                    {
-                        arithmetic.Multiply(accumulator, bucket, accumulator);
+                        MultiplyInto(arithmetic, weighted, ref weightedFilled, gathered);
                     }
                 }
 
                 Span<ulong> result = results.Slice(k * s, s);
-                if (accumulatorIsOne)
+                if (!gatheredFilled)
                 {
+                    // A zero exponent: no digits at all.
                     arithmetic.One.CopyTo(result);
+                }
+                else if (!weightedFilled)
+                {
+                    gathered.CopyTo(result);
                 }
                 else
                 {
-                    accumulator.CopyTo(result);
+                    arithmetic.Square(weighted, weighted);
+                    arithmetic.Multiply(weighted, gathered, result);
                 }
             }
+
+            return isMember;
         }
         finally
         {
-            ArrayPool<ulong>.Shared.Return(chainArray);
+            ArrayPool<ulong>.Shared.Return(bucketArray);
+            ArrayPool<bool>.Shared.Return(bucketFilledArray);
+            if (rentedDigits is not null)
+            {
+                ArrayPool<byte>.Shared.Return(rentedDigits);
+            }
         }
     }
 
     /// <summary>
-    /// Splits a big-endian exponent into base-2^<paramref name="windowBits"/> digits, least
-    /// significant first, filling all of <paramref name="digits"/>: digits past the exponent's own
-    /// length read as zero. A digit may straddle a byte boundary for widths that do not divide 8,
-    /// so each is assembled from up to two bytes; widths above 8 are never chosen.
+    /// accumulator *= factor, or accumulator = factor while <paramref name="filled"/> says the
+    /// accumulator still stands for 1, which saves the multiply.
     /// </summary>
-    private static void ReadDigits(ReadOnlySpan<byte> exponentBigEndian, int windowBits, Span<byte> digits)
+    private static void MultiplyInto<TArithmetic>(TArithmetic arithmetic, Span<ulong> accumulator, ref bool filled, ReadOnlySpan<ulong> factor)
+        where TArithmetic : struct, IMontgomeryArithmetic
     {
-        int mask = (1 << windowBits) - 1;
-        int last = exponentBigEndian.Length - 1;
-        for (int i = 0; i < digits.Length; i++)
+        if (filled)
         {
-            int bit = i * windowBits;
-            int index = last - (bit >> 3);
-            int offset = bit & 7;
-            if (index < 0)
+            arithmetic.Multiply(accumulator, factor, accumulator);
+        }
+        else
+        {
+            factor.CopyTo(accumulator);
+            filled = true;
+        }
+    }
+
+    /// <summary>
+    /// Recodes a big-endian exponent into right-to-left sliding-window digits: scanning up from bit
+    /// 0, every set bit starts a digit made of it and the <paramref name="windowBits"/> - 1 bits
+    /// above it, so each digit is odd and below 2^windowBits, and the scan resumes past the window.
+    /// <paramref name="digitAt"/>[i] receives the digit starting at bit i, or 0; it covers the
+    /// exponent's bit length, and bits a window reaches beyond it read as zero. Returns the highest
+    /// position holding a digit, or -1 for a zero exponent.
+    /// </summary>
+    internal static int RecodeSlidingWindow(ReadOnlySpan<byte> exponentBigEndian, int windowBits, Span<byte> digitAt)
+    {
+        digitAt.Clear();
+        int totalBits = exponentBigEndian.Length * 8;
+        int last = -1;
+        int i = 0;
+        while (i < digitAt.Length)
+        {
+            if (Bit(exponentBigEndian, i) == 0)
             {
-                digits[i] = 0;
+                i++;
                 continue;
             }
 
-            int value = exponentBigEndian[index] >> offset;
-            if (offset + windowBits > 8 && index > 0)
+            int digit = 0;
+            for (int j = 0; j < windowBits && i + j < totalBits; j++)
             {
-                value |= exponentBigEndian[index - 1] << (8 - offset);
+                digit |= Bit(exponentBigEndian, i + j) << j;
             }
 
-            digits[i] = (byte)(value & mask);
+            digitAt[i] = (byte)digit;
+            last = i;
+            i += windowBits;
         }
+
+        return last;
+    }
+
+    private static int Bit(ReadOnlySpan<byte> bigEndian, int index)
+    {
+        return (bigEndian[bigEndian.Length - 1 - (index >> 3)] >> (index & 7)) & 1;
     }
 
     /// <summary>
-    /// The Yao window that minimises the expected cost, in multiplies, of raising one base to
-    /// <paramref name="exponentCount"/> exponents of up to <paramref name="exponentBits"/> bits:
-    /// the shared chain's (ceil(bits / w) - 1) * w squarings, each costing
-    /// <paramref name="squareCost"/> multiplies, plus per exponent one multiply per non-zero digit
-    /// (h (1 - 2^-w) on average for h = ceil(bits / w) digits) and 2^w - 1 to combine the buckets.
+    /// The sliding window that minimises the expected cost, in multiplies, of raising one base to
+    /// exponents of up to <paramref name="exponentBits"/> bits: per exponent, one multiply per digit,
+    /// about bits / (w + 1) of them, and about 2^w to combine its 2^(w - 1) buckets. The shared chain
+    /// is about <paramref name="exponentBits"/> squarings whatever the window, so it does not enter
+    /// the choice, and neither does the number of exponents, which scales every window's cost alike.
     ///
-    /// For the spec's 256-bit q this lands on w = 4 whatever the squaring cost and the exponent
-    /// count: the chain is 248 to 255 squarings for every w from 3 to 8, while the per-exponent term
-    /// is about 75 multiplies at w = 4 against 81 at w = 5 and 82 at w = 3. So the AVX-512 engine,
-    /// where a square costs a full multiply, and the scalar one, where it costs about three
-    /// quarters of one, choose the same window.
+    /// For the spec's 256-bit q this is w = 4: about 51 + 16 multiplies per exponent, against 43 + 32
+    /// at w = 5 and 64 + 8 at w = 3.
     /// </summary>
-    internal static int ChooseSharedSquaringWindowBits(long exponentBits, int exponentCount, double squareCost)
+    internal static int ChooseSlidingWindowBits(long exponentBits)
     {
         int best = 1;
         double bestCost = double.MaxValue;
-        for (int w = 1; w <= MaxSharedSquaringWindowBits; w++)
+        for (int w = 1; w <= MaxSlidingWindowBits; w++)
         {
-            long digitCount = (exponentBits + w - 1) / w;
-            double chain = squareCost * (digitCount - 1) * w;
-            double perExponent = digitCount * (1 - Math.Pow(2, -w)) + ((1 << w) - 1);
-            double cost = chain + exponentCount * perExponent;
+            double cost = exponentBits / (w + 1.0) + (1 << w);
             if (cost < bestCost)
             {
                 bestCost = cost;

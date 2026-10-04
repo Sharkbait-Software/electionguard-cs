@@ -208,17 +208,54 @@ public class MontgomeryModPVariableTimeTests
     }
 
     [Theory]
-    [InlineData(256, 1, 1.0, 4)]
-    [InlineData(256, 2, 1.0, 4)]
-    [InlineData(256, 3, 1.0, 4)]
-    [InlineData(256, 1, 0.75, 4)]
-    [InlineData(256, 2, 0.75, 4)]
-    [InlineData(255, 2, 1.0, 4)]
-    [InlineData(64, 2, 1.0, 3)]
-    [InlineData(1, 2, 1.0, 1)]
-    public void WindowChoice_ByOperationCount(long bits, int exponentCount, double squareCost, int expectedWindowBits)
+    [InlineData(256, 4)]
+    [InlineData(255, 4)]
+    [InlineData(64, 3)]
+    [InlineData(16, 2)]
+    [InlineData(1, 1)]
+    public void WindowChoice_ByOperationCount(long bits, int expectedWindowBits)
     {
-        Assert.Equal(expectedWindowBits, MontgomeryModP.ChooseSharedSquaringWindowBits(bits, exponentCount, squareCost));
+        Assert.Equal(expectedWindowBits, MontgomeryModP.ChooseSlidingWindowBits(bits));
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(3)]
+    [InlineData(4)]
+    [InlineData(5)]
+    [InlineData(8)]
+    public void SlidingWindowRecoding_ReconstructsTheExponent(int windowBits)
+    {
+        // Every digit odd and below 2^w, no two windows overlapping, and sum d * 2^i = e.
+        Random random = new(windowBits);
+        BigInteger[] exponents = [BigInteger.One, new BigInteger(2), Q - 1, BigInteger.One << 255, (BigInteger.One << 256) - 1, RandomBelow(random, Q), RandomBelow(random, Q)];
+        foreach (BigInteger exponent in exponents)
+        {
+            byte[] bytes = exponent.ToByteArray(isUnsigned: true, isBigEndian: true);
+            byte[] digitAt = new byte[(int)exponent.GetBitLength()];
+            int last = MontgomeryModP.RecodeSlidingWindow(bytes, windowBits, digitAt);
+
+            BigInteger rebuilt = BigInteger.Zero;
+            int nextFree = 0;
+            int highest = -1;
+            for (int i = 0; i < digitAt.Length; i++)
+            {
+                if (digitAt[i] == 0)
+                {
+                    continue;
+                }
+
+                Assert.True(i >= nextFree, "windows overlap");
+                Assert.Equal(1, digitAt[i] & 1);
+                Assert.True(digitAt[i] < 1 << windowBits);
+                rebuilt += new BigInteger(digitAt[i]) << i;
+                nextFree = i + windowBits;
+                highest = i;
+            }
+
+            Assert.Equal(exponent, rebuilt);
+            Assert.Equal(highest, last);
+        }
     }
 
     [Fact]

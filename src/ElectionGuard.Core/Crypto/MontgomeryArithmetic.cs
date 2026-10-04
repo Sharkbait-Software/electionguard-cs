@@ -30,6 +30,9 @@ internal interface IMontgomeryArithmetic
     /// <summary>Whether a Montgomery-form value represents 1.</summary>
     bool IsOne(ReadOnlySpan<ulong> value);
 
+    /// <summary>Whether two Montgomery-form values represent the same residue.</summary>
+    bool AreCongruent(ReadOnlySpan<ulong> a, ReadOnlySpan<ulong> b);
+
     /// <summary>The Montgomery form of 1.</summary>
     ReadOnlySpan<ulong> One { get; }
 
@@ -59,6 +62,8 @@ internal readonly struct ScalarMontgomeryArithmetic(MontgomeryContext context) :
 
     public bool IsOne(ReadOnlySpan<ulong> value) => value.SequenceEqual(context.One);
 
+    public bool AreCongruent(ReadOnlySpan<ulong> a, ReadOnlySpan<ulong> b) => a[..Width].SequenceEqual(b[..Width]);
+
     public ReadOnlySpan<ulong> One => context.One;
 
     public void WriteBigEndian(ReadOnlySpan<ulong> value, Span<byte> destination) => context.WriteBigEndian(value, destination);
@@ -85,6 +90,8 @@ internal readonly struct Avx512MontgomeryArithmetic(Avx512Montgomery engine) : I
         => engine.PowMontgomeryInto(basis, exponentBigEndian, result);
 
     public bool IsOne(ReadOnlySpan<ulong> value) => engine.IsOne(value);
+
+    public bool AreCongruent(ReadOnlySpan<ulong> a, ReadOnlySpan<ulong> b) => engine.AreCongruent(a, b);
 
     public ReadOnlySpan<ulong> One => engine.One;
 

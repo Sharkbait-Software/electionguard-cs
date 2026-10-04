@@ -167,4 +167,97 @@ public class AdherenceToVoteLimitsVerificationTests
         var exception = Assert.Throws<VerificationFailedException>(() => verification.Verify(tampered, encryptionRecord));
         Assert.Equal("7.A", exception.SubSection);
     }
+
+    [Fact]
+    public void Verify_AggregateIsAQuadraticResidueOutsideSubgroup_Throws_SubSection7A()
+    {
+        // Doubling one beta makes the aggregate beta a quadratic residue outside the order-q
+        // subgroup: a Jacobi-symbol screen passes it, the exact test read off the proof's squaring
+        // chain does not.
+        var (ballot, encryptionRecord) = BuildValidBallot();
+        var tampered = WithTamperedFirstContest(ballot, c =>
+        {
+            var newChoices = c.Choices.Select((s, i) => i == 1 ? s with { Beta = s.Beta * new IntegerModP(2) } : s).ToList();
+            return c with { Choices = newChoices };
+        });
+
+        var verification = new AdherenceToVoteLimitsVerification();
+
+        var exception = Assert.Throws<VerificationFailedException>(() => verification.Verify(tampered, encryptionRecord));
+        Assert.Equal("7.A", exception.SubSection);
+    }
+
+    [Fact]
+    public void Verify_SumMismatchAndNonMember_Throws_SubSection7A()
+    {
+        var (ballot, encryptionRecord) = BuildValidBallot();
+        var tampered = WithTamperedFirstContest(ballot, c =>
+        {
+            var proofs = (ChallengeResponsePair[])c.Proofs.Clone();
+            proofs[0] = proofs[0] with { Challenge = proofs[0].Challenge + 1 };
+            var newChoices = c.Choices.Select((s, i) => i == 0 ? s with { Alpha = new IntegerModP(2) } : s).ToList();
+            return c with { Proofs = proofs, Choices = newChoices };
+        });
+
+        var verification = new AdherenceToVoteLimitsVerification();
+
+        var exception = Assert.Throws<VerificationFailedException>(() => verification.Verify(tampered, encryptionRecord));
+        Assert.Equal("7.A", exception.SubSection);
+    }
+
+    [Fact]
+    public void Verify_ProofCountMismatchAndNonMember_Throws_SubSection7A()
+    {
+        // A structural failure sends the ballot down the in-order path, which checks 7.A first.
+        var (ballot, encryptionRecord) = BuildValidBallot();
+        var tampered = WithTamperedFirstContest(ballot, c =>
+        {
+            var newChoices = c.Choices.Select((s, i) => i == 0 ? s with { Alpha = new IntegerModP(2) } : s).ToList();
+            return c with { Proofs = c.Proofs.Take(c.Proofs.Length - 1).ToArray(), Choices = newChoices };
+        });
+
+        var verification = new AdherenceToVoteLimitsVerification();
+
+        var exception = Assert.Throws<VerificationFailedException>(() => verification.Verify(tampered, encryptionRecord));
+        Assert.Equal("7.A", exception.SubSection);
+    }
+
+    [Fact]
+    public void Verify_AggregateNonMemberWithAValidProof_Throws_SubSection7A()
+    {
+        // Negating one selection's alpha negates the aggregate alpha, -alpha_bar, which is outside
+        // Z_p^r; the contest proof is then forged for it so that it passes 7.D. Only 7.A can reject
+        // this ballot. See NonMemberRangeProof.
+        var (ballot, encryptionRecord) = BuildValidBallot();
+        var manifestContest = encryptionRecord.Manifest.Contests.Single();
+        var tampered = WithTamperedFirstContest(ballot, contest =>
+        {
+            IntegerModP alphaBar = contest.Choices.Select(x => x.Alpha).Aggregate((x, y) => x * y);
+            IntegerModP betaBar = contest.Choices.Select(x => x.Beta).Aggregate((x, y) => x * y);
+            IntegerModQ nonceBar = contest.Choices.Select(x => x.EncryptionNonce!.Value).Aggregate((x, y) => x + y);
+            var (_, proofs) = NonMemberRangeProof.Forge(
+                alphaBar, betaBar, nonceBar, value: 1, limit: manifestContest.SelectionLimit,
+                encryptionRecord.ElectionPublicKeys.VoteEncryptionKey, ballot.SelectionEncryptionIdentifierHash,
+                manifestContest.Index);
+
+            var first = contest.Choices[0];
+            var newChoices = contest.Choices.Select((s, i) => i == 0 ? s with { Alpha = new IntegerModP(EGParameters.P - first.Alpha.ToBigInteger()) } : s).ToList();
+            return contest with { Choices = newChoices, Proofs = proofs };
+        });
+
+        // The forged proof really does pass the challenge-sum check, so only 7.A can reject it.
+        var forgedContest = tampered.Contests[0];
+        var challenge = new RangeProofChallenge(encryptionRecord.ElectionPublicKeys.VoteEncryptionKey);
+        var (alpha, beta) = challenge.Aggregate(forgedContest.Choices);
+        Span<byte> prefix = stackalloc byte[5];
+        prefix[0] = 0x24;
+        RangeProofChallenge.WriteIndex(prefix.Slice(1, 4), manifestContest.Index);
+        var c = challenge.Compute(ballot.SelectionEncryptionIdentifierHash, prefix, alpha, beta, forgedContest.Proofs);
+        Assert.Equal(c, forgedContest.Proofs.Aggregate(new IntegerModQ(), (sum, proof) => sum + proof.Challenge));
+
+        var verification = new AdherenceToVoteLimitsVerification();
+
+        var exception = Assert.Throws<VerificationFailedException>(() => verification.Verify(tampered, encryptionRecord));
+        Assert.Equal("7.A", exception.SubSection);
+    }
 }

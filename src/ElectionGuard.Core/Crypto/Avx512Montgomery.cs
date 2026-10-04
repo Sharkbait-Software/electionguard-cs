@@ -314,6 +314,36 @@ internal sealed partial class Avx512Montgomery
     }
 
     /// <summary>
+    /// Whether two Montgomery-form values in [0, 2p) represent the same residue. Each may be held as
+    /// x or x + p, so their digits are not compared directly; instead both are taken out of
+    /// Montgomery form, which leaves them in [0, p], with p standing for 0 (see
+    /// <see cref="FromMontgomery"/>), and those are compared.
+    /// </summary>
+    internal bool AreCongruent(ReadOnlySpan<ulong> a, ReadOnlySpan<ulong> b)
+    {
+        Span<ulong> one = stackalloc ulong[Lanes];
+        Span<ulong> plainA = stackalloc ulong[Lanes];
+        Span<ulong> plainB = stackalloc ulong[Lanes];
+        one.Clear();
+        one[0] = 1;
+
+        Multiply(a, one, plainA);
+        Multiply(b, one, plainB);
+        if (plainA.SequenceEqual(plainB))
+        {
+            return true;
+        }
+
+        return IsZeroResidue(plainA) && IsZeroResidue(plainB);
+    }
+
+    /// <summary>Whether a value in [0, p], as taking one out of Montgomery form leaves it, is 0 or p.</summary>
+    private bool IsZeroResidue(ReadOnlySpan<ulong> plain)
+    {
+        return plain.SequenceEqual(_modulusDigits) || !plain.ContainsAnyExcept(0UL);
+    }
+
+    /// <summary>
     /// basis^exponent mod p, with <paramref name="basis"/> in [0, p), leaving the Montgomery-form
     /// result in <paramref name="result"/>. See <see cref="PowMontgomeryInto"/>.
     /// </summary>
