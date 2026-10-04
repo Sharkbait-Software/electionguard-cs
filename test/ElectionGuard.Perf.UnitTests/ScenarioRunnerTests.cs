@@ -134,11 +134,17 @@ public class ScenarioRunnerTests
     /// about 60 * 10,229 ~= 613,700 bytes. The margin below (200,000 bytes, ~33% of that) sits well
     /// under the predicted signal; because every sample forces a full collection, the reading is a
     /// live-set figure and its run-to-run noise is in the tens of kilobytes.
+    ///
+    /// The tallyVerification axis covers Verification 9, which used to retain every encrypted
+    /// ballot until the end of the run (so both chunk sizes held all 64 and this assertion failed).
+    /// It now streams with the other phases, and must hold no more than a chunk either.
     /// </summary>
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void Run_KeepsPeakMemoryAFunctionOfChunkSizeNotBallotCount(bool largeChunkFirst)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void Run_KeepsPeakMemoryAFunctionOfChunkSizeNotBallotCount(bool largeChunkFirst, bool tallyVerification)
     {
         const int ballotCount = 64;
         const int smallChunk = 4;
@@ -174,7 +180,7 @@ public class ScenarioRunnerTests
             try
             {
                 var outcome = new ScenarioRunner(
-                    Scenario(ballotCount: ballotCount, chunkSize: chunkSize, decrypt: false), manifest).Run();
+                    Scenario(ballotCount: ballotCount, chunkSize: chunkSize, decrypt: false, tallyVerification: tallyVerification), manifest).Run();
 
                 Assert.Equal(ballotCount, outcome.Phases[PhaseNames.EncryptBallots].BallotsProcessed);
             }
@@ -206,13 +212,13 @@ public class ScenarioRunnerTests
         _output.WriteLine(
             $"peak live bytes: chunkSize={largeChunk} -> {largeChunkPeak:N0}, " +
             $"chunkSize={smallChunk} -> {smallChunkPeak:N0}, " +
-            $"delta {largeChunkPeak - smallChunkPeak:N0} (margin {marginBytes:N0})");
+            $"delta {largeChunkPeak - smallChunkPeak:N0} (margin {marginBytes:N0}, tallyVerification={tallyVerification})");
 
         Assert.True(
             largeChunkPeak > smallChunkPeak + marginBytes,
             $"Peak live bytes for chunkSize={largeChunk} ({largeChunkPeak}) did not exceed " +
             $"chunkSize={smallChunk} ({smallChunkPeak}) by the expected margin of {marginBytes} " +
-            $"(the large chunk ran {(largeChunkFirst ? "first" : "second")}); memory held at an " +
+            $"(the large chunk ran {(largeChunkFirst ? "first" : "second")}, tallyVerification={tallyVerification}); memory held at an " +
             "instant should scale with chunkSize when ballotCount is held fixed, or the runner may " +
             "be retaining encrypted ballots instead of streaming them.");
     }
@@ -260,8 +266,9 @@ public class ScenarioRunnerTests
 
         // Verification 9's own cost used to be attributed to no phase at all, while its allocations
         // still inflated memory.totalAllocatedBytes -- a reader of the record could not see what
-        // tally verification cost. It must now get its own recorded phase, with real wall time,
-        // allocations and a ballot count covering every retained ballot.
+        // tally verification cost. It must get its own recorded phase, with real wall time,
+        // allocations and a ballot count covering every ballot -- here streamed across two chunks of
+        // four, so the count is the sum of the per-chunk accumulations, not one final batch.
         var tallyVerify = outcome.Phases[PhaseNames.VerifyTally];
         Assert.True(tallyVerify.WallMs > 0);
         Assert.True(tallyVerify.AllocatedBytes > 0);
@@ -270,8 +277,8 @@ public class ScenarioRunnerTests
     }
 
     /// <summary>
-    /// The VerifyTally phase must appear only when Verification 9 actually runs, consistent with
-    /// how every other optional phase behaves -- not merely whenever the setting is on.
+    /// The VerifyTally phase must appear only when Verification 9 was requested, consistent with how
+    /// every other optional phase behaves -- and then nothing about it, not even a note.
     /// </summary>
     [Fact]
     public void Run_OmitsTheTallyVerifyPhaseWhenTallyVerificationIsNotRequested()
@@ -281,6 +288,68 @@ public class ScenarioRunnerTests
         var outcome = new ScenarioRunner(Scenario(tallyVerification: false), manifest).Run();
 
         Assert.False(outcome.Phases.ContainsKey(PhaseNames.VerifyTally));
+        Assert.False(outcome.Notes.ContainsKey("tallyVerification"));
+    }
+
+    /// <summary>
+    /// Verification 9 streams, so its budget is enforced at chunk boundaries like encryption's: the
+    /// first chunk's accumulation exhausts it, the run stops there, and the final comparison never
+    /// runs. 0.000000001 minutes is 60 nanoseconds (or rounds to zero), which no accumulation beats.
+    /// </summary>
+    [Fact]
+    public void Run_AbortsAVerification9ThatExceedsItsBudgetAtAChunkBoundary()
+    {
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest();
+        var scenario = Scenario(
+            ballotCount: 8,
+            chunkSize: 4,
+            tallyVerification: true,
+            budgets: new Dictionary<string, double> { [PhaseNames.VerifyTally] = 0.000000001 });
+
+        var outcome = new ScenarioRunner(scenario, manifest).Run();
+
+        var tallyVerify = outcome.Phases[PhaseNames.VerifyTally];
+        Assert.True(tallyVerify.Aborted);
+        Assert.Equal(4, tallyVerify.BallotsProcessed);
+        Assert.Equal("aborted:budgetExceeded", outcome.Notes[PhaseNames.VerifyTally]);
+        Assert.Equal("aborted:budgetExceeded", outcome.Notes["tallyVerification"]);
+
+        // Its abort stops the whole run at that boundary, exactly as any other phase's would.
+        Assert.Equal(4, outcome.Phases[PhaseNames.EncryptBallots].BallotsProcessed);
+        Assert.Equal("skipped:runAborted", outcome.Notes[PhaseNames.DecryptTally]);
+        Assert.Equal(CorrectnessStatus.Incomplete, outcome.Correctness.Status);
+    }
+
+    /// <summary>
+    /// When another phase's budget stops the run, Verification 9 has accumulated the chunks that
+    /// did complete but never compared anything. Its phase is reported (it started, and its time
+    /// was spent) but aborted, since no verification happened; its note says it was skipped, not
+    /// that its own budget tripped, and it carries no budget note of its own.
+    /// </summary>
+    [Fact]
+    public void Run_MarksVerification9SkippedWhenAnotherPhaseAbortsTheRun()
+    {
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest();
+        var scenario = Scenario(
+            ballotCount: 40,
+            chunkSize: 4,
+            tallyVerification: true,
+            budgets: new Dictionary<string, double> { [PhaseNames.EncryptBallots] = 0.0001 });
+
+        var outcome = new ScenarioRunner(scenario, manifest).Run();
+
+        Assert.Equal("aborted:budgetExceeded", outcome.Notes[PhaseNames.EncryptBallots]);
+        Assert.Equal("skipped:runAborted", outcome.Notes["tallyVerification"]);
+        Assert.False(outcome.Notes.ContainsKey(PhaseNames.VerifyTally));
+
+        var tallyVerify = outcome.Phases[PhaseNames.VerifyTally];
+        Assert.True(tallyVerify.Aborted);
+        Assert.Equal(outcome.Phases[PhaseNames.EncryptBallots].BallotsProcessed, tallyVerify.BallotsProcessed);
+        Assert.True(tallyVerify.BallotsProcessed < 40);
+
+        // Tally is not marked: it measured the aggregation of exactly the chunks it was given.
+        Assert.False(outcome.Phases[PhaseNames.Tally].Aborted);
+        Assert.Equal(CorrectnessStatus.Incomplete, outcome.Correctness.Status);
     }
 
     [Fact]
@@ -338,6 +407,35 @@ public class ScenarioRunnerTests
         // excludes them instead of treating a future comparison's zero baseline as real.
         Assert.True(outcome.Phases[PhaseNames.EncryptBallots].Aborted);
         Assert.True(outcome.Phases[PhaseNames.Tally].Aborted);
+    }
+
+    /// <summary>
+    /// A throw before Verification 9 accumulated its first chunk (here, generation of the first
+    /// chunk) leaves no VerifyTally phase and no tallyVerification note: it never started, and
+    /// notes.error already says why the run stopped.
+    /// </summary>
+    [Fact]
+    public void Run_OmitsVerification9WhenTheRunThrowsBeforeItStarts()
+    {
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest();
+        var broken = manifest with
+        {
+            BallotStyles =
+            [
+                new BallotStyle
+                {
+                    Id = "ballot-style-1",
+                    Name = "Ballot Style 1",
+                    ContestIds = ["contest-that-does-not-exist"],
+                },
+            ],
+        };
+
+        var outcome = new ScenarioRunner(Scenario(warmupBallots: 0, tallyVerification: true), broken).Run();
+
+        Assert.Equal(CorrectnessStatus.Error, outcome.Correctness.Status);
+        Assert.False(outcome.Phases.ContainsKey(PhaseNames.VerifyTally));
+        Assert.False(outcome.Notes.ContainsKey("tallyVerification"));
     }
 
     /// <summary>

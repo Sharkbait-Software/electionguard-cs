@@ -9,7 +9,7 @@
   "warmupBallots": 200,
   "phases": {
     "ballotVerification": true,
-    "tallyVerification": false,
+    "tallyVerification": true,
     "decrypt": true,
     "serialization": true
   },

@@ -146,8 +146,9 @@ public static class ScenarioLoader
                     $"Scenario '{scenario.Id}' budgets phase '{phase}' at {minutes} minutes; a budget must be positive. Omit the key for unlimited.");
             }
 
-            // A budgeted phase (DecryptTally, VerifyTally) is enforced via Task.Wait(TimeSpan), which
-            // converts the TimeSpan to a signed 32-bit millisecond count internally and throws
+            // The streamed phases compare a TimeSpan at chunk boundaries and have no such limit, but
+            // the cap applies uniformly. DecryptTally's budget is enforced via Task.Wait(TimeSpan),
+            // which converts the TimeSpan to a signed 32-bit millisecond count internally and throws
             // ArgumentOutOfRangeException above int.MaxValue ms (~24.855 days) -- a crash with no
             // diagnostic, at the moment the phase actually starts, rather than a message naming the
             // scenario file at load time. Practically unreachable for a real budget, but a typo (an

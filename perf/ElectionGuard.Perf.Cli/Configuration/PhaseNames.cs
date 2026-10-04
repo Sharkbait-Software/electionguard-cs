@@ -11,9 +11,10 @@ public static class PhaseNames
     public const string Tally = "Tally";
 
     /// <summary>
-    /// Verification 9 (<c>BallotAggregationVerification</c>). Runs once, after the streaming chunk
-    /// loop, over every retained encrypted ballot -- the most expensive optional step after
-    /// encryption. Present in a record only when it actually ran; every reader (RunComparer's
+    /// Verification 9 (<c>BallotAggregationVerifier</c>). Streams like the other per-chunk phases:
+    /// each chunk is folded into an independent recomputation of the aggregate right after it is
+    /// aggregated, and the recomputation is compared with the tally once, after the chunk loop.
+    /// Present in a record only once it started accumulating; every reader (RunComparer's
     /// Intersect-based phase comparison, ConsoleReport/HtmlReport's TryGetValue-guarded lookups)
     /// treats a missing "VerifyTally" key as "did not run" rather than as an error.
     /// </summary>

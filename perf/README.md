@@ -138,20 +138,56 @@ An encrypted ballot is roughly 50 KB for a four-contest manifest, so a million o
 about 50 GB. The runner generates a chunk, encrypts it, folds it into the tally and drops it: peak
 memory is a function of `chunkSize`, not `ballotCount`. Phase timers accumulate across chunks.
 
-One consequence: `BallotAggregationVerification` (Verification 9) needs every encrypted ballot at
-once. Setting `tallyVerification: true` therefore retains them, which is affordable at `smoke` and
-`small` and not at `medium` or above. Making that verification incremental is a change to
-`ElectionGuard.Core` that the planned Verifier project will want anyway.
+Verification 9 streams too. It recomputes the aggregate from the ballots and compares it with the
+claimed tally, and the aggregate is a product that does not depend on order or grouping, so
+`BallotAggregationVerifier` (in `ElectionGuard.Core`) folds each chunk into its own independent
+recomputation as the chunk goes by, and compares once after the last one. No ballot is retained, so
+`tallyVerification: true` is affordable at every scale and `medium` and `large` run it. (It used to
+take every encrypted ballot at once, which made the harness retain them all -- measured at roughly
+290 KB per retained ballot, so tens of GB at `medium` and hundreds at `large` -- and those scenarios
+had to switch it off. Both now peak at about 4.7 GB of managed heap, the same at a million ballots as
+at a hundred thousand.) The harness feeds it the same chunk it
+has just aggregated, so it measures what the verification costs, not whether the harness's tally is
+right: the expected-tally comparison after decryption is the correctness check.
 
 Verification 9 gets its own phase in the record, `VerifyTally` (`PhaseNames.VerifyTally`), like every
 other optional phase -- its wall time and allocations used to be attributed to nowhere while still
-inflating `memory.totalAllocatedBytes`, which made it invisible to a reader of the record even though
-it is the most expensive optional step after encryption. Like `DecryptTally`, it can carry a budget: a
-timed-out verification is recorded `aborted:budgetExceeded` on its own `VerifyTally` phase (the
-`notes.tallyVerification` key still separately records `ran`/`skipped:runAborted`/
-`aborted:budgetExceeded`). The `VerifyTally` phase key appears only when Verification 9 actually
-started running, not merely whenever `tallyVerification: true` is set -- if the run aborted before
-reaching it, it is correctly absent rather than reporting a misleading zero-cost phase.
+inflating `memory.totalAllocatedBytes`, which made it invisible to a reader of the record. Each
+chunk's accumulation, and the final comparison, are billed to it. Like `EncryptBallots`, `VerifyBallots`
+and `Tally`, its budget is checked at chunk boundaries, and exhausting it stops the run there with
+`notes.VerifyTally` set to `aborted:budgetExceeded`. That is a change: when Verification 9 ran once
+after the loop, its budget bounded only itself, and encryption and decryption still completed. It now
+follows `VerifyBallots`, the other optional verification, whose budget has always stopped the run, so
+a tripped `VerifyTally` budget also truncates `EncryptBallots`, skips `DecryptTally` and leaves
+correctness `incomplete`. No shipped scenario budgets `VerifyTally`.
+
+Two consequences for `compare` against records made before Verification 9 streamed:
+
+- Turning `tallyVerification` on in `medium.json` and `large.json` changed their config hash, which
+  covers the resolved `phases`, so `compare` reports earlier `medium` and `large` records as
+  incomparable. For a like-for-like comparison against that history, run the candidate with
+  `--no-tally-verification`, which restores the old hash.
+- `VerifyTally`'s allocation per ballot now grows with the number of chunks. Each chunk's
+  accumulation builds per-worker partial tallies, which the one-shot verification paid once per run
+  and the streamed one pays once per chunk, as `Tally` always has. The cost per call scales with the
+  manifest's choice count and the worker count: about 2 MB on `xsmall`'s manifest, about 8 MB on
+  `famous-names-large` at 32 workers, where `small`'s `VerifyTally` went from 884 to 4,066
+  bytes/ballot and now matches `Tally` to within 0.5%. Expect
+  `compare` to flag a `VerifyTally` allocation regression against older `smoke`, `xsmall` and `small`
+  records (their config hashes are unchanged); rebaseline those rather than read it as a regression.
+
+`notes.tallyVerification` records whether a verdict was reached:
+
+- `ran` -- every chunk was accumulated and the final comparison executed.
+- `aborted:budgetExceeded` -- Verification 9's own budget tripped.
+- `skipped:runAborted` -- another phase's budget stopped the run first.
+
+A run that throws leaves it unset; `notes.error` says why. The `VerifyTally` phase key appears once
+Verification 9 has started, with the first chunk, and is absent if the run stopped before then or
+`tallyVerification` is off. Whenever the comparison did not run, the phase is marked `aborted`, even
+when another phase's budget stopped the run: its time is a partial accumulation with no verdict, and
+must not be compared as the cost of Verification 9. (`Tally`, by contrast, is not marked when another
+phase aborts the run -- it measured exactly the chunks it was given.)
 
 ## Results
 

@@ -13,27 +13,16 @@ public class BallotAggregationVerification
     /// Recomputes the aggregate from <paramref name="ballots"/> on up to
     /// <paramref name="maxDegreeOfParallelism"/> threads (-1, the default, for no limit) and checks
     /// it against <paramref name="encryptedTally"/>.
+    ///
+    /// <paramref name="ballots"/> is enumerated once and need not fit in memory: a lazily read
+    /// sequence is held at most one ballot per thread. A caller that produces its ballots itself in
+    /// batches, and wants to interleave other work between them, should drive
+    /// <see cref="BallotAggregationVerifier"/>, which this wraps.
     /// </summary>
-    public void Verify(IReadOnlyList<EncryptedBallot> ballots, Manifest manifest, EncryptedTally encryptedTally, int maxDegreeOfParallelism = -1)
+    public void Verify(IEnumerable<EncryptedBallot> ballots, Manifest manifest, EncryptedTally encryptedTally, int maxDegreeOfParallelism = -1)
     {
-        var expectedEncryptedTally = new EncryptedTally(manifest);
-        expectedEncryptedTally.AddBallots(ballots, maxDegreeOfParallelism);
-
-        foreach (var contest in encryptedTally.Contests)
-        {
-            var expectedContest = expectedEncryptedTally.Contests[contest.Key];
-            foreach (var choice in contest.Value.Choices)
-            {
-                var expectedChoice = expectedContest.Choices[choice.Key];
-                if (expectedChoice.A != choice.Value.A)
-                {
-                    throw new Exception($"Ballot aggregation verification failed for contest {contest.Key}, choice {choice.Key}: expected A {expectedChoice.A}, got {choice.Value.A}");
-                }
-                if (expectedChoice.B != choice.Value.B)
-                {
-                    throw new Exception($"Ballot aggregation verification failed for contest {contest.Key}, choice {choice.Key}: expected B {expectedChoice.B}, got {choice.Value.B}");
-                }
-            }
-        }
+        var verifier = new BallotAggregationVerifier(manifest);
+        verifier.AddBallots(ballots, maxDegreeOfParallelism);
+        verifier.Verify(encryptedTally);
     }
 }

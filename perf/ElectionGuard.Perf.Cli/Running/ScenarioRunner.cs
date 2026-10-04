@@ -177,15 +177,28 @@ public sealed class ScenarioRunner
 
         var expectedTally = new ExpectedTallyAccumulator(_manifest);
         var encryptedTally = new EncryptedTally(_manifest);
-        var retainedBallots = _scenario.Phases.TallyVerification ? new List<EncryptedBallot>() : null;
 
-        // Declared here (rather than only inside the Verification 9 block below) so both the catch
-        // block and the phases dictionary can see whether it was ever entered. Stays null exactly
-        // when Verification 9 never started -- the setting was off, or the run was already aborted
-        // -- which is also when it must NOT appear in the persisted record: PhaseNames.VerifyTally
-        // is meant to appear only when tally verification actually ran, unlike VerifyBallots/Tally
-        // which are unconditionally created up front because they always at least attempt to run.
-        PhaseAccumulator? tallyVerify = null;
+        // Verification 9 streams with everything else: each chunk is folded into the verifier's own
+        // independent recomputation right after it is aggregated, and the recomputation is compared
+        // with encryptedTally once, after the loop. No encrypted ballot outlives its chunk.
+        //
+        // Both are null exactly when tallyVerification is off. tallyVerifyStarted is what decides
+        // whether PhaseNames.VerifyTally appears in the record: it is set before the first chunk's
+        // Enter(), so the phase appears once Verification 9 has started accumulating -- even if a
+        // throw then lands mid-chunk, before RecordBallots(), since that scope still billed ticks --
+        // and is absent if the run never got that far. Like every other phase, it is marked aborted
+        // whenever its measurement is not of the whole intended workload; see the Verification 9
+        // block after the loop for why that includes a run some other phase aborted.
+        var tallyVerifier = _scenario.Phases.TallyVerification ? new BallotAggregationVerifier(_manifest) : null;
+        var tallyVerify = _scenario.Phases.TallyVerification
+            ? new PhaseAccumulator(PhaseNames.VerifyTally, BudgetFor(PhaseNames.VerifyTally))
+            : null;
+        bool tallyVerifyStarted = false;
+
+        // The phases whose budgets are checked at every chunk boundary.
+        var budgetedPhases = tallyVerify is null
+            ? new[] { encrypt, ballotVerify, aggregate }
+            : new[] { encrypt, ballotVerify, aggregate, tallyVerify };
 
         EncryptedBallot? representative = null;
         ConfirmationCode? previousConfirmationCode = null;
@@ -259,12 +272,25 @@ public sealed class ScenarioRunner
                 }
 
                 aggregate.RecordBallots(chunkSize);
-                retainedBallots?.AddRange(encryptedChunk);
+
+                if (tallyVerifier is not null && tallyVerify is not null)
+                {
+                    // Deliberately the same chunk that was just aggregated: this phase measures what
+                    // Verification 9 costs, not whether the harness's own tally is right --
+                    // ExpectedTallyAccumulator and the decrypted-tally comparison are the oracle.
+                    tallyVerifyStarted = true;
+                    using (tallyVerify.Enter())
+                    {
+                        tallyVerifier.AddBallots(encryptedChunk, parallelism);
+                    }
+
+                    tallyVerify.RecordBallots(chunkSize);
+                }
 
                 generated += chunkSize;
                 sampler.SampleNow();
 
-                foreach (var phase in new[] { encrypt, ballotVerify, aggregate })
+                foreach (var phase in budgetedPhases)
                 {
                     if (phase.BudgetExceeded)
                     {
@@ -278,53 +304,51 @@ public sealed class ScenarioRunner
             }
 
             // --- Verification 9 -----------------------------------------------------------
-            if (_scenario.Phases.TallyVerification && retainedBallots is not null && !aborted)
+            // The ballots were folded in chunk by chunk above; all that is left is the comparison,
+            // one read per option. It is billed to the same phase, and has no budget check of its own:
+            // the budget is enforced at chunk boundaries like every other streamed phase, and once
+            // the last chunk is in, the comparison is what makes the time already spent worth anything.
+            //
+            // notes["tallyVerification"] is keyed separately from PhaseNames.VerifyTally (the
+            // phases-dictionary key, a distinct namespace) and records whether a verdict was reached:
+            //   "ran"                    -- every chunk was accumulated and the comparison executed.
+            //   "aborted:budgetExceeded" -- Verification 9's own budget tripped (whether or not
+            //                               another phase's did in the same chunk).
+            //   "skipped:runAborted"     -- another phase's budget stopped the run first.
+            // A throw leaves it unset; notes["error"] says why the run stopped.
+            if (tallyVerifier is not null && tallyVerify is not null)
             {
-                var tallyVerifyBudget = BudgetFor(PhaseNames.VerifyTally);
-                tallyVerify = new PhaseAccumulator(PhaseNames.VerifyTally, tallyVerifyBudget);
-
-                using (tallyVerify.Enter())
+                if (!aborted)
                 {
-                    if (tallyVerifyBudget.HasValue)
+                    tallyVerifyStarted = true;
+                    using (tallyVerify.Enter())
                     {
-                        // Same reasoning as the decrypt budget below: BallotAggregationVerification.Verify
-                        // has no CancellationToken and cannot be interrupted mid-flight, so the only way
-                        // to bound its wall time is to run it on another thread and stop waiting. A
-                        // timed-out verification is ABANDONED, not cancelled -- it keeps running until it
-                        // finishes on its own.
-                        var verifyTask = Task.Run(() =>
-                            new BallotAggregationVerification().Verify(retainedBallots, _manifest, encryptedTally, parallelism));
+                        tallyVerifier.Verify(encryptedTally);
+                    }
 
-                        if (verifyTask.Wait(tallyVerifyBudget.Value))
-                        {
-                            tallyVerify.RecordBallots(retainedBallots.Count);
-                        }
-                        else
-                        {
-                            tallyVerify.MarkAborted();
-                        }
-                    }
-                    else
-                    {
-                        new BallotAggregationVerification().Verify(retainedBallots, _manifest, encryptedTally, parallelism);
-                        tallyVerify.RecordBallots(retainedBallots.Count);
-                    }
+                    notes["tallyVerification"] = "ran";
                 }
-
-                // Keyed "tallyVerification", NOT PhaseNames.VerifyTally: PhaseNames.VerifyTally is the
-                // phases-dictionary key, a distinct namespace from notes -- and using it here would
-                // read as though the phase entry itself carried this string, when it is a `bool`-shaped
-                // Aborted flag instead.
-                notes["tallyVerification"] = tallyVerify.Aborted ? "aborted:budgetExceeded" : "ran";
-            }
-            else if (_scenario.Phases.TallyVerification)
-            {
-                notes["tallyVerification"] = "skipped:runAborted";
+                else if (tallyVerify.Aborted)
+                {
+                    notes["tallyVerification"] = "aborted:budgetExceeded";
+                }
+                else
+                {
+                    // Unlike Tally, which is NOT marked aborted when another phase stops the run --
+                    // its metric is the cost of aggregating the chunks it was given, and that
+                    // measurement is complete -- VerifyTally is. Its metric is the cost of a
+                    // verification, and with the comparison never run and the remaining ballots
+                    // never added, no verification happened: its time is a partial accumulation that
+                    // must not be read, or compared, as the cost of Verification 9.
+                    tallyVerify.MarkAborted();
+                    notes["tallyVerification"] = "skipped:runAborted";
+                }
             }
         }
         catch (Exception ex)
         {
-            // Encryption, chunk verification, aggregation and Verification 9 all live above. A
+            // Encryption, chunk verification, aggregation and Verification 9 (its per-chunk
+            // accumulation and its final comparison) all live above. A
             // VerificationFailedException at ballot 800,000 of a long run used to discard every
             // measurement taken up to that point -- including the DKG figure, which the throw
             // cannot possibly have invalidated. Record the cause and return what completed.
@@ -336,22 +360,22 @@ public sealed class ScenarioRunner
             // Dispose still runs on unwind and bills the partial ticks/bytes, but the RecordBallots()
             // call that follows the `using` block never executes, so BallotsProcessed undercounts what
             // was just billed. It can equally land before any of them even start (chunk generation,
-            // expectedTally.Add) or after all of them finish for this chunk (Verification 9), in which
+            // expectedTally.Add) or after all of them finish (Verification 9's final comparison), in which
             // case whichever phase(s) never touched this chunk are internally consistent but still
             // short of the full workload the scenario asked for. Either way none of them represents a
-            // complete, trustworthy measurement of the intended run -- exactly the reasoning the
-            // budget-exceeded branch above already applies to encrypt/ballotVerify/aggregate regardless
-            // of which one tripped the budget -- so mark all of them aborted here rather than guessing
-            // which single one was mid-flight. tallyVerify is conditional: it is only non-null once
-            // Verification 9 actually started, so a throw earlier in the chunk loop correctly leaves it
-            // out of the record entirely rather than reporting a misleading zero-cost aborted phase.
+            // complete, trustworthy measurement of the intended run, so mark all of them aborted here
+            // rather than guessing which single one was mid-flight. This is deliberately broader than
+            // the budget-exceeded branch above, which marks only the phase whose budget tripped: that
+            // phase is known, and the others each measured exactly the chunks they were given, whereas
+            // a throw can land inside any phase's scope. tallyVerify is marked too, but it reaches the record only
+            // if tallyVerifyStarted -- a throw before the first chunk's Verification 9 scope (e.g. in
+            // the first chunk's encryption) leaves it out entirely rather than reporting a misleading
+            // zero-cost aborted phase.
             encrypt.MarkAborted();
             ballotVerify.MarkAborted();
             aggregate.MarkAborted();
             tallyVerify?.MarkAborted();
         }
-
-        retainedBallots?.Clear();
 
         // --- Stage 2: decrypt ----------------------------------------------------------
         var phases = new Dictionary<string, PhaseMetrics>
@@ -365,7 +389,7 @@ public sealed class ScenarioRunner
             phases[PhaseNames.VerifyBallots] = ballotVerify.ToMetrics();
         }
 
-        if (tallyVerify is not null)
+        if (tallyVerify is not null && tallyVerifyStarted)
         {
             phases[PhaseNames.VerifyTally] = tallyVerify.ToMetrics();
         }

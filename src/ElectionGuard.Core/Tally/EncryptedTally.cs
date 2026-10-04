@@ -107,8 +107,66 @@ public class EncryptedTally
                 }
             });
 
-        // Merging under the lock above serialized a multiply per choice per worker, which on many
-        // cores cost more than the aggregation itself. Merged choice by choice instead, each
+        MergePartials(partials, options);
+    }
+
+    /// <summary>
+    /// Adds every ballot <paramref name="encryptedBallots"/> yields, enumerating it exactly once, with
+    /// the same result as calling <see cref="AddBallot"/> on each, spread across up to
+    /// <paramref name="maxDegreeOfParallelism"/> threads (-1, the default, for no limit).
+    ///
+    /// For a source too large to hold, such as ballots read lazily from an election record: workers
+    /// take ballots one at a time, so at most one per worker is in flight beyond whatever the source
+    /// itself buffers, and each worker keeps a single partial tally for the whole stream rather than
+    /// one per batch. A source that is already a list takes the
+    /// <see cref="AddBallots(IReadOnlyList{EncryptedBallot}, int)"/> path.
+    /// </summary>
+    public void AddBallots(IEnumerable<EncryptedBallot> encryptedBallots, int maxDegreeOfParallelism = -1)
+    {
+        if (encryptedBallots is IReadOnlyList<EncryptedBallot> list)
+        {
+            AddBallots(list, maxDegreeOfParallelism);
+            return;
+        }
+
+        if (maxDegreeOfParallelism == 1)
+        {
+            foreach (var encryptedBallot in encryptedBallots)
+            {
+                AddBallot(encryptedBallot);
+            }
+
+            return;
+        }
+
+        // NoBuffering: the default partitioner hands out chunks that grow to hundreds of elements per
+        // worker, which for ballots of tens of kilobytes each would hold gigabytes in flight.
+        //
+        // Pooled partials: Parallel.ForEach's workers yield their thread every few hundred
+        // milliseconds and resume as new tasks, each running localInit again. Allocating a fresh
+        // partial there would grow the set with the stream's duration, not its parallelism -- several
+        // GB over a long one. Returned to the pool on yield and taken back on resume, no more
+        // partials exist than workers ever ran at once.
+        var options = new ParallelOptions { MaxDegreeOfParallelism = maxDegreeOfParallelism };
+        var pool = new ConcurrentBag<EncryptedTally>();
+        Parallel.ForEach(
+            Partitioner.Create(encryptedBallots, EnumerablePartitionerOptions.NoBuffering),
+            options,
+            () => pool.TryTake(out var partial) ? partial : new EncryptedTally(_manifest),
+            (encryptedBallot, _, partial) =>
+            {
+                partial.AddBallot(encryptedBallot);
+                return partial;
+            },
+            pool.Add);
+
+        MergePartials(pool.ToList(), options);
+    }
+
+    private void MergePartials(List<EncryptedTally> partials, ParallelOptions options)
+    {
+        // Merging under the lock in AddBallots serialized a multiply per choice per worker, which on
+        // many cores cost more than the aggregation itself. Merged choice by choice instead, each
         // choice's products are touched by one thread only.
         var choices = Contests
             .SelectMany(contest => contest.Value.Choices.Select(choice => (ContestId: contest.Key, Choice: choice.Value)))
