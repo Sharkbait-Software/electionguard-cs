@@ -10,7 +10,7 @@ namespace ElectionGuard.Core.Crypto;
 /// (A, B) by its (alpha, beta), hundreds of thousands of products and nothing else.
 ///
 /// An <see cref="IntegerModP"/> product costs a 4096 x 4096-bit BigInteger multiply and a division
-/// by p, about 57 us. One multiply on <see cref="Avx512Montgomery"/> costs about 2.5 us, and on the
+/// by p, about 57 us. One multiply on <see cref="Avx512Montgomery"/> costs about 1.1 us, and on the
 /// scalar <see cref="MontgomeryContext"/> about 8 us. The usual price of Montgomery form is
 /// converting every input into it, which is itself a Montgomery multiply by R^2 and would halve the
 /// gain. This class skips that conversion: each factor is loaded as a plain residue and multiplied

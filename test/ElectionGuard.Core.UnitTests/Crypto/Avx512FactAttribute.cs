@@ -17,3 +17,15 @@ public sealed class Avx512FactAttribute : FactAttribute
         }
     }
 }
+
+/// <summary>The <see cref="Avx512FactAttribute"/> equivalent for a theory.</summary>
+public sealed class Avx512TheoryAttribute : TheoryAttribute
+{
+    public Avx512TheoryAttribute()
+    {
+        if (!Avx512Montgomery.IsSupported)
+        {
+            Skip = "AVX-512F is not available on this machine.";
+        }
+    }
+}

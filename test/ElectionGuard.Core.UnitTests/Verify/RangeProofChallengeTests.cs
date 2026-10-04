@@ -275,7 +275,7 @@ public class RangeProofChallengeTests : IDisposable
     public void Compute_TablesInTheOtherRepresentation_AreNotUsedButResultMatches(bool allowAvx512)
     {
         // PowRadixRegistry always builds tables for the machine's preferred representation. A
-        // scalar-forced computation on AVX-512 hardware must not read 29-bit digits as 64-bit limbs.
+        // scalar-forced computation on AVX-512 hardware must not read 52-bit digits as 64-bit limbs.
         IntegerModP key = IntegerModP.PowModP(EGParameters.G, ElectionGuardRandom.GetIntegerModQ());
         PowRadixRegistry.Precompute(4, EGParameters.G, key.ToBigInteger());
 

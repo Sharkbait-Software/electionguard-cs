@@ -1,4 +1,5 @@
 using ElectionGuard.Core.Models;
+using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics.X86;
@@ -13,18 +14,34 @@ namespace ElectionGuard.Core.Crypto;
 /// <see cref="SubgroupMembership"/> choose between the two.
 ///
 /// This is the "almost Montgomery multiplication" of Gueron and Krasnov ("Software implementation
-/// of modular exponentiation, using advanced vector instructions architectures", 2012), adapted to
-/// AVX-512F without IFMA:
+/// of modular exponentiation, using advanced vector instructions architectures", 2012), on 52-bit
+/// digits as their AVX-512 IFMA version uses, but with the 52 x 52 -&gt; 104-bit digit products
+/// computed by double-precision fused multiply-adds instead of IFMA, which .NET does not expose.
+/// Splitting an exact product into floating-point halves this way is the technique of Emmart,
+/// Zheng and Weems ("Faster Modular Exponentiation Using Double Precision Floating Point Arithmetic
+/// on the GPU", ARITH 2018):
 ///
-/// 1. A value is held as <see cref="Lanes"/> = 144 digits of <see cref="DigitBits"/> = 29 bits, one
-///    per 64-bit lane, so 18 Vector512 registers. The only full 64-bit multiply AVX-512F has is
-///    vpmuludq, 32 x 32 -&gt; 64 bits, and 29-bit digits make each product under 2^58, leaving six
-///    spare bits per lane in which carries can pile up instead of being propagated every step.
+/// 1. A value is held as <see cref="Lanes"/> = 80 digits of <see cref="DigitBits"/> = 52 bits, one
+///    per 64-bit lane, so 10 Vector512 registers. Every digit below 2^52 is exactly a double.
 /// 2. Each of the <see cref="Iterations"/> steps adds a * b[i] + y * p to the accumulator, with the
 ///    digit y chosen so the bottom digit becomes zero, and shifts it down one digit. That is
-///    Montgomery reduction one 29-bit digit at a time, with R = 2^(29 * 142) = 2^4118.
-/// 3. Every <see cref="NormalizeInterval"/> steps each lane gives its bits above 29 to the next lane
-///    up, all lanes at once. The lanes are fully carried, one at a time, only at the end.
+///    Montgomery reduction one 52-bit digit at a time, with R = 2^(52 * 79) = 2^4108.
+/// 3. The lanes are fully carried, one at a time, only at the end.
+///
+/// The digit products. For digits u, v below 2^52, u * v is below 2^104, so u * v + 2^104 lies in
+/// [2^104, 2^105), where doubles are spaced 2^52 apart. Rounding that sum toward negative infinity,
+/// which AVX-512 encodes per instruction, gives h = 2^104 + hi * 2^52 with hi = floor(u * v / 2^52)
+/// exactly. Then (2^104 + 2^52) - h = (1 - hi) * 2^52 is representable, so that subtraction is exact,
+/// and u * v + (1 - hi) * 2^52 = lo + 2^52 with lo = u * v mod 2^52 lies in [2^52, 2^53), where
+/// doubles are the integers: that fused multiply-add is exact too. So three floating-point
+/// instructions split the product with no rounding error, and both halves are non-negative.
+///
+/// Neither half is converted back to an integer. A double in a fixed binade is its integer value
+/// plus a constant when its bits are read as an integer: h reads as <see cref="HighBias"/> + hi and
+/// lo + 2^52 as <see cref="LowBias"/> + lo. The kernel adds those bit patterns into the accumulator
+/// as they are; the biases are the same in every lane on every step, independent of the operands, so
+/// lane 0's is tracked in scalar wherever its true value is needed and the total is subtracted once,
+/// at the end (<see cref="FinalBias"/>). Wrapping mod 2^64 along the way loses nothing.
 ///
 /// The "almost" is that there is no final conditional subtraction. Because R &gt; 4p, inputs in
 /// [0, 2p) give an output in [0, 2p): (a * b + Y * p) / R &lt; (4p^2 + R * p) / R &lt; 2p. So a value
@@ -33,53 +50,75 @@ namespace ElectionGuard.Core.Crypto;
 /// x or x + p - which is why <see cref="IsOne"/> exists rather than comparing digits with
 /// <see cref="One"/>.
 ///
-/// Lane bounds. After a normalization step a lane is under 2^29 plus the bits carried in from below,
-/// so under 2^29 + 2^35 &lt; 2^36. Each step then adds two products under 2^58 each, and lane 0 also
-/// gains a scalar carry under 2^35. Lanes shift down as they go, so over the 16 steps between
-/// normalizations a lane can reach 2^36 + 16 * 2^59 + 2^35 &lt; 2^64. <see cref="NormalizeInterval"/>
-/// must therefore stay at 16 or below.
+/// Lane bounds. Each step adds to a lane two low halves and two high halves, each below 2^52, so
+/// under 2^54, and lane 0 also gains the carry out of the digit below, which is under 2^10. Lanes
+/// shift down as they go and the accumulator starts at zero, so across all 79 steps a lane's true
+/// value stays below 79 * 2^54 + 2^10 &lt; 2^61. Nothing needs normalizing until the end.
 ///
 /// The operation count does not depend on the operands: the loop runs a fixed number of times and
 /// has no data-dependent branches, so <see cref="PowMontgomeryInto"/> keeps the uniform operation
-/// count of the scalar exponentiation it replaces.
+/// count of the scalar exponentiation it replaces. The floating-point operands are integers or zero,
+/// never subnormal, so the instructions' timing does not depend on them either.
 ///
 /// An instance is immutable data for one modulus and safe to share across threads; every working
 /// buffer is on the caller's stack. Verification runs many of these in parallel.
 ///
 /// The multiplication itself is in Avx512Montgomery.Kernel.g.cs, generated by
-/// tools/generate_avx512_montgomery_kernel.py: the accumulator is unrolled into 18 named locals so
-/// the JIT can keep it in registers rather than reloading it every step, which measured about a third
-/// faster (2.3 us against 3.3 us per multiply) than the same loop over a span.
+/// tools/generate_avx512_montgomery_kernel.py: the accumulator is unrolled into 10 named locals so
+/// the JIT can keep it in registers rather than reloading it every step. Measured on a Zen 4 core,
+/// a multiply takes about 1.1 us, against 1.9 us for the earlier version of this engine on 29-bit
+/// digits and vpmuludq, which needed 142 steps over 18 vectors.
 /// </summary>
 internal sealed partial class Avx512Montgomery
 {
-    internal const int DigitBits = 29;
+    internal const int DigitBits = 52;
 
     internal const ulong DigitMask = (1UL << DigitBits) - 1;
 
-    /// <summary>Reduction steps per multiplication; R = 2^(DigitBits * Iterations) = 2^4118 &gt; 4p.</summary>
-    internal const int Iterations = 142;
+    /// <summary>Reduction steps per multiplication; R = 2^(DigitBits * Iterations) = 2^4108 &gt; 4p.</summary>
+    internal const int Iterations = 79;
 
     /// <summary>
-    /// Digits per value: <see cref="Iterations"/> rounded up to a whole number of vectors. The two
-    /// top lanes are headroom for values up to 2p and for the accumulator's carries.
+    /// Digits per value: <see cref="Iterations"/> rounded up to a whole number of vectors. The top
+    /// lane is headroom for the accumulator.
     /// </summary>
-    internal const int Lanes = 144;
+    internal const int Lanes = 80;
 
     internal const int Vectors = Lanes / 8;
 
-    /// <summary>Reduction steps between one-level normalizations. See the class remarks for the bound.</summary>
-    internal const int NormalizeInterval = 16;
-
-    /// <summary>Largest modulus this engine handles. 4p must stay below R = 2^4118.</summary>
+    /// <summary>Largest modulus this engine handles. 4p must stay below R = 2^4108.</summary>
     internal const int MaxModulusBits = 4096;
+
+    /// <summary>2^52, the binade in which doubles are exactly the integers [2^52, 2^53).</summary>
+    internal const double TwoPow52 = 4503599627370496.0;
+
+    /// <summary>2^104, the addend that puts a digit product's high half in a binade of spacing 2^52.</summary>
+    internal const double TwoPow104 = 20282409603651670423947251286016.0;
+
+    /// <summary>The bits of 2^52 read as an integer: a double in [2^52, 2^53) reads as this plus its offset from 2^52.</summary>
+    internal const ulong LowBias = 0x4330_0000_0000_0000;
+
+    /// <summary>The bits of 2^104: a double in [2^104, 2^105) reads as this plus its offset from 2^104 in units of 2^52.</summary>
+    internal const ulong HighBias = 0x4670_0000_0000_0000;
+
+    /// <summary>What one step adds to the bias of every lane but the top one: two high halves and two low halves.</summary>
+    internal const ulong IterationBias = unchecked(2 * HighBias + 2 * LowBias);
 
     /// <summary>Fails compilation if the generated kernel was produced for a different vector count.</summary>
     private const int GeneratedKernelMatches = 1 / (GeneratedVectors == Vectors ? 1 : 0);
 
     private const int LimbsForDigits = (DigitBits * Lanes + 63) / 64 + 1;
 
+    /// <summary>
+    /// The bias each accumulator lane carries after the last step, subtracted to recover its true
+    /// value. Lane k after step i + 1 holds lane k + 1's sum from step i, which picked up two low
+    /// halves, plus two high halves; the top lane starts each step from zero and gains only the high
+    /// halves. The recurrence runs the same way for every multiplication, so it is evaluated once.
+    /// </summary>
+    internal static readonly ulong[] FinalBias = ComputeFinalBias();
+
     private readonly ulong[] _modulusDigits;
+    private readonly double[] _modulusDoubles;
     private readonly ulong _k0;
     private readonly ulong[] _rSquared;
     private readonly ulong[] _one;
@@ -94,8 +133,14 @@ internal sealed partial class Avx512Montgomery
 
         Modulus = modulus;
         _modulusDigits = ToDigits(modulus);
+        _modulusDoubles = new double[Lanes];
+        for (int k = 0; k < Lanes; k++)
+        {
+            _modulusDoubles[k] = _modulusDigits[k];
+        }
 
-        // k0 = -p^-1 mod 2^29: Hensel lifting mod 2^64, as in MontgomeryContext, then truncated.
+        // k0 = -p^-1 mod 2^52: Hensel lifting mod 2^64, as in MontgomeryContext, then truncated. For
+        // the spec's p, whose low 256 bits are all ones, it is 1.
         ulong p0 = (ulong)(modulus & ulong.MaxValue);
         ulong inverse = 1;
         for (int i = 0; i < 6; i++)
@@ -108,6 +153,23 @@ internal sealed partial class Avx512Montgomery
         _rSquared = ToDigits(rModP * rModP % modulus);
         _one = ToDigits(rModP);
         _onePlusModulus = ToDigits(rModP + modulus);
+    }
+
+    private static ulong[] ComputeFinalBias()
+    {
+        ulong[] bias = new ulong[Lanes];
+        ulong[] next = new ulong[Lanes];
+        for (int i = 0; i < Iterations; i++)
+        {
+            for (int k = 0; k < Lanes - 1; k++)
+            {
+                next[k] = unchecked(bias[k + 1] + IterationBias);
+            }
+            next[Lanes - 1] = unchecked(2 * HighBias);
+            (bias, next) = (next, bias);
+        }
+
+        return bias;
     }
 
     /// <summary>Whether the hardware has the instructions this engine needs.</summary>
@@ -163,7 +225,7 @@ internal sealed partial class Avx512Montgomery
     /// Almost-Montgomery multiplication: result = a * b * R^-1 mod p, possibly plus p.
     ///
     /// Both operands must be digit vectors of at least <see cref="Lanes"/> digits, each digit below
-    /// 2^29, holding values below 2p. The result is the same shape. <paramref name="result"/> may
+    /// 2^52, holding values below 2p. The result is the same shape. <paramref name="result"/> may
     /// alias either operand, which makes squaring in place safe.
     /// </summary>
     internal void Multiply(ReadOnlySpan<ulong> a, ReadOnlySpan<ulong> b, Span<ulong> result)
@@ -177,6 +239,10 @@ internal sealed partial class Avx512Montgomery
         {
             throw new ArgumentException($"Operands must have at least {Lanes} digits.");
         }
+
+        // A digit of 2^52 or more is not exactly a double's mantissa and breaks the exactness the
+        // kernel rests on, silently. Every value this engine produces is fully carried.
+        Debug.Assert(IsFullyCarried(a) && IsFullyCarried(b), "Operand digits must be below 2^52.");
 
         MultiplyCore(ref Unsafe.AsRef(in a[0]), ref Unsafe.AsRef(in b[0]), ref result[0]);
     }
@@ -313,9 +379,23 @@ internal sealed partial class Avx512Montgomery
         accumulator.CopyTo(result);
     }
 
+    /// <summary>Whether every one of the first <see cref="Lanes"/> digits is below 2^52, for assertions.</summary>
+    private static bool IsFullyCarried(ReadOnlySpan<ulong> digits)
+    {
+        foreach (ulong digit in digits[..Lanes])
+        {
+            if (digit > DigitMask)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     /// <summary>
-    /// The final, sequential carry pass of a multiplication: every lane is reduced to a 29-bit digit
-    /// and its excess added to the next. The lanes are below 2^36 after the last normalization, so
+    /// The final, sequential carry pass of a multiplication: every lane is reduced to a 52-bit digit
+    /// and its excess added to the next. The lanes are below 2^61 once their biases are removed, so
     /// nothing overflows, and the value is below 2p, so nothing carries out of the top lane.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -338,7 +418,7 @@ internal sealed partial class Avx512Montgomery
     }
 
     /// <summary>
-    /// Writes a non-negative value below 2^(29 * 144) as <see cref="Lanes"/> 29-bit digits, least
+    /// Writes a non-negative value below 2^(52 * 80) as <see cref="Lanes"/> 52-bit digits, least
     /// significant first, by way of the 64-bit limbs <see cref="MontgomeryContext"/> produces.
     /// </summary>
     internal static void WriteDigits(BigInteger value, Span<ulong> digits)
@@ -365,7 +445,7 @@ internal sealed partial class Avx512Montgomery
         }
     }
 
-    /// <summary>Reads a fully carried digit vector (every digit below 2^29) back as an integer.</summary>
+    /// <summary>Reads a fully carried digit vector (every digit below 2^52) back as an integer.</summary>
     internal static BigInteger FromDigits(ReadOnlySpan<ulong> digits)
     {
         Span<ulong> limbs = stackalloc ulong[LimbsForDigits];

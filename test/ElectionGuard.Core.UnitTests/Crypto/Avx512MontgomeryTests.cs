@@ -8,7 +8,7 @@ namespace ElectionGuard.Core.UnitTests.Crypto;
 /// The AVX-512 almost-Montgomery engine, checked against BigInteger. Its values live in a redundant
 /// [0, 2p) range rather than [0, p), so these tests deliberately feed it operands from the whole of
 /// that range, including the ones a fully reduced representation never sees, and check after every
-/// multiplication that the output is still a valid operand: every digit below 2^29 and the value
+/// multiplication that the output is still a valid operand: every digit below 2^52 and the value
 /// below 2p. An output outside that shape would be accepted silently by the next multiplication and
 /// only show up, much later, as a wrong answer.
 /// </summary>
@@ -37,7 +37,7 @@ public class Avx512MontgomeryTests
 
     /// <summary>
     /// Operands across [0, 2p): the ends of both halves of the range, values whose digits are all at
-    /// the 2^29 - 1 maximum, values with a single high digit, and random values in each half.
+    /// the 2^52 - 1 maximum, values with a single high digit, and random values in each half.
     /// </summary>
     private static List<BigInteger> Operands(int seed)
     {
@@ -52,10 +52,10 @@ public class Avx512MontgomeryTests
             P + 1,
             TwoP - 2,
             TwoP - 1,
-            (BigInteger.One << 29) - 1,
+            (BigInteger.One << Avx512Montgomery.DigitBits) - 1,
             (BigInteger.One << 64) - 1,
             (BigInteger.One << 2048) + 1,
-            (BigInteger.One << (29 * 141)) - 1, // every one of the low 141 digits is 2^29 - 1
+            (BigInteger.One << (Avx512Montgomery.DigitBits * 78)) - 1, // every one of the low 78 digits is 2^52 - 1
             (BigInteger.One << 4095) - 1,
             BigInteger.One << 4095,
         ];
@@ -372,6 +372,80 @@ public class Avx512MontgomeryTests
         Assert.Equal(17, SubgroupMembership.IndexOfFirstNonMember(values));
     }
 
+    [Avx512Theory]
+    [InlineData(2)]   // the spec's p minus 2: low digit 2^52 - 3, so k0 = 1/3 mod 2^52, not 1
+    [InlineData(-1)]  // a random full-width odd modulus with every digit populated
+    public void Multiply_MatchesBigInteger_ForFullWidthModuliWhoseK0IsNotOne(int subtractFromP)
+    {
+        // The spec's p has its low 256 bits all ones, which makes k0 = -p^-1 mod 2^52 equal to 1 and
+        // would hide a kernel that forgot to multiply by it. Montgomery multiplication needs only an
+        // odd modulus, so these need not be prime.
+        Random random = new(subtractFromP + 100);
+        BigInteger modulus;
+        if (subtractFromP >= 0)
+        {
+            modulus = P - subtractFromP;
+        }
+        else
+        {
+            byte[] bytes = new byte[512];
+            random.NextBytes(bytes);
+            modulus = new BigInteger(bytes, isUnsigned: true, isBigEndian: true) | (BigInteger.One << 4095) | BigInteger.One;
+        }
+
+        // The units mod 2^52 have order 2^51, so m^(2^51 - 1) is m^-1 there.
+        BigInteger digitRadix = BigInteger.One << Avx512Montgomery.DigitBits;
+        BigInteger inverse = BigInteger.ModPow(modulus % digitRadix, digitRadix / 2 - 1, digitRadix);
+        Assert.NotEqual(BigInteger.One, (digitRadix - inverse) % digitRadix);
+
+        CryptographicParameters parameters = new(CryptographicParameters.VERSION_DEFAULT, q: "0B", p: Convert.ToHexString(modulus.ToByteArray(isUnsigned: true, isBigEndian: true)), r: "02", g: "04");
+        using (EGParameters.OverrideScope(parameters, new GuardianParameters()))
+        {
+            Assert.True(Avx512Montgomery.TryGetCurrent(out Avx512Montgomery engine));
+            Assert.Equal(modulus, engine.Modulus);
+
+            BigInteger twoM = 2 * modulus;
+            ulong[] a = new ulong[Avx512Montgomery.Lanes];
+            ulong[] b = new ulong[Avx512Montgomery.Lanes];
+            ulong[] result = new ulong[Avx512Montgomery.Lanes];
+            BigInteger[] edges = [BigInteger.Zero, BigInteger.One, modulus - 1, modulus, twoM - 1];
+            List<BigInteger> operands = [.. edges];
+            for (int i = 0; i < 24; i++)
+            {
+                byte[] bytes = new byte[520];
+                random.NextBytes(bytes);
+                operands.Add(new BigInteger(bytes, isUnsigned: true) % twoM);
+            }
+
+            foreach (BigInteger x in operands)
+            {
+                foreach (BigInteger y in operands)
+                {
+                    Avx512Montgomery.WriteDigits(x, a);
+                    Avx512Montgomery.WriteDigits(y, b);
+                    engine.Multiply(a, b, result);
+
+                    Assert.All(result, d => Assert.True(d <= Avx512Montgomery.DigitMask, "digit exceeds 2^52 - 1"));
+                    BigInteger product = Avx512Montgomery.FromDigits(result);
+                    Assert.True(product < twoM, "value is not below 2m");
+                    Assert.Equal(x * y % modulus, product * R % modulus);
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public void FloatingPointConstants_MatchTheirBitPatterns()
+    {
+        // The kernel reads doubles' bits as integers and subtracts these biases; they must be the
+        // exact encodings of the addends it uses, and those addends exact powers of two.
+        Assert.Equal(Avx512Montgomery.LowBias, BitConverter.DoubleToUInt64Bits(Avx512Montgomery.TwoPow52));
+        Assert.Equal(Avx512Montgomery.HighBias, BitConverter.DoubleToUInt64Bits(Avx512Montgomery.TwoPow104));
+        Assert.Equal(BigInteger.One << 52, new BigInteger(Avx512Montgomery.TwoPow52));
+        Assert.Equal(BigInteger.One << 104, new BigInteger(Avx512Montgomery.TwoPow104));
+        Assert.Equal((BigInteger.One << 104) + (BigInteger.One << 52), new BigInteger(Avx512Montgomery.TwoPow104 + Avx512Montgomery.TwoPow52));
+    }
+
     [Fact]
     public void Fits_RejectsModuliItCannotHandle()
     {
@@ -397,7 +471,7 @@ public class Avx512MontgomeryTests
 
     private static void AssertValidOperand(ulong[] digits)
     {
-        Assert.All(digits, d => Assert.True(d <= Avx512Montgomery.DigitMask, "digit exceeds 2^29 - 1"));
+        Assert.All(digits, d => Assert.True(d <= Avx512Montgomery.DigitMask, "digit exceeds 2^52 - 1"));
         Assert.True(Avx512Montgomery.FromDigits(digits) < TwoP, "value is not below 2p");
     }
 }

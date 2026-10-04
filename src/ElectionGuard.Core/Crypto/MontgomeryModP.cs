@@ -157,7 +157,7 @@ public static class MontgomeryModP
 
     /// <summary>
     /// Single-value buffers of the shared-squaring path are stack-allocated up to this width, which
-    /// covers both representations of the spec's p: 64 scalar limbs or 144 AVX-512 digits.
+    /// covers both representations of the spec's p: 64 scalar limbs or 80 AVX-512 digits.
     /// </summary>
     private const int MaxStackAllocWidth = Avx512Montgomery.Lanes;
 

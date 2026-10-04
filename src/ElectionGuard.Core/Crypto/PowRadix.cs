@@ -1,8 +1,6 @@
 using ElectionGuard.Core.Extensions;
 using ElectionGuard.Core.Models;
 using System.Numerics;
-using System.Runtime.CompilerServices;
-using System.Runtime.Intrinsics;
 
 namespace ElectionGuard.Core.Crypto;
 
@@ -23,11 +21,8 @@ namespace ElectionGuard.Core.Crypto;
 /// Entries are held in one of two representations, chosen when the table is built:
 ///
 /// - When <see cref="Avx512Montgomery"/> is available for the active p, an entry is that engine's
-///   144 digits of 29 bits, packed one per uint: 576 bytes. The engine itself works on one digit per
-///   64-bit lane, 1152 bytes; entries are widened to that as they are read, which is a handful of
-///   vector instructions against a multiply of a couple of microseconds, so the table is kept at
-///   half the size. An 8-bit window is then 32 rows of 256 entries, 4.5 MiB per base, and the
-///   default 12-bit window 49.5 MiB.
+///   80 digits of 52 bits, one per ulong, exactly as its multiply reads them: 640 bytes. An 8-bit
+///   window is then 32 rows of 256 entries, 5 MiB per base, and the default 12-bit window 55 MiB.
 /// - Otherwise an entry is <see cref="MontgomeryContext"/>'s 64 limbs of 64 bits, 512 bytes:
 ///   4 MiB per base at 8 bits, 44 MiB at 12.
 ///
@@ -42,7 +37,7 @@ public sealed class PowRadix
     /// Bits per window.
     ///
     /// Twelve trades memory for speed: at the v2.1.0 parameter sizes it needs 22 rows of 4096
-    /// entries, so 44 MiB per base against 4 MiB at eight bits (49.5 MiB against 4.5 MiB on
+    /// entries, so 44 MiB per base against 4 MiB at eight bits (55 MiB against 5 MiB on
     /// AVX-512), and it cuts an exponentiation from 31 multiplications to 21. The reference Kotlin
     /// implementation offers the same width as PowRadixOption.HIGH_MEMORY_USE, defaulting to eight;
     /// this defaults to twelve instead, on the grounds that a process which has opted into
@@ -56,15 +51,15 @@ public sealed class PowRadix
 
     /// <summary>
     /// Above 16 bits the table stops being a table and starts being a memory leak: at |p| = 4096
-    /// a 16-bit window already needs 512 MiB for a single base (576 MiB on AVX-512).
+    /// a 16-bit window already needs 512 MiB for a single base (640 MiB on AVX-512).
     /// </summary>
     public const int MaxWindowBits = 16;
 
     /// <summary>Accumulators longer than this are heap-allocated rather than stack-allocated.</summary>
     private const int MaxStackAllocLimbs = 80;
 
-    /// <summary>Bytes per entry of an AVX-512 table: one uint per 29-bit digit.</summary>
-    private const int DigitEntryBytes = Avx512Montgomery.Lanes * sizeof(uint);
+    /// <summary>Bytes per entry of an AVX-512 table: one ulong per 52-bit digit.</summary>
+    private const int DigitEntryBytes = Avx512Montgomery.Lanes * sizeof(ulong);
 
     private PowRadix(BigInteger basis, int windowBits, MontgomeryContext context, Avx512Montgomery? engine, int exponentBits)
     {
@@ -80,16 +75,15 @@ public sealed class PowRadix
         long tableLength = (long)Rows * Columns * width;
         if (tableLength > Array.MaxLength)
         {
-            int elementSize = engine is not null ? sizeof(uint) : sizeof(ulong);
             throw new ArgumentOutOfRangeException(
                 nameof(windowBits),
                 windowBits,
-                $"A {windowBits}-bit window would need a table of {tableLength * elementSize} bytes, which is too large to allocate.");
+                $"A {windowBits}-bit window would need a table of {tableLength * sizeof(ulong)} bytes, which is too large to allocate.");
         }
 
         if (engine is not null)
         {
-            _digitTable = new uint[tableLength];
+            _digitTable = new ulong[tableLength];
             BuildDigitTable(basis, engine);
         }
         else
@@ -102,8 +96,8 @@ public sealed class PowRadix
     /// <summary>The scalar table: <see cref="MontgomeryContext.LimbCount"/> limbs per entry. Null when <see cref="_digitTable"/> is used.</summary>
     private readonly ulong[]? _limbTable;
 
-    /// <summary>The AVX-512 table: <see cref="Avx512Montgomery.Lanes"/> 29-bit digits per entry, one per uint. Null when <see cref="_limbTable"/> is used.</summary>
-    private readonly uint[]? _digitTable;
+    /// <summary>The AVX-512 table: <see cref="Avx512Montgomery.Lanes"/> 52-bit digits per entry, one per ulong. Null when <see cref="_limbTable"/> is used.</summary>
+    private readonly ulong[]? _digitTable;
 
     /// <summary>The fixed base whose powers this table holds.</summary>
     public BigInteger Basis { get; }
@@ -128,9 +122,7 @@ public sealed class PowRadix
     internal bool UsesAvx512 => _digitTable is not null;
 
     /// <summary>Bytes occupied by the table itself.</summary>
-    public long TableSizeInBytes => _digitTable is not null
-        ? (long)_digitTable.Length * sizeof(uint)
-        : (long)_limbTable!.Length * sizeof(ulong);
+    public long TableSizeInBytes => (long)(_digitTable ?? _limbTable)!.Length * sizeof(ulong);
 
     /// <summary>
     /// Bytes a table would occupy for the active parameters, in the representation
@@ -230,13 +222,13 @@ public sealed class PowRadix
 
     /// <summary>
     /// The same construction as <see cref="BuildLimbTable"/>, on <see cref="Avx512Montgomery"/>.
-    /// Every product the engine returns is fully carried, each digit below 2^29, so narrowing it to
-    /// a uint loses nothing. Values stay in the engine's redundant [0, 2p) range, which is what its
-    /// multiply accepts.
+    /// Every product the engine returns is fully carried, each digit below 2^52, which is the form
+    /// its multiply reads, so entries are stored as they come. Values stay in the engine's redundant
+    /// [0, 2p) range, which is what its multiply accepts.
     /// </summary>
     private void BuildDigitTable(BigInteger basis, Avx512Montgomery engine)
     {
-        uint[] table = _digitTable!;
+        ulong[] table = _digitTable!;
         const int lanes = Avx512Montgomery.Lanes;
 
         ulong[] rowBases = new ulong[Rows * lanes];
@@ -257,14 +249,12 @@ public sealed class PowRadix
             ReadOnlySpan<ulong> rowBasis = rowBases.AsSpan(row * lanes, lanes);
             long rowStart = (long)row * Columns * lanes;
 
-            // The running power is kept widened, so each column costs one multiply and one narrow.
-            Span<ulong> current = stackalloc ulong[lanes];
-            engine.One.CopyTo(current);
-            Narrow(current, table.AsSpan(checked((int)rowStart), lanes));
+            engine.One.CopyTo(table.AsSpan(checked((int)rowStart), lanes));
             for (int column = 1; column < Columns; column++)
             {
-                engine.Multiply(current, rowBasis, current);
-                Narrow(current, table.AsSpan(checked((int)(rowStart + (long)column * lanes)), lanes));
+                Span<ulong> previous = table.AsSpan(checked((int)(rowStart + (long)(column - 1) * lanes)), lanes);
+                Span<ulong> current = table.AsSpan(checked((int)(rowStart + (long)column * lanes)), lanes);
+                engine.Multiply(previous, rowBasis, current);
             }
         });
     }
@@ -351,52 +341,20 @@ public sealed class PowRadix
 
     /// <summary>
     /// The AVX-512 comb, leaving the engine's Montgomery-form result, in [0, 2p), in
-    /// <paramref name="result"/>. Each selected entry is widened into a stack buffer and multiplied in.
+    /// <paramref name="result"/>. Each selected entry is multiplied in straight from the table.
     /// </summary>
     private void PowDigits(ReadOnlySpan<ulong> e, Span<ulong> result)
     {
-        uint[] table = _digitTable!;
+        ulong[] table = _digitTable!;
         Avx512Montgomery engine = Engine!;
         const int lanes = Avx512Montgomery.Lanes;
         ulong mask = (1UL << WindowBits) - 1;
 
-        Span<ulong> entry = stackalloc ulong[lanes];
-
-        Widen(table.AsSpan(EntryOffset(0, ReadDigit(e, 0, mask), lanes), lanes), result);
+        table.AsSpan(EntryOffset(0, ReadDigit(e, 0, mask), lanes), lanes).CopyTo(result);
         for (int row = 1; row < Rows; row++)
         {
             int digit = ReadDigit(e, row, mask);
-            Widen(table.AsSpan(EntryOffset(row, digit, lanes), lanes), entry);
-            engine.Multiply(result, entry, result);
-        }
-    }
-
-    /// <summary>Zero-extends <see cref="Avx512Montgomery.Lanes"/> uint digits to ulong lanes.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void Widen(ReadOnlySpan<uint> packed, Span<ulong> lanes)
-    {
-        const int vectors = Avx512Montgomery.Lanes / 16;
-        if (packed.Length < Avx512Montgomery.Lanes || lanes.Length < Avx512Montgomery.Lanes)
-        {
-            throw new ArgumentException($"Entries have {Avx512Montgomery.Lanes} digits.");
-        }
-
-        ref uint source = ref System.Runtime.InteropServices.MemoryMarshal.GetReference(packed);
-        ref ulong destination = ref System.Runtime.InteropServices.MemoryMarshal.GetReference(lanes);
-        for (int v = 0; v < vectors; v++)
-        {
-            (Vector512<ulong> lower, Vector512<ulong> upper) = Vector512.Widen(Vector512.LoadUnsafe(ref source, (nuint)(v * 16)));
-            lower.StoreUnsafe(ref destination, (nuint)(v * 16));
-            upper.StoreUnsafe(ref destination, (nuint)(v * 16 + 8));
-        }
-    }
-
-    /// <summary>Packs fully carried digits, each below 2^29, one per uint.</summary>
-    private static void Narrow(ReadOnlySpan<ulong> lanes, Span<uint> packed)
-    {
-        for (int k = 0; k < Avx512Montgomery.Lanes; k++)
-        {
-            packed[k] = (uint)lanes[k];
+            engine.Multiply(result, table.AsSpan(EntryOffset(row, digit, lanes), lanes), result);
         }
     }
 

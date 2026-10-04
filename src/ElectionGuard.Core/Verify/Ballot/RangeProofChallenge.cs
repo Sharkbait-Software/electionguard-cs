@@ -39,7 +39,7 @@ internal sealed class RangeProofChallenge
 
     /// <summary>
     /// Single-value buffers are stack-allocated up to this width, which covers both representations
-    /// of the spec's p: 64 scalar limbs or 144 AVX-512 digits.
+    /// of the spec's p: 64 scalar limbs or 80 AVX-512 digits.
     /// </summary>
     private const int MaxStackAllocWidth = Avx512Montgomery.Lanes;
 

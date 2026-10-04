@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Generates src/ElectionGuard.Core/Crypto/Avx512Montgomery.Kernel.g.cs.
 
-The AVX-512 almost-Montgomery multiplication keeps its 144-digit accumulator in 18 Vector512<ulong>
+The AVX-512 almost-Montgomery multiplication keeps its 80-digit accumulator in 10 Vector512<ulong>
 values. Written as a loop over a span, the JIT loads and stores every one of them on every one of
-the 142 iterations; written as 18 named locals it can keep them in zmm registers (there are 32),
-which is what makes the kernel worth having. C# has no way to say "unroll this over 18 locals", so
+the 79 iterations; written as 10 named locals it can keep them in zmm registers (there are 32),
+which is what makes the kernel worth having. C# has no way to say "unroll this over 10 locals", so
 the unrolled body is generated here rather than maintained by hand.
 
 Everything that is arithmetic rather than repetition - the digit width, iteration count, the
-normalization interval and the bounds that justify them - lives in the hand-written
+floating-point constants and the bounds that justify them - lives in the hand-written
 Avx512Montgomery.cs. This script only emits the per-vector repetition, and the generated code
 refers back to those constants by name.
 
@@ -25,7 +25,7 @@ import sys
 
 # Must equal Avx512Montgomery.Vectors (Lanes / 8). The generated file asserts this at compile time
 # through a const it declares and the hand-written half checks.
-VECTORS = 18
+VECTORS = 10
 
 OUTPUT = pathlib.Path(__file__).resolve().parent.parent / "src" / "ElectionGuard.Core" / "Crypto" / "Avx512Montgomery.Kernel.g.cs"
 
@@ -56,65 +56,81 @@ def generate() -> str:
     emit("    /// The body of <see cref=\"Multiply\"/>, with the accumulator unrolled into named locals so that")
     emit("    /// it can stay in registers. See the class remarks for the algorithm and its bounds.")
     emit("    /// </summary>")
+    emit("    // SkipLocalsInit: aDigits is written in full before it is read, so zeroing it first is waste.")
     emit("    [MethodImpl(MethodImplOptions.NoInlining)]")
+    emit("    [SkipLocalsInit]")
     emit("    private void MultiplyCore(ref ulong a, ref ulong b, ref ulong result)")
     emit("    {")
+    emit("        // a's digits as doubles, exactly: each is below 2^52, so OR-ing it into the mantissa of 2^52")
+    emit("        // and subtracting 2^52 recovers it. b's digits are converted one at a time as they are used.")
+    emit("        Span<double> aDigits = stackalloc double[Lanes];")
     emit("        ref Vector512<ulong> va = ref Unsafe.As<ulong, Vector512<ulong>>(ref a);")
-    emit("        ref Vector512<ulong> vm = ref Unsafe.As<ulong, Vector512<ulong>>(ref _modulusDigits[0]);")
-    emit("        ulong a0 = a;")
-    emit("        ulong m0 = _modulusDigits[0];")
-    emit("        ulong k0 = _k0;")
-    emit("        Vector512<ulong> zero = Vector512<ulong>.Zero;")
-    emit("        Vector512<ulong> mask = Vector512.Create(DigitMask);")
+    emit("        ref Vector512<double> vad = ref Unsafe.As<double, Vector512<double>>(ref aDigits[0]);")
+    emit("        Vector512<ulong> lowBias = Vector512.Create(LowBias);")
+    emit("        Vector512<double> twoPow52 = Vector512.Create(TwoPow52);")
+    for k in range(n):
+        emit(f"        Unsafe.Add(ref vad, {k}) = Avx512F.Subtract(Avx512F.Or(Unsafe.Add(ref va, {k}), lowBias).AsDouble(), twoPow52);")
     emit("")
-    emit("        // The accumulator, digit 8k + j in lane j of xk.")
+    emit("        ref Vector512<double> vp = ref Unsafe.As<double, Vector512<double>>(ref _modulusDoubles[0]);")
+    emit("        ulong k0 = _k0;")
+    emit("        Vector512<double> highAddend = Vector512.Create(TwoPow104);")
+    emit("        Vector512<double> lowAddend = Vector512.Create(TwoPow104 + TwoPow52);")
+    emit("        Vector512<ulong> zero = Vector512<ulong>.Zero;")
+    emit("")
+    emit("        // The accumulator, digit 8k + j in lane j of xk, each lane offset by a known bias.")
     for k in range(n):
         emit(f"        Vector512<ulong> x{k} = zero;")
     emit("")
-    emit("        int i = 0;")
-    emit("        for (int block = 0; block < Iterations; block += NormalizeInterval)")
+    emit("        // Lane 0's bias in x0 grows by IterationBias every step. t0 adds one low half to it and s0")
+    emit("        // two, so these track the bias of each, to subtract where the true value is needed.")
+    emit("        ulong lane0Bias = LowBias;")
+    emit("        ulong sumBias = 2 * LowBias;")
+    emit("        for (int i = 0; i < Iterations; i++)")
     emit("        {")
-    emit("            int end = Math.Min(block + NormalizeInterval, Iterations);")
-    emit("            for (; i < end; i++)")
-    emit("            {")
-    emit("                // y makes the bottom digit of acc + a*b[i] + y*p divisible by 2^DigitBits, so the")
-    emit("                // whole sum can be shifted down one digit. That bottom digit's high part is the")
-    emit("                // carry, computed here in scalar because the shift discards lane 0.")
-    emit("                ulong bi = Unsafe.Add(ref b, i);")
-    emit("                ulong t0 = x0.ToScalar() + a0 * bi;")
-    emit("                ulong y = unchecked(t0 * k0) & DigitMask;")
-    emit("                ulong carry = (t0 + y * m0) >> DigitBits;")
-    emit("                Vector512<uint> vb = Vector512.Create(bi).AsUInt32();")
-    emit("                Vector512<uint> vy = Vector512.Create(y).AsUInt32();")
+    emit("            Vector512<double> vb = Vector512.Create((double)(long)Unsafe.Add(ref b, i));")
     emit("")
-    emit("                // acc += a * b[i] + p * y, each lane a 32x32->64-bit product of two digits.")
+    emit("            // a * b[i], each lane split exactly into high and low 52-bit halves; see the class remarks.")
+    emit("            // Only the bottom vector is needed before y; the rest are computed beside the p * y")
+    emit("            // products, so that fewer of them are live at once.")
+    emit("            Vector512<double> ah0 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vad, 0), vb, highAddend, FloatRoundingMode.ToNegativeInfinity);")
+    emit("            Vector512<double> al0 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vad, 0), vb, Avx512F.Subtract(lowAddend, ah0));")
+    emit("")
+    emit("            // y makes the bottom digit of acc + a*b[i] + y*p divisible by 2^DigitBits, so the whole")
+    emit("            // sum can be shifted down one digit. t0 is that bottom digit before y*p is added.")
+    emit("            ulong t0 = x0.ToScalar() + al0.AsUInt64().ToScalar() - lane0Bias;")
+    emit("            ulong y = unchecked(t0 * k0) & DigitMask;")
+    emit("            Vector512<double> vy = Vector512.Create((double)(long)y);")
+    emit("")
+    emit("            // acc += a * b[i] + p * y: the low halves where they are, the high halves one digit up,")
+    emit("            // which after the shift below is where they already sit.")
     for k in range(n):
-        emit(
-            f"                Vector512<ulong> s{k} = Avx512F.Add(Avx512F.Add(x{k}, "
-            f"Avx512F.Multiply(Unsafe.Add(ref va, {k}).AsUInt32(), vb)), "
-            f"Avx512F.Multiply(Unsafe.Add(ref vm, {k}).AsUInt32(), vy));"
-        )
+        if k:
+            emit(f"            Vector512<double> ah{k} = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vad, {k}), vb, highAddend, FloatRoundingMode.ToNegativeInfinity);")
+            emit(f"            Vector512<double> al{k} = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vad, {k}), vb, Avx512F.Subtract(lowAddend, ah{k}));")
+        emit(f"            Vector512<double> ph{k} = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vp, {k}), vy, highAddend, FloatRoundingMode.ToNegativeInfinity);")
+        emit(f"            Vector512<double> pl{k} = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vp, {k}), vy, Avx512F.Subtract(lowAddend, ph{k}));")
+        emit(f"            Vector512<ulong> s{k} = Avx512F.Add(Avx512F.Add(x{k}, al{k}.AsUInt64()), pl{k}.AsUInt64());")
+        emit(f"            Vector512<ulong> g{k} = Avx512F.Add(ah{k}.AsUInt64(), ph{k}.AsUInt64());")
     emit("")
-    emit("                // acc >>= DigitBits: every lane moves down one, and the top lane fills with zero.")
+    emit("            // The bottom digit is now a multiple of 2^DigitBits; its quotient is the carry, computed")
+    emit("            // in scalar because the shift discards lane 0.")
+    emit("            ulong carry = (s0.ToScalar() - sumBias) >> DigitBits;")
+    emit("")
+    emit("            // acc >>= DigitBits: every lane moves down one and the top lane fills with zero; then the")
+    emit("            // high halves are added in.")
     for k in range(n - 1):
-        emit(f"                x{k} = Avx512F.AlignRight64(s{k + 1}, s{k}, 1);")
-    emit(f"                x{n - 1} = Avx512F.AlignRight64(zero, s{n - 1}, 1);")
-    emit("                x0 = Avx512F.Add(x0, Vector512.CreateScalar(carry));")
-    emit("            }")
-    emit("")
-    emit("            // One carry step for every lane at once: lane k keeps its low DigitBits bits and gains")
-    emit("            // lane k-1's high bits.")
-    for k in range(n):
-        emit(f"            Vector512<ulong> h{k} = Avx512F.ShiftRightLogical(x{k}, DigitBits);")
-    emit("            x0 = Avx512F.Add(Avx512F.And(x0, mask), Avx512F.AlignRight64(h0, zero, 7));")
-    for k in range(1, n):
-        emit(f"            x{k} = Avx512F.Add(Avx512F.And(x{k}, mask), Avx512F.AlignRight64(h{k}, h{k - 1}, 7));")
+        emit(f"            x{k} = Avx512F.Add(Avx512F.AlignRight64(s{k + 1}, s{k}, 1), g{k});")
+    emit(f"            x{n - 1} = Avx512F.Add(Avx512F.AlignRight64(zero, s{n - 1}, 1), g{n - 1});")
+    emit("            x0 = Avx512F.Add(x0, Vector512.CreateScalar(carry));")
+    emit("            lane0Bias += IterationBias;")
+    emit("            sumBias += IterationBias;")
     emit("        }")
     emit("")
     emit("        // a and b are not read again, so writing the result now is safe even when it aliases them.")
     emit("        ref Vector512<ulong> vr = ref Unsafe.As<ulong, Vector512<ulong>>(ref result);")
+    emit("        ref Vector512<ulong> vbias = ref Unsafe.As<ulong, Vector512<ulong>>(ref FinalBias[0]);")
     for k in range(n):
-        emit(f"        Unsafe.Add(ref vr, {k}) = x{k};")
+        emit(f"        Unsafe.Add(ref vr, {k}) = Avx512F.Subtract(x{k}, Unsafe.Add(ref vbias, {k}));")
     emit("")
     emit("        PropagateCarries(ref result);")
     emit("    }")

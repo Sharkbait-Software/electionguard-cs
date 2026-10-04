@@ -84,8 +84,8 @@ public class PowRadixTests
         Assert.Equal(8, radix.WindowBits);
 
         // 32 rows x 256 entries x 64 limbs x 8 bytes = 4 MiB for scalar limbs, or
-        // 32 x 256 x 144 digits x 4 bytes = 4.5 MiB for AVX-512 digits.
-        long expected = radix.UsesAvx512 ? 4608L * 1024 : 4L * 1024 * 1024;
+        // 32 x 256 x 80 digits x 8 bytes = 5 MiB for AVX-512 digits.
+        long expected = radix.UsesAvx512 ? 5L * 1024 * 1024 : 4L * 1024 * 1024;
         Assert.Equal(expected, radix.TableSizeInBytes);
     }
 
@@ -99,14 +99,14 @@ public class PowRadixTests
     }
 
     [Avx512Fact]
-    public void Build_Avx512Table_PacksDigitsIntoUInts()
+    public void Build_Avx512Table_HoldsTheEnginesOwnDigits()
     {
-        // 144 digits of 29 bits, one per uint: 576 bytes an entry, against the 1152 the engine's
-        // own one-digit-per-ulong layout would take.
+        // 80 digits of 52 bits, one per ulong, exactly as the engine's multiply reads them: 640
+        // bytes an entry.
         PowRadix radix = PowRadix.Build(G, 8);
 
         Assert.True(radix.UsesAvx512);
-        Assert.Equal(32L * 256 * 576, radix.TableSizeInBytes);
+        Assert.Equal(32L * 256 * 640, radix.TableSizeInBytes);
     }
 
     [Fact]
@@ -149,10 +149,10 @@ public class PowRadixTests
     [Avx512Fact]
     public void EstimateTableSizeInBytes_Avx512_GrowsAsDocumented()
     {
-        // 576-byte entries: 4.5 MiB at 8 bits, 49.5 MiB at the default 12, 576 MiB at 16.
-        Assert.Equal(4608L * 1024, PowRadix.EstimateTableSizeInBytes(8));
-        Assert.Equal(50688L * 1024, PowRadix.EstimateTableSizeInBytes(12));
-        Assert.Equal(576L * 1024 * 1024, PowRadix.EstimateTableSizeInBytes(16));
+        // 640-byte entries: 5 MiB at 8 bits, 55 MiB at the default 12, 640 MiB at 16.
+        Assert.Equal(5L * 1024 * 1024, PowRadix.EstimateTableSizeInBytes(8));
+        Assert.Equal(56320L * 1024, PowRadix.EstimateTableSizeInBytes(12));
+        Assert.Equal(640L * 1024 * 1024, PowRadix.EstimateTableSizeInBytes(16));
     }
 
     [Fact]

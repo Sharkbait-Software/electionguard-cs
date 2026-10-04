@@ -13,24 +13,42 @@ namespace ElectionGuard.Core.Crypto;
 internal sealed partial class Avx512Montgomery
 {
     /// <summary>The vector count this kernel was generated for; must equal <see cref="Vectors"/>.</summary>
-    private const int GeneratedVectors = 18;
+    private const int GeneratedVectors = 10;
 
     /// <summary>
     /// The body of <see cref="Multiply"/>, with the accumulator unrolled into named locals so that
     /// it can stay in registers. See the class remarks for the algorithm and its bounds.
     /// </summary>
+    // SkipLocalsInit: aDigits is written in full before it is read, so zeroing it first is waste.
     [MethodImpl(MethodImplOptions.NoInlining)]
+    [SkipLocalsInit]
     private void MultiplyCore(ref ulong a, ref ulong b, ref ulong result)
     {
+        // a's digits as doubles, exactly: each is below 2^52, so OR-ing it into the mantissa of 2^52
+        // and subtracting 2^52 recovers it. b's digits are converted one at a time as they are used.
+        Span<double> aDigits = stackalloc double[Lanes];
         ref Vector512<ulong> va = ref Unsafe.As<ulong, Vector512<ulong>>(ref a);
-        ref Vector512<ulong> vm = ref Unsafe.As<ulong, Vector512<ulong>>(ref _modulusDigits[0]);
-        ulong a0 = a;
-        ulong m0 = _modulusDigits[0];
-        ulong k0 = _k0;
-        Vector512<ulong> zero = Vector512<ulong>.Zero;
-        Vector512<ulong> mask = Vector512.Create(DigitMask);
+        ref Vector512<double> vad = ref Unsafe.As<double, Vector512<double>>(ref aDigits[0]);
+        Vector512<ulong> lowBias = Vector512.Create(LowBias);
+        Vector512<double> twoPow52 = Vector512.Create(TwoPow52);
+        Unsafe.Add(ref vad, 0) = Avx512F.Subtract(Avx512F.Or(Unsafe.Add(ref va, 0), lowBias).AsDouble(), twoPow52);
+        Unsafe.Add(ref vad, 1) = Avx512F.Subtract(Avx512F.Or(Unsafe.Add(ref va, 1), lowBias).AsDouble(), twoPow52);
+        Unsafe.Add(ref vad, 2) = Avx512F.Subtract(Avx512F.Or(Unsafe.Add(ref va, 2), lowBias).AsDouble(), twoPow52);
+        Unsafe.Add(ref vad, 3) = Avx512F.Subtract(Avx512F.Or(Unsafe.Add(ref va, 3), lowBias).AsDouble(), twoPow52);
+        Unsafe.Add(ref vad, 4) = Avx512F.Subtract(Avx512F.Or(Unsafe.Add(ref va, 4), lowBias).AsDouble(), twoPow52);
+        Unsafe.Add(ref vad, 5) = Avx512F.Subtract(Avx512F.Or(Unsafe.Add(ref va, 5), lowBias).AsDouble(), twoPow52);
+        Unsafe.Add(ref vad, 6) = Avx512F.Subtract(Avx512F.Or(Unsafe.Add(ref va, 6), lowBias).AsDouble(), twoPow52);
+        Unsafe.Add(ref vad, 7) = Avx512F.Subtract(Avx512F.Or(Unsafe.Add(ref va, 7), lowBias).AsDouble(), twoPow52);
+        Unsafe.Add(ref vad, 8) = Avx512F.Subtract(Avx512F.Or(Unsafe.Add(ref va, 8), lowBias).AsDouble(), twoPow52);
+        Unsafe.Add(ref vad, 9) = Avx512F.Subtract(Avx512F.Or(Unsafe.Add(ref va, 9), lowBias).AsDouble(), twoPow52);
 
-        // The accumulator, digit 8k + j in lane j of xk.
+        ref Vector512<double> vp = ref Unsafe.As<double, Vector512<double>>(ref _modulusDoubles[0]);
+        ulong k0 = _k0;
+        Vector512<double> highAddend = Vector512.Create(TwoPow104);
+        Vector512<double> lowAddend = Vector512.Create(TwoPow104 + TwoPow52);
+        Vector512<ulong> zero = Vector512<ulong>.Zero;
+
+        // The accumulator, digit 8k + j in lane j of xk, each lane offset by a known bias.
         Vector512<ulong> x0 = zero;
         Vector512<ulong> x1 = zero;
         Vector512<ulong> x2 = zero;
@@ -41,133 +59,122 @@ internal sealed partial class Avx512Montgomery
         Vector512<ulong> x7 = zero;
         Vector512<ulong> x8 = zero;
         Vector512<ulong> x9 = zero;
-        Vector512<ulong> x10 = zero;
-        Vector512<ulong> x11 = zero;
-        Vector512<ulong> x12 = zero;
-        Vector512<ulong> x13 = zero;
-        Vector512<ulong> x14 = zero;
-        Vector512<ulong> x15 = zero;
-        Vector512<ulong> x16 = zero;
-        Vector512<ulong> x17 = zero;
 
-        int i = 0;
-        for (int block = 0; block < Iterations; block += NormalizeInterval)
+        // Lane 0's bias in x0 grows by IterationBias every step. t0 adds one low half to it and s0
+        // two, so these track the bias of each, to subtract where the true value is needed.
+        ulong lane0Bias = LowBias;
+        ulong sumBias = 2 * LowBias;
+        for (int i = 0; i < Iterations; i++)
         {
-            int end = Math.Min(block + NormalizeInterval, Iterations);
-            for (; i < end; i++)
-            {
-                // y makes the bottom digit of acc + a*b[i] + y*p divisible by 2^DigitBits, so the
-                // whole sum can be shifted down one digit. That bottom digit's high part is the
-                // carry, computed here in scalar because the shift discards lane 0.
-                ulong bi = Unsafe.Add(ref b, i);
-                ulong t0 = x0.ToScalar() + a0 * bi;
-                ulong y = unchecked(t0 * k0) & DigitMask;
-                ulong carry = (t0 + y * m0) >> DigitBits;
-                Vector512<uint> vb = Vector512.Create(bi).AsUInt32();
-                Vector512<uint> vy = Vector512.Create(y).AsUInt32();
+            Vector512<double> vb = Vector512.Create((double)(long)Unsafe.Add(ref b, i));
 
-                // acc += a * b[i] + p * y, each lane a 32x32->64-bit product of two digits.
-                Vector512<ulong> s0 = Avx512F.Add(Avx512F.Add(x0, Avx512F.Multiply(Unsafe.Add(ref va, 0).AsUInt32(), vb)), Avx512F.Multiply(Unsafe.Add(ref vm, 0).AsUInt32(), vy));
-                Vector512<ulong> s1 = Avx512F.Add(Avx512F.Add(x1, Avx512F.Multiply(Unsafe.Add(ref va, 1).AsUInt32(), vb)), Avx512F.Multiply(Unsafe.Add(ref vm, 1).AsUInt32(), vy));
-                Vector512<ulong> s2 = Avx512F.Add(Avx512F.Add(x2, Avx512F.Multiply(Unsafe.Add(ref va, 2).AsUInt32(), vb)), Avx512F.Multiply(Unsafe.Add(ref vm, 2).AsUInt32(), vy));
-                Vector512<ulong> s3 = Avx512F.Add(Avx512F.Add(x3, Avx512F.Multiply(Unsafe.Add(ref va, 3).AsUInt32(), vb)), Avx512F.Multiply(Unsafe.Add(ref vm, 3).AsUInt32(), vy));
-                Vector512<ulong> s4 = Avx512F.Add(Avx512F.Add(x4, Avx512F.Multiply(Unsafe.Add(ref va, 4).AsUInt32(), vb)), Avx512F.Multiply(Unsafe.Add(ref vm, 4).AsUInt32(), vy));
-                Vector512<ulong> s5 = Avx512F.Add(Avx512F.Add(x5, Avx512F.Multiply(Unsafe.Add(ref va, 5).AsUInt32(), vb)), Avx512F.Multiply(Unsafe.Add(ref vm, 5).AsUInt32(), vy));
-                Vector512<ulong> s6 = Avx512F.Add(Avx512F.Add(x6, Avx512F.Multiply(Unsafe.Add(ref va, 6).AsUInt32(), vb)), Avx512F.Multiply(Unsafe.Add(ref vm, 6).AsUInt32(), vy));
-                Vector512<ulong> s7 = Avx512F.Add(Avx512F.Add(x7, Avx512F.Multiply(Unsafe.Add(ref va, 7).AsUInt32(), vb)), Avx512F.Multiply(Unsafe.Add(ref vm, 7).AsUInt32(), vy));
-                Vector512<ulong> s8 = Avx512F.Add(Avx512F.Add(x8, Avx512F.Multiply(Unsafe.Add(ref va, 8).AsUInt32(), vb)), Avx512F.Multiply(Unsafe.Add(ref vm, 8).AsUInt32(), vy));
-                Vector512<ulong> s9 = Avx512F.Add(Avx512F.Add(x9, Avx512F.Multiply(Unsafe.Add(ref va, 9).AsUInt32(), vb)), Avx512F.Multiply(Unsafe.Add(ref vm, 9).AsUInt32(), vy));
-                Vector512<ulong> s10 = Avx512F.Add(Avx512F.Add(x10, Avx512F.Multiply(Unsafe.Add(ref va, 10).AsUInt32(), vb)), Avx512F.Multiply(Unsafe.Add(ref vm, 10).AsUInt32(), vy));
-                Vector512<ulong> s11 = Avx512F.Add(Avx512F.Add(x11, Avx512F.Multiply(Unsafe.Add(ref va, 11).AsUInt32(), vb)), Avx512F.Multiply(Unsafe.Add(ref vm, 11).AsUInt32(), vy));
-                Vector512<ulong> s12 = Avx512F.Add(Avx512F.Add(x12, Avx512F.Multiply(Unsafe.Add(ref va, 12).AsUInt32(), vb)), Avx512F.Multiply(Unsafe.Add(ref vm, 12).AsUInt32(), vy));
-                Vector512<ulong> s13 = Avx512F.Add(Avx512F.Add(x13, Avx512F.Multiply(Unsafe.Add(ref va, 13).AsUInt32(), vb)), Avx512F.Multiply(Unsafe.Add(ref vm, 13).AsUInt32(), vy));
-                Vector512<ulong> s14 = Avx512F.Add(Avx512F.Add(x14, Avx512F.Multiply(Unsafe.Add(ref va, 14).AsUInt32(), vb)), Avx512F.Multiply(Unsafe.Add(ref vm, 14).AsUInt32(), vy));
-                Vector512<ulong> s15 = Avx512F.Add(Avx512F.Add(x15, Avx512F.Multiply(Unsafe.Add(ref va, 15).AsUInt32(), vb)), Avx512F.Multiply(Unsafe.Add(ref vm, 15).AsUInt32(), vy));
-                Vector512<ulong> s16 = Avx512F.Add(Avx512F.Add(x16, Avx512F.Multiply(Unsafe.Add(ref va, 16).AsUInt32(), vb)), Avx512F.Multiply(Unsafe.Add(ref vm, 16).AsUInt32(), vy));
-                Vector512<ulong> s17 = Avx512F.Add(Avx512F.Add(x17, Avx512F.Multiply(Unsafe.Add(ref va, 17).AsUInt32(), vb)), Avx512F.Multiply(Unsafe.Add(ref vm, 17).AsUInt32(), vy));
+            // a * b[i], each lane split exactly into high and low 52-bit halves; see the class remarks.
+            // Only the bottom vector is needed before y; the rest are computed beside the p * y
+            // products, so that fewer of them are live at once.
+            Vector512<double> ah0 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vad, 0), vb, highAddend, FloatRoundingMode.ToNegativeInfinity);
+            Vector512<double> al0 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vad, 0), vb, Avx512F.Subtract(lowAddend, ah0));
 
-                // acc >>= DigitBits: every lane moves down one, and the top lane fills with zero.
-                x0 = Avx512F.AlignRight64(s1, s0, 1);
-                x1 = Avx512F.AlignRight64(s2, s1, 1);
-                x2 = Avx512F.AlignRight64(s3, s2, 1);
-                x3 = Avx512F.AlignRight64(s4, s3, 1);
-                x4 = Avx512F.AlignRight64(s5, s4, 1);
-                x5 = Avx512F.AlignRight64(s6, s5, 1);
-                x6 = Avx512F.AlignRight64(s7, s6, 1);
-                x7 = Avx512F.AlignRight64(s8, s7, 1);
-                x8 = Avx512F.AlignRight64(s9, s8, 1);
-                x9 = Avx512F.AlignRight64(s10, s9, 1);
-                x10 = Avx512F.AlignRight64(s11, s10, 1);
-                x11 = Avx512F.AlignRight64(s12, s11, 1);
-                x12 = Avx512F.AlignRight64(s13, s12, 1);
-                x13 = Avx512F.AlignRight64(s14, s13, 1);
-                x14 = Avx512F.AlignRight64(s15, s14, 1);
-                x15 = Avx512F.AlignRight64(s16, s15, 1);
-                x16 = Avx512F.AlignRight64(s17, s16, 1);
-                x17 = Avx512F.AlignRight64(zero, s17, 1);
-                x0 = Avx512F.Add(x0, Vector512.CreateScalar(carry));
-            }
+            // y makes the bottom digit of acc + a*b[i] + y*p divisible by 2^DigitBits, so the whole
+            // sum can be shifted down one digit. t0 is that bottom digit before y*p is added.
+            ulong t0 = x0.ToScalar() + al0.AsUInt64().ToScalar() - lane0Bias;
+            ulong y = unchecked(t0 * k0) & DigitMask;
+            Vector512<double> vy = Vector512.Create((double)(long)y);
 
-            // One carry step for every lane at once: lane k keeps its low DigitBits bits and gains
-            // lane k-1's high bits.
-            Vector512<ulong> h0 = Avx512F.ShiftRightLogical(x0, DigitBits);
-            Vector512<ulong> h1 = Avx512F.ShiftRightLogical(x1, DigitBits);
-            Vector512<ulong> h2 = Avx512F.ShiftRightLogical(x2, DigitBits);
-            Vector512<ulong> h3 = Avx512F.ShiftRightLogical(x3, DigitBits);
-            Vector512<ulong> h4 = Avx512F.ShiftRightLogical(x4, DigitBits);
-            Vector512<ulong> h5 = Avx512F.ShiftRightLogical(x5, DigitBits);
-            Vector512<ulong> h6 = Avx512F.ShiftRightLogical(x6, DigitBits);
-            Vector512<ulong> h7 = Avx512F.ShiftRightLogical(x7, DigitBits);
-            Vector512<ulong> h8 = Avx512F.ShiftRightLogical(x8, DigitBits);
-            Vector512<ulong> h9 = Avx512F.ShiftRightLogical(x9, DigitBits);
-            Vector512<ulong> h10 = Avx512F.ShiftRightLogical(x10, DigitBits);
-            Vector512<ulong> h11 = Avx512F.ShiftRightLogical(x11, DigitBits);
-            Vector512<ulong> h12 = Avx512F.ShiftRightLogical(x12, DigitBits);
-            Vector512<ulong> h13 = Avx512F.ShiftRightLogical(x13, DigitBits);
-            Vector512<ulong> h14 = Avx512F.ShiftRightLogical(x14, DigitBits);
-            Vector512<ulong> h15 = Avx512F.ShiftRightLogical(x15, DigitBits);
-            Vector512<ulong> h16 = Avx512F.ShiftRightLogical(x16, DigitBits);
-            Vector512<ulong> h17 = Avx512F.ShiftRightLogical(x17, DigitBits);
-            x0 = Avx512F.Add(Avx512F.And(x0, mask), Avx512F.AlignRight64(h0, zero, 7));
-            x1 = Avx512F.Add(Avx512F.And(x1, mask), Avx512F.AlignRight64(h1, h0, 7));
-            x2 = Avx512F.Add(Avx512F.And(x2, mask), Avx512F.AlignRight64(h2, h1, 7));
-            x3 = Avx512F.Add(Avx512F.And(x3, mask), Avx512F.AlignRight64(h3, h2, 7));
-            x4 = Avx512F.Add(Avx512F.And(x4, mask), Avx512F.AlignRight64(h4, h3, 7));
-            x5 = Avx512F.Add(Avx512F.And(x5, mask), Avx512F.AlignRight64(h5, h4, 7));
-            x6 = Avx512F.Add(Avx512F.And(x6, mask), Avx512F.AlignRight64(h6, h5, 7));
-            x7 = Avx512F.Add(Avx512F.And(x7, mask), Avx512F.AlignRight64(h7, h6, 7));
-            x8 = Avx512F.Add(Avx512F.And(x8, mask), Avx512F.AlignRight64(h8, h7, 7));
-            x9 = Avx512F.Add(Avx512F.And(x9, mask), Avx512F.AlignRight64(h9, h8, 7));
-            x10 = Avx512F.Add(Avx512F.And(x10, mask), Avx512F.AlignRight64(h10, h9, 7));
-            x11 = Avx512F.Add(Avx512F.And(x11, mask), Avx512F.AlignRight64(h11, h10, 7));
-            x12 = Avx512F.Add(Avx512F.And(x12, mask), Avx512F.AlignRight64(h12, h11, 7));
-            x13 = Avx512F.Add(Avx512F.And(x13, mask), Avx512F.AlignRight64(h13, h12, 7));
-            x14 = Avx512F.Add(Avx512F.And(x14, mask), Avx512F.AlignRight64(h14, h13, 7));
-            x15 = Avx512F.Add(Avx512F.And(x15, mask), Avx512F.AlignRight64(h15, h14, 7));
-            x16 = Avx512F.Add(Avx512F.And(x16, mask), Avx512F.AlignRight64(h16, h15, 7));
-            x17 = Avx512F.Add(Avx512F.And(x17, mask), Avx512F.AlignRight64(h17, h16, 7));
+            // acc += a * b[i] + p * y: the low halves where they are, the high halves one digit up,
+            // which after the shift below is where they already sit.
+            Vector512<double> ph0 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vp, 0), vy, highAddend, FloatRoundingMode.ToNegativeInfinity);
+            Vector512<double> pl0 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vp, 0), vy, Avx512F.Subtract(lowAddend, ph0));
+            Vector512<ulong> s0 = Avx512F.Add(Avx512F.Add(x0, al0.AsUInt64()), pl0.AsUInt64());
+            Vector512<ulong> g0 = Avx512F.Add(ah0.AsUInt64(), ph0.AsUInt64());
+            Vector512<double> ah1 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vad, 1), vb, highAddend, FloatRoundingMode.ToNegativeInfinity);
+            Vector512<double> al1 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vad, 1), vb, Avx512F.Subtract(lowAddend, ah1));
+            Vector512<double> ph1 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vp, 1), vy, highAddend, FloatRoundingMode.ToNegativeInfinity);
+            Vector512<double> pl1 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vp, 1), vy, Avx512F.Subtract(lowAddend, ph1));
+            Vector512<ulong> s1 = Avx512F.Add(Avx512F.Add(x1, al1.AsUInt64()), pl1.AsUInt64());
+            Vector512<ulong> g1 = Avx512F.Add(ah1.AsUInt64(), ph1.AsUInt64());
+            Vector512<double> ah2 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vad, 2), vb, highAddend, FloatRoundingMode.ToNegativeInfinity);
+            Vector512<double> al2 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vad, 2), vb, Avx512F.Subtract(lowAddend, ah2));
+            Vector512<double> ph2 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vp, 2), vy, highAddend, FloatRoundingMode.ToNegativeInfinity);
+            Vector512<double> pl2 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vp, 2), vy, Avx512F.Subtract(lowAddend, ph2));
+            Vector512<ulong> s2 = Avx512F.Add(Avx512F.Add(x2, al2.AsUInt64()), pl2.AsUInt64());
+            Vector512<ulong> g2 = Avx512F.Add(ah2.AsUInt64(), ph2.AsUInt64());
+            Vector512<double> ah3 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vad, 3), vb, highAddend, FloatRoundingMode.ToNegativeInfinity);
+            Vector512<double> al3 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vad, 3), vb, Avx512F.Subtract(lowAddend, ah3));
+            Vector512<double> ph3 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vp, 3), vy, highAddend, FloatRoundingMode.ToNegativeInfinity);
+            Vector512<double> pl3 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vp, 3), vy, Avx512F.Subtract(lowAddend, ph3));
+            Vector512<ulong> s3 = Avx512F.Add(Avx512F.Add(x3, al3.AsUInt64()), pl3.AsUInt64());
+            Vector512<ulong> g3 = Avx512F.Add(ah3.AsUInt64(), ph3.AsUInt64());
+            Vector512<double> ah4 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vad, 4), vb, highAddend, FloatRoundingMode.ToNegativeInfinity);
+            Vector512<double> al4 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vad, 4), vb, Avx512F.Subtract(lowAddend, ah4));
+            Vector512<double> ph4 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vp, 4), vy, highAddend, FloatRoundingMode.ToNegativeInfinity);
+            Vector512<double> pl4 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vp, 4), vy, Avx512F.Subtract(lowAddend, ph4));
+            Vector512<ulong> s4 = Avx512F.Add(Avx512F.Add(x4, al4.AsUInt64()), pl4.AsUInt64());
+            Vector512<ulong> g4 = Avx512F.Add(ah4.AsUInt64(), ph4.AsUInt64());
+            Vector512<double> ah5 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vad, 5), vb, highAddend, FloatRoundingMode.ToNegativeInfinity);
+            Vector512<double> al5 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vad, 5), vb, Avx512F.Subtract(lowAddend, ah5));
+            Vector512<double> ph5 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vp, 5), vy, highAddend, FloatRoundingMode.ToNegativeInfinity);
+            Vector512<double> pl5 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vp, 5), vy, Avx512F.Subtract(lowAddend, ph5));
+            Vector512<ulong> s5 = Avx512F.Add(Avx512F.Add(x5, al5.AsUInt64()), pl5.AsUInt64());
+            Vector512<ulong> g5 = Avx512F.Add(ah5.AsUInt64(), ph5.AsUInt64());
+            Vector512<double> ah6 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vad, 6), vb, highAddend, FloatRoundingMode.ToNegativeInfinity);
+            Vector512<double> al6 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vad, 6), vb, Avx512F.Subtract(lowAddend, ah6));
+            Vector512<double> ph6 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vp, 6), vy, highAddend, FloatRoundingMode.ToNegativeInfinity);
+            Vector512<double> pl6 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vp, 6), vy, Avx512F.Subtract(lowAddend, ph6));
+            Vector512<ulong> s6 = Avx512F.Add(Avx512F.Add(x6, al6.AsUInt64()), pl6.AsUInt64());
+            Vector512<ulong> g6 = Avx512F.Add(ah6.AsUInt64(), ph6.AsUInt64());
+            Vector512<double> ah7 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vad, 7), vb, highAddend, FloatRoundingMode.ToNegativeInfinity);
+            Vector512<double> al7 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vad, 7), vb, Avx512F.Subtract(lowAddend, ah7));
+            Vector512<double> ph7 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vp, 7), vy, highAddend, FloatRoundingMode.ToNegativeInfinity);
+            Vector512<double> pl7 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vp, 7), vy, Avx512F.Subtract(lowAddend, ph7));
+            Vector512<ulong> s7 = Avx512F.Add(Avx512F.Add(x7, al7.AsUInt64()), pl7.AsUInt64());
+            Vector512<ulong> g7 = Avx512F.Add(ah7.AsUInt64(), ph7.AsUInt64());
+            Vector512<double> ah8 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vad, 8), vb, highAddend, FloatRoundingMode.ToNegativeInfinity);
+            Vector512<double> al8 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vad, 8), vb, Avx512F.Subtract(lowAddend, ah8));
+            Vector512<double> ph8 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vp, 8), vy, highAddend, FloatRoundingMode.ToNegativeInfinity);
+            Vector512<double> pl8 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vp, 8), vy, Avx512F.Subtract(lowAddend, ph8));
+            Vector512<ulong> s8 = Avx512F.Add(Avx512F.Add(x8, al8.AsUInt64()), pl8.AsUInt64());
+            Vector512<ulong> g8 = Avx512F.Add(ah8.AsUInt64(), ph8.AsUInt64());
+            Vector512<double> ah9 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vad, 9), vb, highAddend, FloatRoundingMode.ToNegativeInfinity);
+            Vector512<double> al9 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vad, 9), vb, Avx512F.Subtract(lowAddend, ah9));
+            Vector512<double> ph9 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vp, 9), vy, highAddend, FloatRoundingMode.ToNegativeInfinity);
+            Vector512<double> pl9 = Avx512F.FusedMultiplyAdd(Unsafe.Add(ref vp, 9), vy, Avx512F.Subtract(lowAddend, ph9));
+            Vector512<ulong> s9 = Avx512F.Add(Avx512F.Add(x9, al9.AsUInt64()), pl9.AsUInt64());
+            Vector512<ulong> g9 = Avx512F.Add(ah9.AsUInt64(), ph9.AsUInt64());
+
+            // The bottom digit is now a multiple of 2^DigitBits; its quotient is the carry, computed
+            // in scalar because the shift discards lane 0.
+            ulong carry = (s0.ToScalar() - sumBias) >> DigitBits;
+
+            // acc >>= DigitBits: every lane moves down one and the top lane fills with zero; then the
+            // high halves are added in.
+            x0 = Avx512F.Add(Avx512F.AlignRight64(s1, s0, 1), g0);
+            x1 = Avx512F.Add(Avx512F.AlignRight64(s2, s1, 1), g1);
+            x2 = Avx512F.Add(Avx512F.AlignRight64(s3, s2, 1), g2);
+            x3 = Avx512F.Add(Avx512F.AlignRight64(s4, s3, 1), g3);
+            x4 = Avx512F.Add(Avx512F.AlignRight64(s5, s4, 1), g4);
+            x5 = Avx512F.Add(Avx512F.AlignRight64(s6, s5, 1), g5);
+            x6 = Avx512F.Add(Avx512F.AlignRight64(s7, s6, 1), g6);
+            x7 = Avx512F.Add(Avx512F.AlignRight64(s8, s7, 1), g7);
+            x8 = Avx512F.Add(Avx512F.AlignRight64(s9, s8, 1), g8);
+            x9 = Avx512F.Add(Avx512F.AlignRight64(zero, s9, 1), g9);
+            x0 = Avx512F.Add(x0, Vector512.CreateScalar(carry));
+            lane0Bias += IterationBias;
+            sumBias += IterationBias;
         }
 
         // a and b are not read again, so writing the result now is safe even when it aliases them.
         ref Vector512<ulong> vr = ref Unsafe.As<ulong, Vector512<ulong>>(ref result);
-        Unsafe.Add(ref vr, 0) = x0;
-        Unsafe.Add(ref vr, 1) = x1;
-        Unsafe.Add(ref vr, 2) = x2;
-        Unsafe.Add(ref vr, 3) = x3;
-        Unsafe.Add(ref vr, 4) = x4;
-        Unsafe.Add(ref vr, 5) = x5;
-        Unsafe.Add(ref vr, 6) = x6;
-        Unsafe.Add(ref vr, 7) = x7;
-        Unsafe.Add(ref vr, 8) = x8;
-        Unsafe.Add(ref vr, 9) = x9;
-        Unsafe.Add(ref vr, 10) = x10;
-        Unsafe.Add(ref vr, 11) = x11;
-        Unsafe.Add(ref vr, 12) = x12;
-        Unsafe.Add(ref vr, 13) = x13;
-        Unsafe.Add(ref vr, 14) = x14;
-        Unsafe.Add(ref vr, 15) = x15;
-        Unsafe.Add(ref vr, 16) = x16;
-        Unsafe.Add(ref vr, 17) = x17;
+        ref Vector512<ulong> vbias = ref Unsafe.As<ulong, Vector512<ulong>>(ref FinalBias[0]);
+        Unsafe.Add(ref vr, 0) = Avx512F.Subtract(x0, Unsafe.Add(ref vbias, 0));
+        Unsafe.Add(ref vr, 1) = Avx512F.Subtract(x1, Unsafe.Add(ref vbias, 1));
+        Unsafe.Add(ref vr, 2) = Avx512F.Subtract(x2, Unsafe.Add(ref vbias, 2));
+        Unsafe.Add(ref vr, 3) = Avx512F.Subtract(x3, Unsafe.Add(ref vbias, 3));
+        Unsafe.Add(ref vr, 4) = Avx512F.Subtract(x4, Unsafe.Add(ref vbias, 4));
+        Unsafe.Add(ref vr, 5) = Avx512F.Subtract(x5, Unsafe.Add(ref vbias, 5));
+        Unsafe.Add(ref vr, 6) = Avx512F.Subtract(x6, Unsafe.Add(ref vbias, 6));
+        Unsafe.Add(ref vr, 7) = Avx512F.Subtract(x7, Unsafe.Add(ref vbias, 7));
+        Unsafe.Add(ref vr, 8) = Avx512F.Subtract(x8, Unsafe.Add(ref vbias, 8));
+        Unsafe.Add(ref vr, 9) = Avx512F.Subtract(x9, Unsafe.Add(ref vbias, 9));
 
         PropagateCarries(ref result);
     }

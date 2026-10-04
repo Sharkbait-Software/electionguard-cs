@@ -58,9 +58,9 @@ and 30.2 ms/ballot to verify:
 | 16              | 2,910 ms | 1,536 MB| 0.89 ms  | 9.58 ms  | 1,619 MB |
 
 These numbers predate the AVX-512 tables and **need re-measuring**. On hardware with AVX-512F,
-`PowRadix` now stores each entry as the AVX-512 engine's 144 29-bit digits packed one per `uint`
-(576 bytes, against 512 for scalar 64-bit limbs), so the table sizes above become 13.5 MB, 148.5 MB
-and 1,728 MB for the three bases (computed, not measured); without AVX-512F they are unchanged. The
+`PowRadix` now stores each entry as the AVX-512 engine's 80 52-bit digits, one per `ulong` (640
+bytes, against 512 for scalar 64-bit limbs), so the table sizes above become 15 MB, 165 MB and
+1,920 MB for the three bases (computed, not measured); without AVX-512F they are unchanged. The
 build, encrypt, verify and working-set columns will all have moved.
 
 Encryption keeps scaling with window width because every one of its exponentiations is on g, K or

@@ -11,7 +11,7 @@ namespace ElectionGuard.Benchmarks;
 /// exponentiation falls roughly as ceil(|q| / windowBits) while the table grows as 2^windowBits.
 /// These are the numbers behind <see cref="PowRadix.DefaultWindowBits"/>.
 ///
-/// 16 is deliberately absent. At the v2.1.0 parameter sizes its table is 512 MiB for a single base (576 MiB on AVX-512),
+/// 16 is deliberately absent. At the v2.1.0 parameter sizes its table is 512 MiB for a single base (640 MiB on AVX-512),
 /// and BenchmarkDotNet would build one per iteration of the setup; the perf CLI measures that width
 /// instead, once, via --window-bits 16.
 /// </summary>

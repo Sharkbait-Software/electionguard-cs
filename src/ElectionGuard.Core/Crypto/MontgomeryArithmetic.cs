@@ -65,7 +65,7 @@ internal readonly struct ScalarMontgomeryArithmetic(MontgomeryContext context) :
 }
 
 /// <summary>
-/// 29-bit digits in [0, 2p), so 1 has two representations; <see cref="Avx512Montgomery.IsOne"/>
+/// 52-bit digits in [0, 2p), so 1 has two representations; <see cref="Avx512Montgomery.IsOne"/>
 /// accepts both. There is no dedicated squaring on this representation, so a square costs a full
 /// multiply.
 /// </summary>
