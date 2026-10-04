@@ -19,6 +19,19 @@ public struct VotingDeviceInformationHash : IEquatable<VotingDeviceInformationHa
             deviceIdentifierBytes);
     }
 
+    /// <summary>
+    /// §4.1.4 device information hash for a device generating pre-encrypted ballots.
+    /// </summary>
+    public static VotingDeviceInformationHash ForPreEncryptedBallots(ExtendedBaseHash extendedBaseHash, string deviceIdentifier)
+    {
+        // Formula (119): HDI = H(HE; 0x43, S_device), with S_device length-prefixed per §5.5.5.
+        var deviceIdentifierBytes = Encoding.UTF8.GetBytes(deviceIdentifier);
+        return new VotingDeviceInformationHash(EGHash.Hash(extendedBaseHash,
+            [0x43],
+            deviceIdentifierBytes.Length.ToByteArray(),
+            deviceIdentifierBytes));
+    }
+
     private readonly byte[] _value;
 
     public static implicit operator byte[](VotingDeviceInformationHash i)

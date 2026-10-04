@@ -35,6 +35,37 @@ public struct ChainingField : IEquatable<ChainingField>
         }
     }
 
+    /// <summary>
+    /// §4.1.4 Ballot Chaining on a device generating pre-encrypted ballots. The same as §3.4.4
+    /// except that the chain is initialized with the pre-encrypted domain separator 0x42.
+    /// </summary>
+    public static ChainingField ForPreEncryptedBallots(ChainingMode chainingMode, VotingDeviceInformationHash deviceHash, ExtendedBaseHash extendedBaseHash, ConfirmationCode? previousConfirmationCode)
+    {
+        byte[] chainingModeIdentifier = ((int)chainingMode).ToByteArray();
+
+        if (chainingMode == ChainingMode.None)
+        {
+            // 16.E: BC = 0x00000000 || HDI.
+            return new ChainingField(ByteArrayExtensions.Concat(chainingModeIdentifier, deviceHash));
+        }
+
+        if (previousConfirmationCode == null)
+        {
+            // Formula (117): BC,0 = 0x00000001 || HDI ; H0 = H(HE; 0x42, BC,0).
+            byte[] bc0 = ByteArrayExtensions.Concat(chainingModeIdentifier, deviceHash);
+            byte[] h0 = EGHash.Hash(extendedBaseHash, [0x42], bc0);
+            return new ChainingField(ByteArrayExtensions.Concat(chainingModeIdentifier, h0));
+        }
+
+        // 16.F: BC,j = 0x00000001 || Hj-1.
+        return new ChainingField(ByteArrayExtensions.Concat(chainingModeIdentifier, previousConfirmationCode));
+    }
+
+    private ChainingField(byte[] value)
+    {
+        _value = value;
+    }
+
     private readonly byte[] _value;
 
     public static implicit operator byte[](ChainingField i)

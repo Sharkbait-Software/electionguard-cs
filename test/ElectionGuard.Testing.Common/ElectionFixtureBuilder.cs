@@ -1,6 +1,7 @@
 using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.KeyGeneration;
 using ElectionGuard.Core.Models;
+using ElectionGuard.Core.PreEncryption;
 using ElectionGuard.Core.Tally;
 using System.Text.Json;
 
@@ -122,7 +123,8 @@ public static class ElectionFixtureBuilder
         bool includeWriteIns = false,
         ChainingMode chainingMode = ChainingMode.None,
         int optionSelectionLimit = 1,
-        int selectionLimit = 1)
+        int selectionLimit = 1,
+        HashTrimmingFunction? hashTrimmingFunction = null)
     {
         var manifest = new Manifest
         {
@@ -158,6 +160,7 @@ public static class ElectionFixtureBuilder
             IncludeUndervotes = true,
             IncludeWriteins = includeWriteIns,
             ChainingMode = chainingMode,
+            HashTrimmingFunction = hashTrimmingFunction,
         };
 
         var bytes = JsonSerializer.SerializeToUtf8Bytes(manifest);

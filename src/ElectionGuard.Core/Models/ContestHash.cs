@@ -86,6 +86,44 @@ public struct ContestHash : IEquatable<ContestHash>
         offset += ModPBytes;
     }
 
+    /// <summary>
+    /// §4.1.2 Contest Hash for a pre-encrypted ballot, computed from the contest's selection hashes
+    /// (including its null-vector hashes) rather than from a single selection vector.
+    /// </summary>
+    public static ContestHash ForPreEncryptedContest(
+        SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash,
+        int contestIndex,
+        IEnumerable<SelectionHash> selectionHashes)
+    {
+        // Formula (115): chi_l = H(HI; 0x41, ind_c(l), psi_pi(1), ..., psi_pi(m+L)), the selection
+        // hashes in increasing numerical order so their order reveals nothing about the selections.
+        var sorted = selectionHashes.Order().ToList();
+
+        int length = 5 + sorted.Count * EGHash.HashBytes;
+        byte[] buffer = ArrayPool<byte>.Shared.Rent(length);
+        try
+        {
+            Span<byte> message = buffer.AsSpan(0, length);
+            message[0] = 0x41;
+            BinaryPrimitives.WriteInt32BigEndian(message.Slice(1, 4), contestIndex);
+            int offset = 5;
+            foreach (var selectionHash in sorted)
+            {
+                byte[] bytes = selectionHash;
+                bytes.CopyTo(message[offset..]);
+                offset += bytes.Length;
+            }
+
+            var value = new byte[EGHash.HashBytes];
+            EGHash.HashConcatenated(selectionEncryptionIdentifierHash, message, value);
+            return new ContestHash(value);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
     private readonly byte[] _value;
 
     public static implicit operator byte[](ContestHash i)

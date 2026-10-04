@@ -1,3 +1,6 @@
+using ElectionGuard.Core.PreEncryption;
+using System.Text.Json.Serialization;
+
 namespace ElectionGuard.Core.Models;
 
 public record Manifest
@@ -11,6 +14,14 @@ public record Manifest
     public bool IncludeUndervotes { get; init; }
     public bool IncludeWriteins { get; init; }
     public ChainingMode ChainingMode { get; init; }
+
+    /// <summary>
+    /// §4.1.5: the hash-trimming function that turns selection hashes into short codes on
+    /// pre-encrypted ballots. Null when the election does not use pre-encrypted ballots; omitted
+    /// from JSON then, so manifests that do not use it serialize exactly as before.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public HashTrimmingFunction? HashTrimmingFunction { get; init; }
 }
 
 public enum ChainingMode

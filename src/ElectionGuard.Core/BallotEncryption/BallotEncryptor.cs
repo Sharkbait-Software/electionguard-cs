@@ -60,7 +60,7 @@ public class BallotEncryptor
         var selectionEncryptionIdentifierHash = new SelectionEncryptionIdentifierHash(_encryptionRecord.ExtendedBaseHash, selectionEncryptionIdentifier);
 
         var ballotNonce = new BallotNonce(ElectionGuardRandom.GetBytes(32));
-        var encryptedBallotNonce = EncryptBallotNonce(ballotNonce, selectionEncryptionIdentifierHash);
+        var encryptedBallotNonce = BallotNonceEncryption.Encrypt(ballotNonce, selectionEncryptionIdentifierHash, _encryptionRecord.ElectionPublicKeys.OtherBallotDataEncryptionKey);
 
         var encryptedContests = new List<EncryptedContest>();
         List<ContestHash> contestHashes = new List<ContestHash>();
@@ -141,41 +141,6 @@ public class BallotEncryptor
         {
             throw new Exception($"Ballot with id {ballot.BallotStyleId} did not specify all contestIds for the ballot style.");
         }
-    }
-
-    private EncryptedData EncryptBallotNonce(BallotNonce ballotNonce, SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash)
-    {
-        // 3.3.4
-        var keyPair = KeyPair.GenerateRandom();
-        IntegerModQ epsilon = keyPair.SecretKey;
-        IntegerModP alpha = keyPair.PublicKey;
-        IntegerModP beta = MontgomeryModP.PowModP(_encryptionRecord.ElectionPublicKeys.OtherBallotDataEncryptionKey, epsilon);
-        var symmetricKey = EGHash.Hash(selectionEncryptionIdentifierHash,
-            [0x22],
-            alpha,
-            beta);
-        var k1 = ComputeBallotNonceEncryptionKey(symmetricKey);
-
-        var c0 = alpha;
-        var c1 = ballotNonce.ToByteArray().XOR(k1);
-
-        var proof = KeyPair.GenerateRandom();
-        var u = proof.SecretKey;
-        var commitment = proof.PublicKey;
-        var challenge = EGHash.HashModQ(selectionEncryptionIdentifierHash,
-            [0x23],
-            commitment,
-            c0,
-            c1);
-        var response = u - challenge * epsilon;
-
-        return new EncryptedData
-        {
-            C0 = c0,
-            C1 = c1,
-            Challenge = challenge,
-            Response = response,
-        };
     }
 
     private EncryptedContest EncryptContest(BallotContest contest, SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, BallotNonce ballotNonce)
@@ -378,17 +343,6 @@ public class BallotEncryptor
             Challenge = x.challenge,
             Response = x.response,
         }).ToArray();
-    }
-
-    private byte[] ComputeBallotNonceEncryptionKey(byte[] symmetricKey)
-    {
-        byte[] key = EGHash.Hash(symmetricKey,
-            [0x01],
-            Encoding.UTF8.GetBytes("ballot_nonce"),
-            [0x00],
-            Encoding.UTF8.GetBytes("ballot_nonce_encrypt"),
-            [0x01, 0x00]);
-        return key;
     }
 
     private EncryptedData EncryptContestData(string valueToEncrypt, int contestIndex, SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, BallotNonce ballotNonce)
