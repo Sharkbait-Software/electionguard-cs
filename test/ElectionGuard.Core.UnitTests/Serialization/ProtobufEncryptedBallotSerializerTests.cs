@@ -118,6 +118,7 @@ public class ProtobufEncryptedBallotSerializerTests
             DeviceId = realBallot.DeviceId,
             ConfirmationCode = realBallot.ConfirmationCode,
             Weight = realBallot.Weight,
+            Status = realBallot.Status,
             Contests = new List<EncryptedContest> { contestWithNoChoices },
         };
 

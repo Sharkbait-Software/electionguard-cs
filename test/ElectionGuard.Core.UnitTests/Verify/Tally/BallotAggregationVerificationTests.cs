@@ -65,35 +65,32 @@ public class BallotAggregationVerificationTests
     }
 
     [Fact]
-    public void Verify_TamperedA_ThrowsPlainException_NotVerificationFailedException()
+    public void Verify_TamperedA_Throws_SubSection9A()
     {
         var scenario = Build();
         scenario.Tally.Contests["contest-1"].Choices["choice-1"].A = new IntegerModP(999999);
 
         var verification = new BallotAggregationVerification();
 
-        var exception = Assert.Throws<Exception>(() => verification.Verify(scenario.Ballots, scenario.Manifest, scenario.Tally));
+        // G38: Verification 9 used to throw a plain System.Exception with no sub-section, which a
+        // caller catching VerificationFailedException missed. It now reports 9.A like any other
+        // verification reports its lettered checks.
+        var exception = Assert.Throws<VerificationFailedException>(() => verification.Verify(scenario.Ballots, scenario.Manifest, scenario.Tally));
 
-        // Verification 9 is the one Verify class with no SubSection field: it throws plain
-        // System.Exception, not VerificationFailedException, unlike Verifications 1-8. Assert the
-        // exact type (not just assignability) to pin this down, and don't attempt to assert a
-        // SubSection since VerificationFailedException.SubSection doesn't exist on this type.
-        Assert.IsType<Exception>(exception);
-        Assert.IsNotType<VerificationFailedException>(exception);
+        Assert.Equal("9.A", exception.SubSection);
     }
 
     [Fact]
-    public void Verify_TamperedB_ThrowsPlainException_NotVerificationFailedException()
+    public void Verify_TamperedB_Throws_SubSection9B()
     {
         var scenario = Build();
         scenario.Tally.Contests["contest-1"].Choices["choice-2"].B = new IntegerModP(999999);
 
         var verification = new BallotAggregationVerification();
 
-        var exception = Assert.Throws<Exception>(() => verification.Verify(scenario.Ballots, scenario.Manifest, scenario.Tally));
+        var exception = Assert.Throws<VerificationFailedException>(() => verification.Verify(scenario.Ballots, scenario.Manifest, scenario.Tally));
 
-        Assert.IsType<Exception>(exception);
-        Assert.IsNotType<VerificationFailedException>(exception);
+        Assert.Equal("9.B", exception.SubSection);
     }
 
     [Theory]
@@ -112,6 +109,7 @@ public class BallotAggregationVerificationTests
         Assert.Null(Record.Exception(() => verification.Verify(ballots, scenario.Manifest, tally, maxDegreeOfParallelism)));
 
         var missingOne = ballots.Skip(1).ToList();
-        Assert.Throws<Exception>(() => verification.Verify(missingOne, scenario.Manifest, tally, maxDegreeOfParallelism));
+        var exception = Assert.Throws<VerificationFailedException>(() => verification.Verify(missingOne, scenario.Manifest, tally, maxDegreeOfParallelism));
+        Assert.Equal("9.A", exception.SubSection);
     }
 }

@@ -1,6 +1,7 @@
 using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.KeyGeneration;
 using ElectionGuard.Core.Models;
+using ElectionGuard.Core.Tally;
 using System.Numerics;
 using System.Text;
 using System.Text.Json;
@@ -173,6 +174,8 @@ public class KnownAnswerTests
             "preencrypted_device_info_hash",
             "confirmation_code",
             "chain_init",
+            "tally_decryption_commitment_hash",
+            "tally_decryption_challenge",
         };
 
         var families = AllVectors.Select(x => x.GetProperty("family").GetString()!).ToHashSet();
@@ -459,5 +462,164 @@ public class KnownAnswerTests
         var confirmationCode = new ConfirmationCode(selectionEncryptionIdentifierHash, contestHashes, chainingField);
 
         AssertExpected(vector, confirmationCode);
+    }
+
+    private static IntegerModP P(JsonElement element, string property) => new(Hex(element, property));
+
+    private static IntegerModQ Q(JsonElement element, string property) => new(Hex(element, property));
+
+    private static List<GuardianIndex> Participants(JsonElement element) =>
+        element.GetProperty("U").EnumerateArray().Select(x => new GuardianIndex(x.GetInt32())).ToList();
+
+    [Theory]
+    [MemberData(nameof(VectorNames), "tally_decryption_commitment_hash")]
+    public void TallyDecryptionCommitmentHash_Eq88(string name)
+    {
+        var vector = Vector(name);
+        var inputs = Inputs(vector);
+        var extendedBaseHash = ExtendedBaseHashFor(inputs.GetProperty("H_E_hex").GetString()!);
+        Assert.Equal(vector.GetProperty("b0_hex").GetString(), ToHex(extendedBaseHash));
+        var a = P(inputs, "A_hex");
+
+        // The commitment pair and the partial decryption, through the library's exponentiation.
+        var u = Q(inputs, "u_i_hex");
+        var commitmentA = MontgomeryModP.PowModP(EGParameters.G, u);
+        var commitmentB = MontgomeryModP.PowModP(a, u);
+        var partialDecryption = MontgomeryModP.PowModP(a, Q(inputs, "z_i_hex"));
+        Assert.Equal(inputs.GetProperty("a_i_hex").GetString(), ToHex(commitmentA));
+        Assert.Equal(inputs.GetProperty("b_i_hex").GetString(), ToHex(commitmentB));
+        Assert.Equal(inputs.GetProperty("M_i_hex").GetString(), ToHex(partialDecryption));
+
+        var participants = Participants(inputs);
+        byte[] Hash(IReadOnlyCollection<GuardianIndex> u) => TallyDecryptionHashes.CommitmentHash(
+            extendedBaseHash, Int(inputs, "ind_c"), Int(inputs, "ind_o"), new GuardianIndex(Int(inputs, "i")),
+            a, P(inputs, "B_hex"), commitmentA, commitmentB, partialDecryption, u);
+
+        AssertExpected(vector, Hash(participants));
+
+        // U is encoded in ascending order whatever order it is given in (the spec does not say;
+        // the oracle and the library both use ascending order).
+        AssertExpected(vector, Hash(Enumerable.Reverse(participants).ToList()));
+    }
+
+    /// <summary>
+    /// The whole §3.6.5 protocol, end to end, against the oracle's complete proof: the guardians
+    /// hold the oracle's z_i and are handed its u_i, the aggregate is the oracle's (A, B), and every
+    /// value along the way (M_i, a_i, b_i, d_i, w_i, c, v_i, v, T, t) must match. Verification 10
+    /// must then accept the result.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(VectorNames), "tally_decryption_challenge")]
+    public void TallyDecryptionProof_Eq86To93_AndVerification10(string name)
+    {
+        var vector = Vector(name);
+        var inputs = Inputs(vector);
+        var proof = inputs.GetProperty("proof");
+        var mainChain = Root.GetProperty("main_chain");
+        Assert.Equal(mainChain.GetProperty("H_E_hex").GetString(), inputs.GetProperty("H_E_hex").GetString());
+        Assert.Equal(3, Int(mainChain, "n"));
+        Assert.Equal(2, Int(mainChain, "k"));
+        int contestIndex = Int(inputs, "ind_c");
+        int optionIndex = Int(inputs, "ind_o");
+
+        // The election of main_chain: K = g^5, K-hat = g^7, H_E rebuilt through the constructors.
+        var g = EGParameters.G;
+        var keys = new ElectionPublicKeys([IntegerModP.PowModP(g, new BigInteger(5))], [IntegerModP.PowModP(g, new BigInteger(7))]);
+        var parameterBaseHash = new ParameterBaseHash(new CryptographicParameters(), new GuardianParameters(3, 2));
+        var manifestFile = new ManifestFile { Bytes = Hex(mainChain, "manifest_hex") };
+        var electionBaseHash = new ElectionBaseHash(parameterBaseHash, manifestFile);
+        var extendedBaseHash = new ExtendedBaseHash(electionBaseHash, keys);
+        Assert.Equal(inputs.GetProperty("H_E_hex").GetString(), ToHex(extendedBaseHash));
+
+        // A manifest in which (ind_c, ind_o) exists: two contests of three options each. Only the
+        // indices enter the proof; the labels are the library's own.
+        var manifest = new Manifest
+        {
+            ElectionId = "kat",
+            Contests = Enumerable.Range(1, 2).Select(c => new Contest
+            {
+                Id = $"contest-{c}",
+                Name = $"Contest {c}",
+                SelectionLimit = 1,
+                OptionSelectionLimit = 1,
+                Index = c,
+                Choices = Enumerable.Range(1, 3).Select(o => new Choice { Id = $"contest-{c}-option-{o}", Name = $"Option {o}", Index = o }).ToList(),
+            }).ToList(),
+            BallotStyles = [new BallotStyle { Id = "style", Name = "Style", ContestIds = ["contest-1", "contest-2"] }],
+            OptionalContestDataMaxLength = 0,
+        };
+        var record = new EncryptionRecord
+        {
+            CryptographicParameters = new CryptographicParameters(),
+            GuardianParameters = new GuardianParameters(3, 2),
+            ParameterBaseHash = parameterBaseHash,
+            ManifestFile = manifestFile,
+            ElectionBaseHash = electionBaseHash,
+            Guardians = [],
+            ElectionPublicKeys = keys,
+            ExtendedBaseHash = extendedBaseHash,
+            Manifest = manifest,
+        };
+
+        string contestId = $"contest-{contestIndex}";
+        string optionId = $"contest-{contestIndex}-option-{optionIndex}";
+        int count = Int(proof, "t");
+        var tally = new EncryptedTally(manifest);
+        var aggregate = tally.Contests[contestId].Choices[optionId];
+        aggregate.A = P(inputs, "A_hex");
+        aggregate.B = P(inputs, "B_hex");
+
+        // The search bound: the oracle's three ballots, of which t select this option.
+        Assert.Equal(3, inputs.GetProperty("ballots").GetArrayLength());
+        aggregate.MaximumCount = 3;
+
+        // The guardians of U hold the oracle's z_i and use its u_i for this option.
+        var guardianVectors = proof.GetProperty("guardians").EnumerateArray().ToList();
+        var guardians = guardianVectors.Select(x =>
+        {
+            var guardian = new TallyGuardian(new GuardianIndex(Int(x, "i")), new GuardianSecretShares
+            {
+                VoteEncryptionKeyShare = Q(x, "z_i_hex"),
+                OtherBallotDataEncryptionKeyShare = 0,
+            });
+            var u = Q(x, "u_i_hex");
+            guardian.NonceSourceForTesting = (c, o) => c == contestIndex && o == optionIndex ? u : ElectionGuardRandom.GetIntegerModQ();
+            return guardian;
+        }).ToList();
+        var participants = Participants(proof);
+        Assert.Equal(participants, guardians.Select(x => x.Index).ToList());
+
+        var commitments = guardians.Select(x => x.Commit(tally, record, participants)).ToList();
+        var reveals = guardians.Select(x => x.Reveal(commitments)).ToList();
+        var responses = guardians.Select(x => x.Respond(reveals)).ToList();
+
+        for (int j = 0; j < guardians.Count; j++)
+        {
+            var expected = guardianVectors[j];
+            Assert.Equal(expected.GetProperty("w_i_hex").GetString(), ToHex(TallyDecryptionHashes.LagrangeCoefficient(guardians[j].Index, participants)));
+            Assert.Equal(expected.GetProperty("M_i_hex").GetString(), ToHex(commitments[j].Contests[contestId].Choices[optionId].Mi));
+            Assert.Equal(expected.GetProperty("d_i_hex").GetString(), ToHex(commitments[j].Contests[contestId].Choices[optionId].CommitmentHash));
+            Assert.Equal(expected.GetProperty("a_i_hex").GetString(), ToHex(reveals[j].Contests[contestId].Choices[optionId].CommitmentA));
+            Assert.Equal(expected.GetProperty("b_i_hex").GetString(), ToHex(reveals[j].Contests[contestId].Choices[optionId].CommitmentB));
+            Assert.Equal(expected.GetProperty("v_i_hex").GetString(), ToHex(responses[j].Contests[contestId].Choices[optionId].Response));
+        }
+
+        var decrypted = new TallyAdmin().Combine(tally, record, commitments, reveals, responses);
+        var choice = decrypted.Contests[contestId].Choices[optionId];
+
+        // c is H_q (reduced mod q) and 32 bytes; the vector's expected_hex is the same.
+        AssertExpected(vector, choice.Challenge);
+        Assert.Equal(proof.GetProperty("c_hex").GetString(), ToHex(choice.Challenge));
+        Assert.Equal(proof.GetProperty("v_hex").GetString(), ToHex(choice.Response));
+        Assert.Equal(proof.GetProperty("T_hex").GetString(), ToHex(choice.T));
+        Assert.Equal(count, choice.VoteCount);
+        Assert.Equal(contestIndex, decrypted.Contests[contestId].ContestIndex);
+        Assert.Equal(optionIndex, choice.ChoiceIndex);
+
+        // The eq. (90) challenge from the vector's own a, b and M.
+        AssertExpected(vector, TallyDecryptionHashes.Challenge(extendedBaseHash, contestIndex, optionIndex,
+            P(inputs, "A_hex"), P(inputs, "B_hex"), P(inputs, "a_hex"), P(inputs, "b_hex"), P(inputs, "M_hex")));
+
+        new ElectionGuard.Core.Verify.Tally.TallyDecryptionVerification().Verify(record, tally, decrypted);
     }
 }

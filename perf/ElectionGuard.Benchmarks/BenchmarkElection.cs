@@ -63,5 +63,11 @@ public sealed class BenchmarkElection
 
     public Ballot GenerateBallot(int index) => new BallotGenerator(Manifest, seed: 20260907).Generate(index);
 
-    public EncryptedBallot EncryptBallot(int index) => CreateEncryptor().Encrypt(GenerateBallot(index), null);
+    /// <summary>Encrypts ballot <paramref name="index"/> and records it as cast, so that it can be tallied.</summary>
+    public EncryptedBallot EncryptBallot(int index)
+    {
+        var encryptedBallot = CreateEncryptor().Encrypt(GenerateBallot(index), null);
+        encryptedBallot.RecordStatus(BallotStatus.Cast);
+        return encryptedBallot;
+    }
 }

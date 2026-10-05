@@ -231,6 +231,7 @@ public class StrictDecodingTests
         Contests = dto.Contests,
         ConfirmationCode = dto.ConfirmationCode,
         Weight = dto.Weight,
+        Status = dto.Status,
     };
 
     private static ProtobufEncryptedData WithContestData(ProtobufEncryptedData data, byte[]? challenge = null, byte[]? response = null) => new()

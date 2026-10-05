@@ -224,6 +224,10 @@ public sealed class ScenarioRunner
         // ballot whatever the chunk size.
         var selectionEncryptionIdentifiers = new SelectionEncryptionIdentifierSet();
 
+        // Verification 11.D: every contest label that occurs on a submitted ballot. At most one
+        // entry per manifest contest, however many ballots.
+        var submittedContestIds = new HashSet<string>(StringComparer.Ordinal);
+
         EncryptedBallot? representative = null;
         ConfirmationCode? previousConfirmationCode = null;
         int generated = 0;
@@ -278,6 +282,19 @@ public sealed class ScenarioRunner
                 }
 
                 encrypt.RecordBallots(chunkSize);
+
+                // Every generated ballot is cast. The decision comes after encryption (the voter
+                // sees the confirmation code first), so it is recorded outside the encrypt timing.
+                // Verification 11.D needs the contests that appear on submitted ballots; they are
+                // collected here rather than by retaining the ballots.
+                foreach (var encryptedBallot in encryptedChunk)
+                {
+                    encryptedBallot.RecordStatus(BallotStatus.Cast);
+                    foreach (var contest in encryptedBallot.Contests)
+                    {
+                        submittedContestIds.Add(contest.Id);
+                    }
+                }
 
                 if (EncryptedBallotHookForTesting is { } hook)
                 {
@@ -449,17 +466,11 @@ public sealed class ScenarioRunner
             var decrypt = new PhaseAccumulator(PhaseNames.DecryptTally, decryptBudget);
 
             // K guardians is the threshold; using exactly K is the realistic case and the
-            // cheapest correct one.
+            // cheapest correct one. The phase covers the whole verifiable decryption (§3.6.5): the
+            // guardians' three rounds (M_i and d_i; (a_i, b_i); v_i), the administrator's combination
+            // and its check of the proof, and the discrete-log search.
             DecryptedTally RunDecryption() =>
-                new TallyAdmin().Decrypt(
-                    guardianSet.Guardians
-                        .Take(_scenario.Guardians.K)
-                        .Select(guardian => new TallyGuardian(guardian.Index, guardianSet.SecretShares[guardian.Index])
-                            .Decrypt(encryptedTally, parallelism))
-                        .ToList(),
-                    encryptedTally,
-                    guardianSet.ElectionPublicKeys,
-                    parallelism);
+                ElectionFixtureBuilder.DecryptTally(guardianSet, encryptedTally, records.EncryptionRecord, _scenario.Guardians.K, parallelism);
 
             DecryptedTally? decryptedTally = null;
             bool decryptTimedOut = false;
@@ -530,6 +541,36 @@ public sealed class ScenarioRunner
                 correctness = new CorrectnessResult { Status = CorrectnessStatus.Error };
                 _log($"  decryption failed: {failure}");
             }
+
+            // --- Verifications 10 and 11 -----------------------------------------------------
+            // TallyComparer checks the counts against the oracle, but it cannot see the proof: a
+            // decrypted tally whose (c, v) does not verify is a failed run even when its counts are
+            // right. Gated with Verification 9 on tallyVerification, and billed to a phase of its
+            // own so DecryptTally stays comparable with runs from before the proof existed.
+            if (failure is null && decryptedTally is not null && _scenario.Phases.TallyVerification)
+            {
+                var decryptionVerify = new PhaseAccumulator(PhaseNames.VerifyDecryption, BudgetFor(PhaseNames.VerifyDecryption));
+                try
+                {
+                    using (decryptionVerify.Enter())
+                    {
+                        new TallyDecryptionVerification().Verify(records.EncryptionRecord, encryptedTally, decryptedTally, parallelism);
+                        new TallyContentsVerification().Verify(_manifest, decryptedTally, submittedContestIds);
+                    }
+
+                    decryptionVerify.RecordBallots(generated);
+                    notes["decryptionVerification"] = "ran";
+                }
+                catch (Exception ex)
+                {
+                    failure = Describe(ex);
+                    notes["error"] = failure;
+                    decryptionVerify.MarkAborted();
+                    _log($"  decryption verification failed: {failure}");
+                }
+
+                phases[PhaseNames.VerifyDecryption] = decryptionVerify.ToMetrics();
+            }
         }
 
         // Error outranks Incomplete: a run that threw is not merely partial.
@@ -577,7 +618,9 @@ public sealed class ScenarioRunner
         for (int i = 0; i < _scenario.WarmupBallots; i++)
         {
             // Negative indexes so warmup ballots can never collide with measured ones.
-            throwaway.AddBallot(encryptor.Encrypt(generator.Generate(-(i + 1)), null));
+            var warmupBallot = encryptor.Encrypt(generator.Generate(-(i + 1)), null);
+            warmupBallot.RecordStatus(BallotStatus.Cast);
+            throwaway.AddBallot(warmupBallot);
         }
 
         GC.Collect();

@@ -254,23 +254,32 @@ public static class ElectionFixtureBuilder
     }
 
     /// <summary>
-    /// Encrypts a ballot (mirrors Program.cs lines 105-133). Pass previousConfirmationCode to chain
-    /// from a prior ballot on the same device (ChainingMode.Simple); pass null for the first ballot.
+    /// Encrypts a ballot and records it as submitted with <paramref name="status"/> (cast, by
+    /// default), as Program.cs does. Pass previousConfirmationCode to chain from a prior ballot on
+    /// the same device (ChainingMode.Simple); pass null for the first ballot. Pass
+    /// <see cref="BallotStatus.NotSubmitted"/> to get the encryptor's output untouched.
     /// </summary>
     public static EncryptedBallot CreateEncryptedBallot(
         EncryptionRecord encryptionRecord,
         string deviceId,
         VotingDeviceInformationHash deviceHash,
         Ballot ballot,
-        ConfirmationCode? previousConfirmationCode = null)
+        ConfirmationCode? previousConfirmationCode = null,
+        BallotStatus status = BallotStatus.Cast)
     {
         var encryptor = new BallotEncryptor(encryptionRecord, deviceId, deviceHash);
-        return encryptor.Encrypt(ballot, previousConfirmationCode);
+        var encryptedBallot = encryptor.Encrypt(ballot, previousConfirmationCode);
+        if (status != BallotStatus.NotSubmitted)
+        {
+            encryptedBallot.RecordStatus(status);
+        }
+
+        return encryptedBallot;
     }
 
     /// <summary>
     /// Builds an EncryptedTally for the given manifest and accumulates the given encrypted ballots
-    /// into it (mirrors Program.cs lines 183-187).
+    /// into it (mirrors Program.cs). Only cast ballots are counted.
     /// </summary>
     public static EncryptedTally CreateEncryptedTally(Manifest manifest, params EncryptedBallot[] ballots)
     {
@@ -281,5 +290,29 @@ public static class ElectionFixtureBuilder
         }
 
         return tally;
+    }
+
+    /// <summary>
+    /// Decrypts <paramref name="tally"/> with the first <paramref name="guardianCount"/> guardians of
+    /// <paramref name="guardianSet"/> (k, by default: the realistic and cheapest quorum), through the
+    /// three rounds of the §3.6.5 protocol, as Program.cs and the perf harness do.
+    /// </summary>
+    public static DecryptedTally DecryptTally(
+        GuardianSetResult guardianSet,
+        EncryptedTally tally,
+        EncryptionRecord encryptionRecord,
+        int? guardianCount = null,
+        int maxDegreeOfParallelism = -1)
+    {
+        return new TallyAdmin().Decrypt(TallyGuardians(guardianSet, guardianCount), tally, encryptionRecord, maxDegreeOfParallelism);
+    }
+
+    /// <summary>The first <paramref name="guardianCount"/> (default k) guardians of the set, ready to decrypt.</summary>
+    public static List<TallyGuardian> TallyGuardians(GuardianSetResult guardianSet, int? guardianCount = null)
+    {
+        return guardianSet.Guardians
+            .Take(guardianCount ?? EGParameters.GuardianParameters.K)
+            .Select(guardian => new TallyGuardian(guardian.Index, guardianSet.SecretShares[guardian.Index]))
+            .ToList();
     }
 }

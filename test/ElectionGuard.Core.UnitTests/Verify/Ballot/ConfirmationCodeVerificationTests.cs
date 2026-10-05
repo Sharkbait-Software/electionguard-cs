@@ -38,6 +38,7 @@ public class ConfirmationCodeVerificationTests
             Contests = contests ?? ballot.Contests,
             ConfirmationCode = confirmationCode ?? ballot.ConfirmationCode,
             Weight = ballot.Weight,
+            Status = ballot.Status,
             DeviceId = ballot.DeviceId,
         };
     }

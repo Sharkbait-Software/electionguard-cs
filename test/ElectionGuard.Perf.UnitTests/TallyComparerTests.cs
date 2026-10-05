@@ -13,11 +13,14 @@ public class TallyComparerTests
 
         foreach (var group in entries.GroupBy(x => x.ContestId))
         {
+            // TallyComparer reads only the counts. The indices and the proof fields are required
+            // members of the published tally; placeholders do here.
             contests[group.Key] = new DecryptedTally.DecryptedContest
             {
+                ContestIndex = 0,
                 Choices = group.ToDictionary(
                     x => x.ChoiceId,
-                    x => new DecryptedTally.DecryptedChoice { VoteCount = x.Votes }),
+                    x => new DecryptedTally.DecryptedChoice { ChoiceIndex = 0, VoteCount = x.Votes, T = 1, Challenge = 0, Response = 0 }),
             };
         }
 

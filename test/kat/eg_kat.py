@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """ElectionGuard v2.1.0 hash-chain known-answer-test (KAT) oracle.
 
-Written from the ElectionGuard Design Specification v2.1.0 ONLY (sections 3.1-3.4, 4.1.4 and 5),
-without reference to the C# implementation in this repository, so that its outputs can be used
-as independent expected values. Standard library only.
+Written from the ElectionGuard Design Specification v2.1.0 ONLY (sections 3.1-3.4, 3.6.2-3.6.5,
+4.1.4 and 5, and Verification 10), without reference to the C# implementation in this repository,
+so that its outputs can be used as independent expected values. Standard library only.
 
 Run from the repository root:
 
@@ -315,6 +315,61 @@ def chain_close(h_e, b_c_bar):
     return b1, H(h_e, b1)
 
 
+def _layout(parts):
+    """Concatenate [(bytes, label), ...] into (B1, [[offset, length, label], ...])."""
+    b1, layout = b"", []
+    for data, label in parts:
+        layout.append([len(b1), len(data), label])
+        b1 += data
+    return b1, layout
+
+
+def b_index_set(U):
+    """The set U of participating guardian indices as the §5.5.4 table encodes it:
+    b(#U, 4) || b(j_1, 4) || ... || b(j_#U, 4). The spec does not state the order of j_1..j_#U;
+    this oracle uses ascending order (U as a sorted list of distinct 1-based indices)."""
+    U = list(U)
+    assert U == sorted(set(U)) and all(j >= 1 for j in U), "U must be distinct, ascending, 1-based"
+    parts = [(b_small(len(U)), "#U")] + [(b_small(j), f"j_{m}={j}") for m, j in enumerate(U, start=1)]
+    return parts
+
+
+def tally_decryption_commitment_hash(h_e, ind_c, ind_o, i, A, B, a_i, b_i, M_i, U):
+    """Eq. (88): d_i = H(H_E; 0x30, ind_c(Lambda), ind_o(lambda), i, A, B, a_i, b_i, M_i, U), §3.6.5.
+
+    §5.5.4 table (p.77): B0 = H_E, B1 = 0x30 || b(ind_c, 4) || b(ind_o, 4) || b(i, 4) || b(A, 512) || b(B, 512)
+    || b(a_i, 512) || b(b_i, 512) || b(M_i, 512) || b(#U, 4) || b(j_1, 4) || ... || b(j_#U, 4),
+    len(B1) = 2577 + 4 * #U. Returns (B1, d_i, layout)."""
+    assert i in U, "the committing guardian must be in U"
+    parts = [(b"\x30", "0x30"), (b_small(ind_c), "ind_c"), (b_small(ind_o), "ind_o"), (b_small(i), "i"),
+             (b_p(A), "A"), (b_p(B), "B"), (b_p(a_i), "a_i"), (b_p(b_i), "b_i"), (b_p(M_i), "M_i")]
+    parts += b_index_set(U)
+    b1, layout = _layout(parts)
+    assert len(b1) == 2577 + 4 * len(U)
+    return b1, H(h_e, b1), layout
+
+
+def tally_decryption_challenge(h_e, ind_c, ind_o, A, B, a, b_, M):
+    """Eq. (90) / Verification 10.B: c = H_q(H_E; 0x31, ind_c(Lambda), ind_o(lambda), A, B, a, b, M), §3.6.5.
+
+    §5.5.4 table (p.77): B0 = H_E, B1 = 0x31 || b(ind_c, 4) || b(ind_o, 4) || b(A, 512) || b(B, 512)
+    || b(a, 512) || b(b, 512) || b(M, 512), len(B1) = 2569. Returns (B1, raw HMAC, layout); c = raw mod q."""
+    parts = [(b"\x31", "0x31"), (b_small(ind_c), "ind_c"), (b_small(ind_o), "ind_o"),
+             (b_p(A), "A"), (b_p(B), "B"), (b_p(a), "a"), (b_p(b_), "b"), (b_p(M), "M")]
+    b1, layout = _layout(parts)
+    assert len(b1) == 2569
+    return b1, H(h_e, b1), layout
+
+
+def lagrange_coefficient(i, U):
+    """Eq. (85): w_i = prod_{l in U \\ {i}} l / (l - i) mod q."""
+    w = 1
+    for l in U:
+        if l != i:
+            w = w * l % Q * pow((l - i) % Q, -1, Q) % Q
+    return w
+
+
 # ---------------------------------------------------------------------------------------------
 # Vector generation.
 # ---------------------------------------------------------------------------------------------
@@ -577,6 +632,7 @@ def build():
         ((1, 1), "kat manifest", {}, {}),
     ]
     h_gs = {}
+    guardian_coeffs = {}
     for (n, k), mname, a0, ahat0 in hg_cases:
         if (n, k, mname) in hbs:
             h_b = hbs[(n, k, mname)]
@@ -604,6 +660,7 @@ def build():
             assert (K_j, K_hat_j) == (K, K_hat), "n=3,k=2 H_G must use main_chain's K = g^5, K-hat = g^7"
         b1, h_g, layout = guardian_record_hash(h_b, K_j, K_hat_j, Ks, K_hats, kappas)
         h_gs[(n, k)] = h_g
+        guardian_coeffs[(n, k)] = a
         v = vec("guardian_record_hash",
                 "(27) H_G = H(H_B; 0x13, K, K-hat, K_1,0, ..., K_1,k-1, K_2,0, ..., K_n,k-1, "
                 "K-hat_1,0, ..., K-hat_n,k-1, kappa_1, ..., kappa_n)",
@@ -628,6 +685,141 @@ def build():
         v["b1_layout"] = layout
         vectors.append(v)
 
+    # --- Eqs. (88), (90) tally decryption proof hashes, §3.6.5 / Verification 10 --------------
+    # Appended after every earlier family so existing vectors keep their positions.
+    # Election: main_chain (n=3, k=2, H_E with K = g^5). The guardian polynomials are exactly the ones the
+    # n=3,k=2 guardian_record_hash vector commits to: P_i(x) = a_{i,0} + a_{i,1} x, so s = sum a_{i,0} = 5 and
+    # z_i = P(i) = sum_j P_j(i) mod q (eq. 83). Every proof below is a complete, valid proof: the script
+    # checks Verification 10 (10.1-10.3, 10.A-10.C) and Note 3.7 (eqs. 94, 95) for each one.
+    n_t, k_t = 3, 2
+    a_t = guardian_coeffs[(n_t, k_t)]
+    s_t = sum(row[0] for row in a_t) % Q
+    assert s_t == 5 and pow(G, s_t, P) == K
+    z = {i: sum(a_t[j - 1][m] * pow(i, m, Q) for j in range(1, n_t + 1) for m in range(k_t)) % Q
+         for i in range(1, n_t + 1)}
+    # Commitments to the coefficients, K_{j,m} = g^a_{j,m} (eq. 8); g^z_i = prod_j prod_m K_{j,m}^(i^m).
+    K_jm = [[pow(G, e, P) for e in row] for row in a_t]
+
+    # Three ballots encrypted under K = g^5 (eq. 31) with nonces from eq. (33) under each ballot's own H_I and
+    # xi_B. Ballot 1 is main_chain's ballot (H_I, xi_B = A0A1..BF). Contest 1 has 2 options, contest 2 has 3.
+    tally_ballots = [
+        ("ballot 1 (main_chain)", int.from_bytes(bytes(range(1, 33)), "big"), xi_b_main,
+         {1: [1, 0], 2: [0, 0, 1]}),
+        ("ballot 2", int.from_bytes(bytes(range(0x41, 0x61)), "big"), int.from_bytes(bytes(range(0xC0, 0xE0)), "big"),
+         {1: [1, 0], 2: [0, 0, 1]}),
+        ("ballot 3", int.from_bytes(bytes(range(0x61, 0x81)), "big"), int.from_bytes(bytes(range(0xE0, 0x100)), "big"),
+         {1: [0, 1], 2: [0, 0, 1]}),
+    ]
+    ballot_cts = []  # per ballot: {(l, j): (alpha, beta, sigma)}
+    for bname, id_b, xi_b, votes in tally_ballots:
+        h_i_b = selection_encryption_identifier_hash(H_E, id_b)[1]
+        cts_b = {}
+        for l, sel in votes.items():
+            for j, sigma in enumerate(sel, start=1):
+                xi = int.from_bytes(encryption_nonce(h_i_b, l, j, xi_b)[1], "big") % Q
+                cts_b[(l, j)] = (pow(G, xi, P), pow(K, sigma + xi, P), sigma)
+        ballot_cts.append(cts_b)
+    # Ballot 1's ciphertexts are the ones the contest_hash vectors chi_1 / chi_2 hash.
+    assert ballot_cts[0][(1, 1)][0] == pow(G, nonces[(1, 1)], P)
+
+    # (ind_c, ind_o, U, u_i labels). u_i is the guardian's random commitment exponent (eq. 87), chosen here.
+    tally_cases = [
+        (1, 1, [1, 3], {1: 1001007, 3: 1003007}),
+        (2, 3, [1, 2, 3], {1: 2001007, 2: Q - 2, 3: 2003007}),
+        (2, 1, [2, 3], {2: 3002007, 3: 3003007}),
+    ]
+    tally_summary = []
+    for ind_c, ind_o, U, u in tally_cases:
+        A_agg, B_agg, t = 1, 1, 0
+        for cts_b in ballot_cts:  # eq. (79) / Verification 9: unweighted aggregation
+            alpha, beta, sigma = cts_b[(ind_c, ind_o)]
+            A_agg, B_agg, t = A_agg * alpha % P, B_agg * beta % P, t + sigma
+        w = {i: lagrange_coefficient(i, U) for i in U}
+        assert sum(w[i] * z[i] for i in U) % Q == s_t, "Lagrange interpolation of z_i must give s"
+        M_i = {i: pow(A_agg, z[i], P) for i in U}                       # eq. (84)
+        a_i = {i: pow(G, u[i], P) for i in U}                           # eq. (87)
+        b_i = {i: pow(A_agg, u[i], P) for i in U}
+        M = 1
+        for i in U:                                                     # eq. (86)
+            M = M * pow(M_i[i], w[i], P) % P
+        assert M == pow(A_agg, s_t, P)
+        T = B_agg * pow(M, -1, P) % P                                   # eq. (82)
+        assert T == pow(K, t, P)
+        ballots_inputs = [{"ballot": tb[0], "alpha_hex": hp(cb[(ind_c, ind_o)][0]),
+                           "beta_hex": hp(cb[(ind_c, ind_o)][1]), "sigma": cb[(ind_c, ind_o)][2]}
+                          for tb, cb in zip(tally_ballots, ballot_cts)]
+        u_label = ", ".join(f"u_{i}={'q-2' if u[i] == Q - 2 else u[i]}" for i in U)
+
+        d = {}
+        for i in U:
+            b1, d_i, layout = tally_decryption_commitment_hash(H_E, ind_c, ind_o, i, A_agg, B_agg,
+                                                                a_i[i], b_i[i], M_i[i], U)
+            d[i] = d_i
+            v = vec("tally_decryption_commitment_hash",
+                    "(88) d_i = H(H_E; 0x30, ind_c(Lambda), ind_o(lambda), i, A, B, a_i, b_i, M_i, U)",
+                    f"d_{i} ind_c={ind_c} ind_o={ind_o} U={U}", "H_E", H_E, b1, d_i,
+                    {"H_E_hex": hx(H_E), "ind_c": ind_c, "ind_o": ind_o, "i": i, "U": U,
+                     "A_hex": hp(A_agg), "B_hex": hp(B_agg), "a_i_hex": hp(a_i[i]), "b_i_hex": hp(b_i[i]),
+                     "M_i_hex": hp(M_i[i]), "u_i_hex": hq(u[i]), "z_i_hex": hq(z[i]),
+                     "U_encoding_hex": hx(b"".join(p for p, _ in b_index_set(U))),
+                     "derivation": f"main_chain election (n=3, k=2, K=g^5, s=5); z_i = P(i) from the n=3,k=2 "
+                                   f"guardian_record_hash polynomials; (A, B) = product of the three ballots' "
+                                   f"(ind_c, ind_o) ciphertexts; M_i = A^z_i (84); a_i = g^u_i, b_i = A^u_i (87); "
+                                   f"{u_label}"},
+                    2577 + 4 * len(U),
+                    notes="B0 = H_E (eq. 88 and §5.5.4 table, p.77). U is encoded b(#U, 4) || b(j_1, 4) || ... || "
+                          "b(j_#U, 4); the spec does not state the order of the j's, this oracle uses ascending "
+                          "order. len(B1) = 2577 + 4*#U per the table. b1_layout gives [offset, length, label].")
+            v["b1_layout"] = layout
+            vectors.append(v)
+
+        a_acc, b_acc = 1, 1
+        for i in U:                                                     # eq. (89)
+            a_acc, b_acc = a_acc * a_i[i] % P, b_acc * b_i[i] % P
+        b1, raw_c, layout = tally_decryption_challenge(H_E, ind_c, ind_o, A_agg, B_agg, a_acc, b_acc, M)
+        c = int.from_bytes(raw_c, "big") % Q
+        c_i = {i: c * w[i] % Q for i in U}                              # eq. (91)
+        v_i = {i: (u[i] - c_i[i] * z[i]) % Q for i in U}                # eq. (92)
+        v_resp = sum(v_i.values()) % Q                                  # eq. (93)
+        # Verification 10 on the published (c, v, t): 10.1-10.3 recompute M, a, b; 10.A-10.C.
+        M_ver = B_agg * pow(pow(K, t, P), -1, P) % P
+        a_ver = pow(G, v_resp, P) * pow(K, c, P) % P
+        b_ver = pow(A_agg, v_resp, P) * pow(M_ver, c, P) % P
+        assert (M_ver, a_ver, b_ver) == (M, a_acc, b_acc), "Verification 10.1-10.3"
+        assert 0 <= v_resp < Q, "Verification 10.A"
+        assert tally_decryption_challenge(H_E, ind_c, ind_o, A_agg, B_agg, a_ver, b_ver, M_ver)[1] == raw_c
+        assert pow(K, t, P) == T, "Verification 10.C"
+        for i in U:  # Note 3.7, eqs. (94), (95)
+            g_zi = 1
+            for j in range(n_t):
+                for m in range(k_t):
+                    g_zi = g_zi * pow(K_jm[j][m], pow(i, m), P) % P
+            assert g_zi == pow(G, z[i], P)
+            assert pow(g_zi, c_i[i], P) * pow(G, v_i[i], P) % P == a_i[i], "Note 3.7 eq. (94)"
+            assert pow(A_agg, v_i[i], P) * pow(M_i[i], c_i[i], P) % P == b_i[i], "Note 3.7 eq. (95)"
+        v = vec("tally_decryption_challenge",
+                "(90) c = H_q(H_E; 0x31, ind_c(Lambda), ind_o(lambda), A, B, a, b, M) [= Verification 10.B]",
+                f"c ind_c={ind_c} ind_o={ind_o} U={U} t={t}", "H_E", H_E, b1, raw_c,
+                {"H_E_hex": hx(H_E), "ind_c": ind_c, "ind_o": ind_o,
+                 "A_hex": hp(A_agg), "B_hex": hp(B_agg), "a_hex": hp(a_acc), "b_hex": hp(b_acc), "M_hex": hp(M),
+                 "ballots": ballots_inputs,
+                 "proof": {
+                     "U": U, "t": t, "T_hex": hp(T), "c_hex": hq(c), "v_hex": hq(v_resp),
+                     "guardians": [{"i": i, "w_i_hex": hq(w[i]), "z_i_hex": hq(z[i]), "u_i_hex": hq(u[i]),
+                                    "M_i_hex": hp(M_i[i]), "a_i_hex": hp(a_i[i]), "b_i_hex": hp(b_i[i]),
+                                    "d_i_hex": hx(d[i]), "c_i_hex": hq(c_i[i]), "v_i_hex": hq(v_i[i])}
+                                   for i in U]},
+                 "derivation": "a = prod a_i, b = prod b_i (89); M = prod M_i^w_i (86) = A^5; w_i per (85); "
+                               "T = B * M^-1 (82) = K^t; c_i = c*w_i (91); v_i = u_i - c_i*z_i (92); "
+                               "v = sum v_i (93). The script asserts Verification 10.1-10.3 recompute exactly "
+                               "M, a, b from (c, v, t), 10.A-10.C hold, and Note 3.7 (94)/(95) hold per guardian."},
+                2569, hq_out=True,
+                notes="B0 = H_E (eq. 90, Verification 10.B and §5.5.4 table, p.77); len(B1) = 2569. No public key "
+                      "and no U in B1. Verification 10 uses no other hash. b1_layout gives [offset, length, label].")
+        v["b1_layout"] = layout
+        vectors.append(v)
+        tally_summary.append({"ind_c": ind_c, "ind_o": ind_o, "U": U, "t": t, "c_hex": hq(c), "v_hex": hq(v_resp)})
+
     doc = {
         "description": "ElectionGuard v2.1.0 hash-chain KAT vectors, generated by test/kat/eg_kat.py "
                        "from the specification only (not from the C# implementation).",
@@ -649,6 +841,14 @@ def build():
             "H_DI_preencrypted_hex": hx(H_DI_pre),
         },
         "vectors": vectors,
+        "tally_decryption": {
+            "election": "main_chain (n=3, k=2, K=g^5, H_E = main_chain.H_E_hex)",
+            "guardian_polynomials": "a_{i,j} of the n=3,k=2 guardian_record_hash vector: a_{i,0} = (10, 20, q-25), "
+                                    "a_{i,1} = 100i + 11; s = 5",
+            "z_i": [{"i": i, "hex": hq(z[i])} for i in sorted(z)],
+            "U_encoding": "b(#U, 4) || b(j_1, 4) || ... || b(j_#U, 4), j ascending (order not stated by the spec)",
+            "proofs": tally_summary,
+        },
     }
     return doc
 

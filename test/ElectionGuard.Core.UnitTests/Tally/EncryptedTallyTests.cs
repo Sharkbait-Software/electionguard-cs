@@ -65,6 +65,7 @@ public class EncryptedTallyTests
             Contests = new List<EncryptedContest> { encryptedContest },
             ConfirmationCode = new ConfirmationCode(new byte[] { 0x04 }),
             Weight = weight,
+            Status = BallotStatus.Cast,
             DeviceId = "device-1",
         };
     }

@@ -293,6 +293,40 @@ public class ScenarioRunnerTests
     }
 
     /// <summary>
+    /// Verifications 10 (the proof of correct decryption) and 11 (the tally's labels) run after a
+    /// successful decryption when tally verification is on, billed to their own phase: TallyComparer
+    /// checks the counts but cannot see the proof.
+    /// </summary>
+    [Fact]
+    public void Run_RunsVerifications10And11AfterDecryptionWhenTallyVerificationIsRequested()
+    {
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest();
+
+        var outcome = new ScenarioRunner(Scenario(tallyVerification: true), manifest).Run();
+
+        Assert.Equal(CorrectnessStatus.Passed, outcome.Correctness.Status);
+        Assert.Equal("ran", outcome.Notes["decryptionVerification"]);
+        var phase = outcome.Phases[PhaseNames.VerifyDecryption];
+        Assert.True(phase.WallMs > 0);
+        Assert.Equal(8, phase.BallotsProcessed);
+        Assert.False(phase.Aborted);
+        Assert.True(outcome.Phases.ContainsKey(PhaseNames.DecryptTally));
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void Run_OmitsVerifyDecryptionWithoutBothDecryptionAndTallyVerification(bool decrypt, bool tallyVerification)
+    {
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest();
+
+        var outcome = new ScenarioRunner(Scenario(decrypt: decrypt, tallyVerification: tallyVerification), manifest).Run();
+
+        Assert.False(outcome.Phases.ContainsKey(PhaseNames.VerifyDecryption));
+        Assert.False(outcome.Notes.ContainsKey("decryptionVerification"));
+    }
+
+    /// <summary>
     /// Verification 9 streams, so its budget is enforced at chunk boundaries like encryption's: the
     /// first chunk's accumulation exhausts it, the run stops there, and the final comparison never
     /// runs. 0.000000001 minutes is 60 nanoseconds (or rounds to zero), which no accumulation beats.

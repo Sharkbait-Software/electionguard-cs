@@ -85,14 +85,14 @@ User answers (2026-10-04):
 |---|---|---|---|---|
 | S1 Hash encodings, indices, canonical order | G1, G6, G7, G35, G26 (1.F compare and constructor reuse), G12, G9 | — | done | 3cec099 |
 | S2 Key-generation hardening | G5, G14, G15, G25, G34, G26 (H_B in record and guardian check) | S1 | done | 6fbc25c |
-| S3 Ballot verification strictness | G4, G13, G33, G23, G24, G36; plus the push security-review findings on V8 (missing completeness/validation checks: ballot contest set vs ballot style, option set vs manifest, duplicates) | — | done | see next commit |
-| S4 Tally soundness | G2, G27, G28, G20, G21, G30, G38, G16 | — | todo | |
+| S3 Ballot verification strictness | G4, G13, G33, G23, G24, G36; plus the push security-review findings on V8 (missing completeness/validation checks: ballot contest set vs ballot style, option set vs manifest, duplicates) | — | done (gate green) | pending signed commit; staged, patch docs/superpowers/specs/2026-10-05-s3-pending.patch |
+| S4 Tally soundness | G2, G27, G28, G20, G21, G30, G38, G16 | — | done (gate green) | pending signed commit; patch docs/superpowers/specs/2026-10-05-s4-pending/ |
 | S5 Supplemental fields redesign | G3, G8, G22, G29, G10 | — | todo | |
 | S6 Contest data | G11, G32 | after S4 | todo | |
 | S7 Ballot nonce and challenged ballots | G17, G18 | after S4 | todo | |
 | S8 Chain closing | G19, G37 | — | todo | |
 | S9 Pre-encrypted recording tool | G31 | after S5, S7 | todo | |
-| S10 Record metadata | G40 (G39 won't fix, per Q9); S2 carry-overs: bind the parsed `Manifest` to `ManifestFile` (S2 review R1), record JSON round trip | — | todo | |
+| S10 Record metadata | G40 (G39 won't fix, per Q9); S2 carry-overs: bind the parsed `Manifest` to `ManifestFile` (S2 review R1), record JSON round trip; S4 carry-overs: a `DecryptedTally` record serializer, and a tally loaded from a record must carry or recompute each option's `MaximumCount` (S4 review R1) | — | todo | |
 
 ## Pinned-value inventory
 
@@ -124,7 +124,347 @@ S3: no hash, nonce, ciphertext, confirmation code or KAT value moved (every KAT 
 console tallies unchanged). The 11 tests S3 re-pinned are behavior pins (exception types and the 0-in-Z_q rule),
 listed in the S3 log entry.
 
+S4: no existing hash, nonce, ciphertext, confirmation code or KAT value moved. The two new digests, d_i (eq. 88) and
+c (eq. 90), are pinned only by the oracle's new `tally_decryption_commitment_hash` (7) and
+`tally_decryption_challenge` (3) families, through `KnownAnswerTests.TallyDecryptionCommitmentHash_Eq88` and
+`TallyDecryptionProof_Eq86To93_AndVerification10`; no test holds a literal. The console's `tally.json` changed shape
+(it now carries `ContestIndex`, `ChoiceIndex`, `T`, `Challenge`, `Response`); its counts did not. The tests S4
+re-pinned are behavior pins (exception types), listed in the S4 log entry.
+S4 review response: no pinned value moved. The eq. (88) and (90) hashes now build their input in a pooled buffer;
+the bytes are unchanged, which the two oracle families above confirm (they passed before and after).
+
 ## Log
+
+### 2026-10-05 — commit signing outage (affects S3 onward)
+- Since S3 finished, 1Password's SSH signer has failed every signing attempt with `failed to fill whole buffer`, including 60
+  retries over 30 minutes. Signing is never bypassed. Until it recovers:
+  - S3 is staged in the index. Its full patch, relative to `6fbc25c`, is in the main checkout at
+    `docs/superpowers/specs/2026-10-05-s3-pending.patch`.
+  - S4 is staged on top of S3. Its patch, relative to the S3 state, plus its new files, is in
+    `docs/superpowers/specs/2026-10-05-s4-pending/` (`s4-tracked.patch`, `untracked/`).
+  - Later stages work on top as unstaged changes and save their patches the same way.
+- Once signing works again, build one signed commit per stage:
+  - Easy path, while the worktree still holds the work: commit the index, which is S3+S4, as two commits. Unstage
+    S4 by resetting to the S3 tree, or build the commits from the patches.
+  - Otherwise: start a temporary `GIT_INDEX_FILE` at the parent commit, `git apply --cached` the stage patch, then
+    `git commit-tree -S` and `git update-ref`. Repeat for each stage, then push.
+- S4 tally-decryption KAT ambiguity: the spec never says what order the participating-guardian set U is encoded in
+  for eqs (88) and (90). The code uses ascending guardian index, as the oracle does, and that question has been put
+  to the user.
+
+### 2026-10-05 — S4 review response (round 1)
+Three minor findings (two code, one tests). All three were correct. F1 is fixed in code and documented, F2 is
+recorded for S10 (as suggested), F3 has its test. No pinned value moved, so nothing was re-pinned.
+- **F1, `DecryptTally` allocation breaches `compare`'s 2% gate (code): reduced, and documented as deliberate.**
+  - `TallyDecryptionHashes.CommitmentHash` (eq. 88) and `Challenge` (eq. 90) now write their 2577 + 4·#U and 2569
+    byte inputs into one `ArrayPool` buffer (`IntegerModP.WriteBigEndian`, `BinaryPrimitives.WriteInt32BigEndian`)
+    and hash with `EGHash.HashConcatenated`/`HashModQConcatenated`, the `ContestHash`/`RangeProofChallenge`
+    pattern. Same bytes: `TallyDecryptionCommitmentHash_Eq88` and `TallyDecryptionProof_Eq86To93_AndVerification10`
+    (spec oracle) pass unchanged.
+  - Effect: `xsmall` `DecryptTally` 10.2 MB -> 4.2 MB per run (S3: 1.3 MB); `smoke` 0.5 MB -> 0.2 MB (S3: 0.1 MB).
+    Wall time is unchanged (xsmall 90 ms, smoke 31 ms).
+  - It still cannot meet 2% of a decryption that had no proof. The remaining ~56 KB per option on xsmall was not
+    profiled; it is in the proof's exponentiations (`MontgomeryModP.PowModP` outputs and `BigInteger`
+    intermediates: Commit's 3 per guardian, M, the administrator's |U| and its proof check). `compare` was run
+    against S3 records on this machine:
+    - smoke, S4 median of 5 vs S3 `20261005T145238Z-13da7c`: `DecryptTally allocBytesPerBallot 101.112 -> 258.984
+      156.14% REGRESSION`, exit 1. Every other phase's allocation is within 2% (the warm in-process repeats lower
+      VerifyBallots and Tally).
+    - xsmall, `20261005T173819Z-5a1936` vs S3 `20261005T141817Z-49d19e`: `DecryptTally allocBytesPerBallot 1,279.856
+      -> 4,361.144 240.75% REGRESSION`, exit 1. Tally +0.61%, VerifyTally +0.61%, Encrypt -0.01%, VerifyBallots
+      -0.09%. (Against the other S3 xsmall record, `...141632Z-421da7`, Tally reads +3.85% because that baseline is
+      a low outlier at 9.82 MB; the other five S3 xsmall records are 10.14 MB.)
+    - Both also warn that `VerifyDecryption` ran only in the candidate.
+  - perf/README.md now says this breach is expected at S4 and to rebaseline on a post-S4 record.
+- **F2, `MaximumCount` cannot be restored on a tally rebuilt outside Core (code): recorded for S10.** Correct: only
+  `AddBallot` and `MergePartials` set it, so a tally rebuilt through the public `A`/`B` setters has 0 and decryption
+  fails closed with "not in [0, 0]". No API is added in a review round. The S10 row now lists it: a tally loaded from
+  a record must carry `MaximumCount` or recompute it as `AddBallot` does (sum over cast ballots of W·min(R, L)), or
+  `TallyAdmin.Combine` needs an overload taking an explicit bound. The `MaximumCount` doc comment says the same.
+- **F3, nothing tested that u_i is fresh per option within one Commit (tests): fixed.**
+  `TallyDecryptionProtocolTests.Commit_DrawsAFreshSecretForEveryOptionAndGuardian` runs the three rounds for all
+  three guardians with no nonce source, and asserts that the 6 a_i, the 6 b_i and the 6 v_i (3 guardians x 2 options)
+  are each pairwise distinct, then that `Combine` and V10 accept the proof. The minimal manifest has one contest, so
+  cross-contest reuse is covered only through the same per-option draw. Mutation check: one u drawn before the
+  `Parallel.For` (nonce seam kept per option) fails only this test; every other Tally and KAT test (231) passed.
+  Restored.
+- Gate (no pinned value moved, so before and after are the same run):
+  - Build: `0 Warning(s)`, `0 Error(s)`.
+  - Smoke: `correctness passed`. dkg 127 ms; EncryptBallots 0.203 ms/ballot 134.7 MB; VerifyBallots 0.461 ms/ballot
+    6.2 MB; Tally 6 ms; VerifyTally 3 ms; DecryptTally 31 ms 0.2 MB; VerifyDecryption 7 ms 0.1 MB; notes
+    `tallyVerification: ran`, `decryptionVerification: ran`.
+  - Console: `Done.`, then the expected ReadKey exception; tally.json contest index 1, 0-0 = 3, 0-1 = 0.
+  - Tests: Core `Passed: 1099, Total: 1099` (1098 + 1); Perf `Passed: 204, Total: 204`.
+
+### 2026-10-05 — S4 (tally soundness: G2, G27, G28, G20, G21, G30, G38, G16)
+S3 was still staged, awaiting a signed commit, when S4 started. S4's changes are unstaged working-tree changes on
+top of it (new files show as `??`); nothing was staged, committed or stashed.
+- Code changes (uncommitted; the orchestrator commits):
+  - **G2, verifiable decryption (§3.6.5, eqs. 84-93):**
+    - The protocol is three explicit rounds on `TallyGuardian`, mediated by `TallyAdmin`. There is no network
+      layer: `TallyAdmin.Decrypt(guardians, tally, record, maxDOP)` drives in-process guardians, and
+      `TallyAdmin.Combine(tally, record, commitments, reveals, responses, maxDOP)` takes the three rounds'
+      messages from anywhere.
+      1. `Commit(tally, record, U)`: a fresh u_i per option (`ElectionGuardRandom`), M_i = A^{z_i},
+         (a_i, b_i) = (g^{u_i}, A^{u_i}) and d_i (eq. 88), all with the constant-time
+         `MontgomeryModP.PowModP`. It sends M_i and d_i (`PartialTallyDecryption`, which gains `CommitmentHash`).
+      2. `Reveal(all round-1 messages)` sends (a_i, b_i) (`TallyDecryptionCommitmentReveal`). It refuses until
+         exactly U's messages are in, its own echoed unchanged.
+      3. `Respond(all round-2 messages)` checks every d_j by eq. (88), over the guardian's own A, B, ind_c, ind_o
+         and U. It computes a, b, M and c (eq. 90) itself, never taking c from anyone, and returns
+         v_i = u_i - c·w_i·z_i (`TallyDecryptionResponse`). It is single use: u_i is discarded on success or
+         failure, and a second call throws.
+    - `TallyAdmin.Combine` works in protocol order:
+      - It reads rounds 1 and 2, rejects a zero M_j (naming j) and re-checks every d_j.
+      - Only then does it read round 3.
+      - It forms M = ∏ M_j^{w_j}, a, b, c, v = Σ v_j and T = B·M^-1.
+      - It checks g^v·K^c = a and A^v·M^c = b before publishing. On failure, Note 3.7 (eqs. 94, 95) runs per
+        guardian, with g^{z_j} rebuilt from the record's commitments, and names the guardian at fault.
+      - It then runs the discrete-log search.
+    - Every protocol failure throws the new `TallyDecryptionException`, whose `OffendingGuardian` is null when no
+      one can be named.
+    - Shared pieces, so that guardian, administrator and verifier cannot encode differently:
+      - `TallyDecryptionHashes.CommitmentHash` (eq. 88), `.Challenge` (eq. 90) and `.LagrangeCoefficient`
+        (eq. 85).
+      - `TallyDecryptionMessages`: reading and building messages, and the d_j check and combination.
+    - `DecryptedTally` publishes `ContestIndex` (ind_c), and per option `ChoiceIndex` (ind_o), `VoteCount` (t), `T`,
+      `Challenge` (c) and `Response` (v). The old unproven `TallyGuardian.Decrypt` and
+      `TallyAdmin.Decrypt(partials, tally, keys)` are gone.
+    - New `Verify/Tally/TallyDecryptionVerification` (Verification 10):
+      - ind_c and ind_o come from the record's manifest, by label. A label not in the manifest, a published index
+        that differs, or a missing aggregate is `"10.structure"`.
+      - 10.A (v ∈ Z_q) is checked for every option first.
+      - Then 10.B (eq. 90 recomputed from (10.1)-(10.3)) and 10.C (T = K^t), reported for the first option in
+        manifest order.
+      - It is parallel with `maxDegreeOfParallelism`. T is inverted in one variable-time batch, which is safe
+        because the values are public.
+    - Wired into Program.cs (V10 and V11 after decryption; tally.json is written with the `IntegerModP`/`IntegerModQ`
+      converters, so T, c and v are not `{}`). It is also wired into the perf harness: a new `VerifyDecryption`
+      phase (`PhaseNames.All`) runs V10 and V11 after a successful decryption when `tallyVerification` is on, and a
+      failure there is an `error` run. `DecryptTally` now times the whole protocol.
+    - `ElectionFixtureBuilder.DecryptTally` and `.TallyGuardians` give tests, the perf harness and the benchmarks
+      one driver. The benchmarks were updated (`TallyBenchmarks.DecryptWithProof`; `PartialDecrypt` now times
+      `Commit`).
+  - **G27:** new `Verify/Tally/TallyContentsVerification` (Verification 11): 11.A-11.C over the decrypted tally's
+    labels against the manifest, and 11.D over the contest labels of every submitted ballot, cast or challenged.
+    Overloads take the ballots, or a set of contest ids, which the perf harness collects per chunk instead of
+    keeping ballots. Wired into Program.cs and the harness.
+  - **G28:** `IEnumerableExtensions.Product(IEnumerable<IntegerModQ>)` is seeded with 1, so w_i = 1 for |U| = 1.
+    - The `IntegerModP` overload deliberately stays seedless. An empty product there would be a joint key K = 1,
+      and `RangeProofChallengeTests.Aggregate_Empty_ThrowsAsProductDoes` pins the throw.
+    - The first gate run caught a version that seeded both overloads, and it was reverted.
+  - **G20, G38 (V9):** `BallotAggregationVerifier.Verify` walks the manifest. Every manifest contest and option
+    must be in the claimed tally and nothing else may be: a missing or extra key is `"9.structure"`, checked before
+    any value. Values are then compared in manifest order as `"9.A"`/`"9.B"`. An extra key used to throw
+    `KeyNotFoundException`, and a missing one passed.
+  - **G21:** see "Decisions". `EncryptedBallot.Status` (`BallotStatus`: `NotSubmitted` = 0, `Cast` = 1,
+    `Challenged` = 2) is recorded once with `RecordStatus`. It is in JSON (as a number) and in protobuf
+    (`ProtobufEncryptedBallot.Status`, field 9, not required).
+    - `EncryptedTally.AddBallot` skips `Challenged` ballots, so they are not counted in `BallotsCast` either. It
+      rejects `NotSubmitted` as `"9.structure"`.
+    - V9 reuses `AddBallot`, so it counts only cast ballots. V5-V8 still cover every ballot.
+    - Callers record `Cast`: Program.cs before writing each ballot out, and the perf harness after the encrypt
+      timing (warmup too). `ElectionFixtureBuilder.CreateEncryptedBallot` takes `status = Cast`, and
+      `BenchmarkElection.EncryptBallot` records `Cast`.
+  - **G30:** `AddBallot`, and therefore V9, rejects `Weight < 1` as `"9.structure"`.
+    - The decoders decode faithfully. A protobuf ballot without a weight reads as 0, and one without a status reads
+      as `NotSubmitted`; both are rejected when tallied (tested).
+    - Decision: the decoders stay pure decoders, as S3's strict decoding is about canonical value encodings. A
+      ballot that decodes but breaks eq. (80) fails Verification 9 with a sub-section.
+  - **G16:** each `EncryptedAggregateChoice` tracks `MaximumCount`, the sum over cast ballots of W·min(R, L) for its
+    contest (`EncryptedTally.MaximumOptionValue`, the hook where S5's supplemental fields get their own bounds).
+    It is summed in `MergePartials`. The discrete-log search runs over [0, the largest `MaximumCount`]; a bound
+    above `int.MaxValue` throws `TallyDecryptionException`.
+- Gate before re-pinning (code complete; the only test edits before it were compile and fixture migrations:
+  `TallyGuardianTests` moved to the round API with every assertion kept, `TallyComparerTests` filled the new
+  required members with placeholders, and the ballot-copy sites gained `Status = ballot.Status`, or `Cast` where a
+  ballot is built by hand):
+  - Build: `0 Warning(s)`, `0 Error(s)`.
+  - Smoke: `correctness passed`. dkg 129 ms; EncryptBallots 0.201 ms/ballot, 135.7 MB; VerifyBallots 0.458 ms/ballot,
+    6.3 MB; Tally 6 ms; VerifyTally 3 ms; DecryptTally 33 ms; VerifyDecryption 6 ms. Notes: `tallyVerification: ran`,
+    `decryptionVerification: ran`.
+  - Console: `Done.`, then the expected ReadKey exception. tally.json now carries indices and the proof; its counts
+    are `0-0: 3, 0-1: 0` (ChoiceIndex 1 and 2, ContestIndex 1).
+  - Tests: Core `Failed: 27, Passed: 971, Total: 998`; Perf `Failed: 1, Passed: 200, Total: 201`. The failures:
+    - `KnownAnswerTests.EveryVectorFamilyIsCheckedOrExplicitlyUnsupported` (the two new families).
+    - `RangeProofChallengeTests.Aggregate_Empty_ThrowsAsProductDoes` (allowAvx512 True and False): a code defect
+      (the over-broad G28 change). It was fixed in code; the test is unchanged.
+    - `BallotStructureTests.ValidBallot_Passes(verification: 9)` and
+      `ContestCopiedVerbatim_WithAMatchingConfirmationCode_IsRejectedEverywhere`: the fixture encrypted with
+      `BallotEncryptor` directly and never recorded a status.
+    - G38 pins of plain `Exception`:
+      - `BallotAggregationVerificationTests.Verify_TamperedA_ThrowsPlainException_NotVerificationFailedException`
+        and `Verify_TamperedB_...`.
+      - `Verify_ManyBallots_ValidTallyPassesAndAMissingBallotIsDetected` (×3).
+      - `BallotAggregationVerifierTests` (12 cases, all through `AssertFailsVerification9` or a plain
+        `Throws<Exception>`): `AddBallots_ABallotMissingFromAnyChunk_FailsVerification` ×3,
+        `BallotAggregationVerification_FromALazySequence_VerifiesInOneCall` ×2,
+        `Verify_BeforeAnyBallotIsAdded_FailsAgainstANonEmptyTally`, `Verify_PartWayThrough_LeavesTheVerifierUsable`,
+        `AddBallots_FromALazySequenceMissingABallot_FailsVerification` ×3,
+        `AddBallot_WeightedBallot_MatchesThatManyUnweightedCopies`, `AddBallots_ABallotAddedTwice_FailsVerification`.
+    - Plain-`Exception` pins of tally decryption: `TallyAdminSearchRangeTests.Decrypt_CountAboveBallotsCast_ThrowsPlainException`
+      ×3, `Decrypt_ZeroPartialDecryption_ThrowsPlainException`, and
+      `TallyAdminTests.Decrypt_NoValidCombinationFound_ThrowsException`.
+    - Perf: `HtmlReportTests.Render_IncludesEveryRecordedPhaseAndMetric` (it asserts that every `PhaseNames.All`
+      entry renders, and its record had no `VerifyDecryption`).
+- Re-pinned and why (none weakened, none skipped or deleted):
+  - The G38 pins now assert `VerificationFailedException` with `SubSection` `"9.A"`, or `"9.B"` for the tampered-B
+    case. The two tampered tests were renamed `Verify_TamperedA_Throws_SubSection9A` and `..._TamperedB_..._9B`.
+    `AssertFailsVerification9` asserts `"9.A"` (every caller changes A of the first option) and keeps the message
+    prefix check.
+  - `Decrypt_ZeroPartialDecryption_ThrowsPlainException` is now `..._ThrowsNamingTheGuardian`:
+    `TallyDecryptionException`, message prefix kept, `OffendingGuardian` = 1. The zero M_1 is planted with the
+    tamper seam, hashed consistently into d_1.
+  - `Decrypt_CountAboveBallotsCast_ThrowsPlainException` is now `Decrypt_CountAboveTheBound_Throws`:
+    `TallyDecryptionException`, message prefix kept, `OffendingGuardian` null.
+  - `Decrypt_NoValidCombinationFound_ThrowsException` is now
+    `Decrypt_PartialDecryptionAlteredInTransit_IsCaughtByTheOtherGuardiansCommitmentCheck`. Before, the corrupted
+    M_1 surfaced only as a failed search. Now guardian 2 rejects d_1 in `Respond` and names guardian 1, and a
+    second `Respond` throws. Stronger.
+  - `BallotStructureTests`' fixture records `Cast` (fixture input, not an assertion). `HtmlReportTests` adds a
+    `VerifyDecryption` phase to its record. The KAT coverage test lists the two families.
+- New tests (Core 998 → 1098, Perf 201 → 204):
+  - KAT:
+    - `TallyDecryptionCommitmentHash_Eq88` (7 vectors). It checks a_i, b_i and M_i through the library, then d_i
+      with U as given and with U reversed.
+    - `TallyDecryptionProof_Eq86To93_AndVerification10` (3 vectors). The whole protocol runs end to end: guardians
+      hold the oracle's z_i, the nonce seam supplies its u_i, and the aggregate is its (A, B). Every w_i, M_i, d_i,
+      a_i, b_i, v_i and the published c, v, T, t, ind_c and ind_o must match, and V10 must accept the result.
+  - `Tally/TallyDecryptionProtocolTests` (G2, G28, G16):
+    - Every quorum, and all three guardians, publish a proof V10 accepts. Indices and T = K^t are published.
+    - Repeated runs use fresh commitments. Limited parallelism still verifies.
+    - k = 1 with n = 1 and n = 3 (`OverrideScope`). w = 1 for a single participant. Lagrange coefficients
+      interpolate at 0.
+    - R = L = 2 with one ballot giving 2: count 2, BallotsCast 1. Weight 3 × 2 ballots: count 6.
+    - `MaximumCount` = W·min(R, L) for five (L, R) pairs, and is the same after parallel `AddBallots`.
+    - The delta-shift attack: the administrator names guardian 1 through Note 3.7. Published without the
+      administrator's check, the count really is shifted by δ, and V10 fails 10.B.
+    - A reveal altered in transit is named by the receiving guardian and by the administrator.
+    - Guardians shown different tallies halt the protocol.
+    - Rejected messages: a missing commitment (names the guardian), a commitment from outside U, and the
+      guardian's own altered commitment.
+    - `Respond` is single use, and rounds called out of order throw.
+    - U is validated: below k, without self, above n, and repeated.
+    - `Combine` with a missing response, or a wrong response (Note 3.7 names the guardian).
+  - `Verify/Tally/TallyDecryptionVerificationTests` (V10):
+    - Honest passes.
+    - Fails 10.C: a wrong or negative count, or T = 0.
+    - Fails 10.B: a count shifted together with T, a tampered c or v, the proof of another option, or another
+      aggregate.
+    - Failures are reported in manifest order.
+    - Fails `"10.structure"`: an option or contest index mismatch, or an unknown option.
+    - Limited parallelism gives the same results.
+  - `TallyContentsVerificationTests` (V11): honest passes (both overloads); failures 11.A, 11.B, 11.C and 11.D; a
+    contest on no submitted ballot may be absent; challenged ballots count for 11.D.
+  - `Tally/BallotStatusAndWeightTests` (G21, G30, G20):
+    - The encryptor leaves the status unrecorded. `RecordStatus` is final and accepts only cast or challenged.
+    - `AddBallot` skips a challenged ballot, and rejects one with no status or with weight 0, -1 or
+      `int.MinValue` (`"9.structure"`, nothing added).
+    - Decryption counts only cast ballots, in parallel too. V9 leaves challenged ballots out. V9 faults on a
+      ballot with no status or with weight 0.
+    - JSON and protobuf round-trip status and weight (5 cases each). A protobuf ballot without status or weight
+      is rejected when tallied.
+    - V9 fails `"9.structure"` on a claimed tally that is missing an option, is empty, or has an extra option or
+      contest; the honest pair passes.
+  - Perf `ScenarioRunnerTests`: `VerifyDecryption` runs, with 8 ballots and the note `ran`. It is absent without
+    decryption, and absent without tally verification.
+- Mutation check: the guardians' and administrator's d_j check was disabled (`if (false && ...)` in
+  `TallyDecryptionMessages.CheckAndCombine`) and `VerifyBeforePublishing` was defaulted to false. Exactly 5 tests
+  failed:
+  - `GuardiansShownDifferentTallies_HaltTheProtocol`
+  - `RevealAlteredInTransit_IsCaughtByTheOtherGuardians_NamingTheSender`
+  - `Decrypt_PartialDecryptionAlteredInTransit_...`
+  - `DishonestGuardian_..._IsNamedBeforeAnythingIsPublished`
+  - `Combine_WithAWrongResponse_Throws_NamingTheGuardian`
+
+  The other 225 tally and KAT tests passed. Both files were restored from copies (`cmp` clean) and touched before
+  rebuilding.
+- Gate after:
+  - Build: `0 Warning(s)`, `0 Error(s)`.
+  - Smoke: `correctness passed`. dkg 126 ms; EncryptBallots 0.198 ms/ballot, 134.7 MB; VerifyBallots 0.457 ms/ballot,
+    6.2 MB; Tally 6 ms; VerifyTally 3 ms; DecryptTally 32 ms; VerifyDecryption 6 ms.
+  - Console: `Done.`, then the expected ReadKey exception. tally.json was rewritten at 13:07:39:
+    `{"0": {"ContestIndex": 1, "Choices": {"0-0": {"ChoiceIndex": 1, "VoteCount": 3}, "0-1": {"ChoiceIndex": 2, "VoteCount": 0}}}}`.
+    T, Challenge and Response are written base64 by the converters.
+  - Tests: Core `Passed: 1098, Total: 1098`; Perf `Passed: 204, Total: 204`.
+  - After a last one-line change (`Combine` takes distinct round-1 senders, so a guardian that sent two round-1
+    messages is a `TallyDecryptionException` naming it rather than an `ArgumentException`; test
+    `Combine_WithTwoRound1MessagesFromOneGuardian_Throws_NamingTheGuardian`), the whole gate was run again:
+    build 0/0; smoke `correctness passed` (EncryptBallots 0.202 ms/ballot, 134.7 MB; VerifyBallots 0.455 ms/ballot;
+    DecryptTally 32 ms; VerifyDecryption 6 ms); console `Done.` with counts `0-0: 3, 0-1: 0`; tests 1098 + 204 pass.
+- Perf (same machine; S3's numbers from its log and `perf/results/sethpc2023.jsonl`):
+
+  | Scenario | Phase | S3 | S4 |
+  |---|---|---|---|
+  | smoke (3 runs) | EncryptBallots | 0.197-0.205 ms/ballot, 134.7 MB | 0.197-0.204, 134.7 MB |
+  | smoke | VerifyBallots | 0.454-0.466 ms/ballot, 6.1-6.2 MB | 0.456-0.463, 6.2 MB |
+  | smoke | Tally / VerifyTally | 6 / 3 ms | 6 / 3 ms |
+  | smoke | DecryptTally | 19-20 ms, 0.5 MB | 30-32 ms, 0.5 MB |
+  | smoke | VerifyDecryption | (none) | 6 ms, 0.1 MB |
+  | xsmall (24 contests, 75 selections; 1 run) | EncryptBallots / VerifyBallots | 3.44-3.59 / 7.16-7.71 ms/ballot | 3.46 / 7.16 |
+  | xsmall | DecryptTally | 49-50 ms, 1.3 MB | 92 ms, 10.2 MB (4.2 MB after the review round pooled the hash inputs) |
+  | xsmall | VerifyDecryption | (none) | 30 ms, 2.0 MB |
+
+  - Only decryption changed. The proof costs, per option: per guardian 3 exponentiations in `Commit` and |U| in
+    `Respond` (M), plus the administrator's |U| and its 4-exponentiation proof check. The hashes allocate their
+    2.5 KB inputs by concatenation (`EGHash.Hash`), which is most of the extra 9 MB on xsmall. (Superseded: the S4
+    review round builds them in pooled buffers; xsmall is now 4.2 MB.)
+  - This is a one-off cost per election, not per ballot; `DecryptTally`'s ms/ballot column divides it by the
+    ballot count. Pooling the hash inputs (`EGHash.HashConcatenated`) is an available optimization, not done.
+  - The first smoke run's EncryptBallots 135.7 MB was a cold-run outlier. The next four runs were 134.7 MB, as in
+    S3.
+- Decisions taken (low stakes; none changes bytes that S3's KATs or any record format already fixed):
+  - **G21 status model:** a `BallotStatus Status` on `EncryptedBallot`, recorded once through `RecordStatus` after
+    encryption. The init accessor exists for deserializers and copies.
+    - It was chosen over a `SubmittedBallot` wrapper. Every consumer (tally, V9, serializers, the harness)
+      already takes `EncryptedBallot`, and a wrapper would need a second serializer pair.
+    - The encryptor never sets it: the decision follows the confirmation code.
+    - `NotSubmitted` = 0, so a ballot that leaves the status out is never read as cast.
+    - JSON writes the enum as a number, the same as protobuf. The JSON serializer's options are unchanged.
+  - **Tally-structure sub-sections:** a missing or extra tally key is `"9.structure"`, and a V10 label, index or
+    aggregate mismatch is `"10.structure"`. This follows S3's `"N.structure"` convention.
+  - **T = 0 in V10** fails 10.C (no t has K^t = 0), since (10.1) cannot be computed.
+  - **V10 indices:** ind_c and ind_o are taken from the manifest by label, and the published ones must agree. A
+    wrong published index cannot slip a proof past.
+  - **Note 3.7** is implemented, but runs only after the combined proof fails, to name the guardian. That is what
+    the spec says it is for, and it costs nothing on the honest path.
+  - **The administrator checks the proof before publishing.** It costs 4 exponentiations per option. The internal
+    `VerifyBeforePublishing` seam exists only for tests.
+  - **The search bound is the largest per-option maximum**, with one shared table. A count above its own option's
+    maximum would still be found if below the largest; the proof (V10) binds T either way.
+  - **Seams** follow S3's `EncryptedBallotHookForTesting` precedent: `NonceSourceForTesting`,
+    `PartialDecryptionTamperForTesting` and `VerifyBeforePublishing`, all internal.
+  - **`VerifyDecryption` budget:** the key is accepted (it is in `PhaseNames.All`) but not enforced. It runs once,
+    on a decrypted tally (`perf/README.md`).
+- Known-issue notes for the orchestrator's memory update: V9-2 (G20), V9-3 (G21), V9-4 (G30) and V9-5 (G38) are
+  fixed. V9-1 (supplemental counters never aggregated, G29) remains for S5.
+- Carry-overs:
+  - S5: supplemental fields become options with their own `MaximumOptionValue` bounds (hook in `EncryptedTally`),
+    and V9, V10 and V11 then cover them unchanged, since they walk the manifest's options.
+  - S5 and G10: with L = 1 and R = 2 a value of 2 is an overvote under the spec, but the encryptor's L·R threshold
+    lets it through with an invalid contest proof. Such a ballot fails V7, and if tallied anyway its count can
+    exceed min(R, L), so decryption fails closed. The R = 2 test therefore uses L = 2.
+  - S7: challenged ballots are now marked and left out of the tally. Their §3.6.7 decryption and V13/V14 are S7's.
+  - S10: `DecryptedTally` has no record serializer of its own. Program.cs writes it with the `IntegerModP`/`IntegerModQ`
+    converters (base64). The d_i, a_i and b_i are protocol messages, not record items (§3.7 publishes T and (c, v)).
+  - Optional: pool the eq. (88)/(90) hash inputs if `DecryptTally` matters at scale.
+- Known limits, recorded so that review does not rediscover them:
+  - `EncryptedTally.AddBallot` returns for a `Challenged` ballot before `BallotStructure.Require`, so the tally path
+    never structure-checks a challenged ballot. This is deliberate: it is not aggregated, and V6-V8 still check
+    it.
+  - The administrator's d_j re-check uses the administrator's own tally. If that differs from what the guardians
+    saw, it names a guardian j although the administrator is at fault. This is the same attribution limit as the
+    spec's complaint mechanism; the guardians' own checks are what protect them.
+  - `ScenarioRunner` records `Cast` before `EncryptedBallotHookForTesting` runs. A future hook that returns a
+    freshly built ballot must carry the status itself.
+- Nothing outside the worktree was edited by hand. `C:\temp\eg\data\1` changed only as console output
+  (`tally.json`, `encrypted-json-ballots/`), so no `.bak` was needed. `test/kat/{README.md,eg_kat.py,vectors.json}`
+  are the KAT oracle's earlier unstaged extension (the two new families). S4 did not edit them, and they belong in
+  the S4 commit.
+- Spec question (implemented as recommended, listed for the user): eq. (88) and the §5.5.4 table encode U as
+  b(#U,4) ‖ b(j_1,4) ‖ … ‖ b(j_#U,4) without saying in which order j_1..j_#U go. Ascending order is used, matching
+  the KAT oracle. d_i only passes between guardians, so this matters only for interoperability between guardian
+  implementations.
 
 ### 2026-10-05 — S3 review response (round 1)
 Five minor findings (two code, three tests). All five were correct and all are fixed. No production behavior

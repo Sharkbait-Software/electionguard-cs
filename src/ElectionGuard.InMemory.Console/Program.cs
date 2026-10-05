@@ -3,6 +3,7 @@ using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.KeyGeneration;
 using ElectionGuard.Core.Models;
 using ElectionGuard.Core.Serialization;
+using ElectionGuard.Core.Serialization.Converters;
 using ElectionGuard.Core.Tally;
 using ElectionGuard.Core.Verify.Ballot;
 using ElectionGuard.Core.Verify.KeyGeneration;
@@ -132,6 +133,10 @@ try
         var ballot = JsonSerializer.Deserialize<Ballot>(File.ReadAllBytes(ballotFile), jsonOptions)!;
         var ballotEncryptor = new BallotEncryptor(encryptionRecord, deviceId, deviceHash);
         var encryptedBallot = ballotEncryptor.Encrypt(ballot, null);
+
+        // The voter sees the confirmation code and then casts or challenges the ballot (§3.7); every
+        // ballot here is cast. The status is recorded with the ballot, so it is written out with it.
+        encryptedBallot.RecordStatus(BallotStatus.Cast);
         encryptedBallots.Add(encryptedBallot);
         using (var jsonFileStream = File.OpenWrite(Path.Combine(outputDirectory, "encrypted-json-ballots", Path.GetFileName(ballotFile))))
         {
@@ -209,6 +214,7 @@ try
         confirmationCodeVerification.Verify(encryptedBallot, deviceHash, encryptionRecord, null);
     });
 
+    // Only cast ballots are aggregated; a challenged one would be skipped here and in Verification 9.
     var encryptedTally = new EncryptedTally(manifest);
     foreach (var encryptedBallot in encryptedBallots)
     {
@@ -219,17 +225,35 @@ try
     var ballotAggregationVerification = new BallotAggregationVerification();
     ballotAggregationVerification.Verify(encryptedBallots.ToList(), manifest, encryptedTally);
 
-    List<PartialTallyDecryption> partialTallyDecryptions = new List<PartialTallyDecryption>();
-    foreach(var guardian in guardians)
-    {
-        var tallyGuardian = new TallyGuardian(guardian.Index, guardianSecretShares[guardian.Index]);
-        var partialDecryption = tallyGuardian.Decrypt(encryptedTally);
-        partialTallyDecryptions.Add(partialDecryption);
-    }
-
+    // Verifiable decryption (§3.6.5) by every guardian. TallyAdmin.Decrypt mediates the three rounds:
+    // each guardian sends M_i with its commitment hash d_i, then reveals (a_i, b_i) once it holds
+    // every d_j, then checks every d_j, computes the challenge itself and responds with v_i. The
+    // administrator combines them into T and the proof (c, v), and checks the proof before
+    // publishing it.
+    var tallyGuardians = guardians
+        .Select(guardian => new TallyGuardian(guardian.Index, guardianSecretShares[guardian.Index]))
+        .ToList();
     var tallyAdmin = new TallyAdmin();
-    var decryptedTally = tallyAdmin.Decrypt(partialTallyDecryptions, encryptedTally, electionPublicKeys);
-    var serializedDecryptedTally = JsonSerializer.Serialize(decryptedTally);
+    var decryptedTally = tallyAdmin.Decrypt(tallyGuardians, encryptedTally, encryptionRecord);
+
+    // Verification 10
+    var tallyDecryptionVerification = new TallyDecryptionVerification();
+    tallyDecryptionVerification.Verify(encryptionRecord, encryptedTally, decryptedTally);
+
+    // Verification 11, with 11.D over every submitted ballot (cast or challenged).
+    var tallyContentsVerification = new TallyContentsVerification();
+    tallyContentsVerification.Verify(manifest, decryptedTally, encryptedBallots);
+
+    // T, c and v are published with each count, hex-encoded like the ballots' values.
+    var tallyJsonOptions = new JsonSerializerOptions
+    {
+        Converters =
+        {
+            new IntegerModPJsonConverter(),
+            new IntegerModQJsonConverter(),
+        },
+    };
+    var serializedDecryptedTally = JsonSerializer.Serialize(decryptedTally, tallyJsonOptions);
     File.WriteAllBytes(Path.Combine(outputDirectory, "tally.json"), System.Text.Encoding.UTF8.GetBytes(serializedDecryptedTally));
 
     Console.WriteLine("Done.");

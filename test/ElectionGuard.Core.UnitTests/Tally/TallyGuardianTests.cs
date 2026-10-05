@@ -19,6 +19,7 @@ file static class TallyTestScenario
     public sealed class Result
     {
         public required ElectionFixtureBuilder.GuardianSetResult GuardianSet { get; init; }
+        public required EncryptionRecord EncryptionRecord { get; init; }
         public required List<EncryptedBallot> EncryptedBallots { get; init; }
         public required EncryptedTally Tally { get; init; }
     }
@@ -60,16 +61,32 @@ file static class TallyTestScenario
         return new Result
         {
             GuardianSet = guardianSet,
+            EncryptionRecord = encryptionRecordResult.EncryptionRecord,
             EncryptedBallots = encryptedBallots,
             Tally = tally,
         };
     }
 
+    public static TallyGuardian TallyGuardian(Result scenario, GuardianIndex guardianIndex)
+    {
+        return new TallyGuardian(guardianIndex, scenario.GuardianSet.SecretShares[guardianIndex]);
+    }
+
+    /// <summary>
+    /// The guardian's round-1 message (its partial decryption M_i and d_i) for a decryption by
+    /// guardians 1 and 2.
+    /// </summary>
     public static PartialTallyDecryption DecryptFor(Result scenario, GuardianIndex guardianIndex)
     {
-        var shares = scenario.GuardianSet.SecretShares[guardianIndex];
-        var tallyGuardian = new TallyGuardian(guardianIndex, shares);
-        return tallyGuardian.Decrypt(scenario.Tally);
+        var participants = scenario.GuardianSet.Guardians.Take(2).Select(x => x.Index).ToList();
+        return TallyGuardian(scenario, guardianIndex).Commit(scenario.Tally, scenario.EncryptionRecord, participants);
+    }
+
+    /// <summary>Decrypts the scenario's tally with the guardians at the given 0-based positions of the set.</summary>
+    public static DecryptedTally Decrypt(Result scenario, params int[] positions)
+    {
+        var guardians = positions.Select(i => TallyGuardian(scenario, scenario.GuardianSet.Guardians[i].Index)).ToList();
+        return new TallyAdmin().Decrypt(guardians, scenario.Tally, scenario.EncryptionRecord);
     }
 }
 
@@ -90,7 +107,7 @@ public class TallyGuardianTests
         Assert.Contains("choice-1", contest.Value.Choices.Keys);
         Assert.Contains("choice-2", contest.Value.Choices.Keys);
 
-        // Secondary observable, beyond structure: Mi must be the *exact* A^share value (TallyGuardian.Decrypt),
+        // Secondary observable, beyond structure: Mi must be the *exact* A^share value (TallyGuardian.Commit),
         // not merely present -- pins the exponent base (A, not B) and the exponent itself (this guardian's
         // VoteEncryptionKeyShare) so a swapped base or wrong share would be caught even in isolation from
         // TallyAdminTests' end-to-end vote-count assertions.
@@ -124,18 +141,9 @@ public class TallyAdminTests
         var scenario = TallyTestScenario.Build();
 
         // GuardianParameters is hardcoded N=3/K=2 (CLAUDE.md) -- use exactly K=2 of the 3
-        // guardians' partial decryptions (guardians 1 and 2) to prove threshold combination
-        // works with fewer than all N shares.
-        var guardian1 = scenario.GuardianSet.Guardians[0];
-        var guardian2 = scenario.GuardianSet.Guardians[1];
-        var partials = new List<PartialTallyDecryption>
-        {
-            TallyTestScenario.DecryptFor(scenario, guardian1.Index),
-            TallyTestScenario.DecryptFor(scenario, guardian2.Index),
-        };
-
-        var tallyAdmin = new TallyAdmin();
-        var decryptedTally = tallyAdmin.Decrypt(partials, scenario.Tally, scenario.GuardianSet.ElectionPublicKeys);
+        // guardians (guardians 1 and 2) to prove threshold combination works with fewer than all
+        // N shares.
+        var decryptedTally = TallyTestScenario.Decrypt(scenario, 0, 1);
 
         // Known plaintext distribution: choice-1 got 2 votes (ballot-1, ballot-2),
         // choice-2 got 1 vote (ballot-3). This must be exact, not just "did not throw".
@@ -147,26 +155,13 @@ public class TallyAdminTests
     public void Decrypt_LagrangeCoefficients_CombineCorrectly()
     {
         var scenario = TallyTestScenario.Build();
-        var tallyAdmin = new TallyAdmin();
 
         // First subset: guardians 1 & 2.
-        var subsetA = new List<PartialTallyDecryption>
-        {
-            TallyTestScenario.DecryptFor(scenario, scenario.GuardianSet.Guardians[0].Index),
-            TallyTestScenario.DecryptFor(scenario, scenario.GuardianSet.Guardians[1].Index),
-        };
-        var resultA = tallyAdmin.Decrypt(subsetA, scenario.Tally, scenario.GuardianSet.ElectionPublicKeys);
+        var resultA = TallyTestScenario.Decrypt(scenario, 0, 1);
 
-        // Second, different subset: guardians 2 & 3 (NOT 1 & 3 -- see
-        // Decrypt_IndexGapOfTwoSubset_PinsTruncatingLagrangeCoefficientBug below for why that
-        // particular subset currently fails). Lagrange interpolation should be
+        // Second, different subset: guardians 2 & 3. Lagrange interpolation should be
         // subset-independent -- both K-of-N combinations must recover the same vote counts.
-        var subsetB = new List<PartialTallyDecryption>
-        {
-            TallyTestScenario.DecryptFor(scenario, scenario.GuardianSet.Guardians[1].Index),
-            TallyTestScenario.DecryptFor(scenario, scenario.GuardianSet.Guardians[2].Index),
-        };
-        var resultB = tallyAdmin.Decrypt(subsetB, scenario.Tally, scenario.GuardianSet.ElectionPublicKeys);
+        var resultB = TallyTestScenario.Decrypt(scenario, 1, 2);
 
         Assert.Equal(2, resultA.Contests["contest-1"].Choices["choice-1"].VoteCount);
         Assert.Equal(1, resultA.Contests["contest-1"].Choices["choice-2"].VoteCount);
@@ -188,52 +183,63 @@ public class TallyAdminTests
         // the true coefficients are fractional (L_1(0) = 1.5, L_3(0) = -0.5), which used to get
         // truncated to 1 and 0 instead of the correct value mod Q.
         //
-        // Fixed by computing the whole Lagrange coefficient in IntegerModQ (see
-        // TallyGuardian.CalculateLagrangeCoefficient) combined with a corrected IntegerModQ
+        // Fixed by computing the whole Lagrange coefficient in IntegerModQ (now
+        // TallyDecryptionHashes.LagrangeCoefficient) combined with a corrected IntegerModQ
         // division operator that uses a Fermat's-little-theorem modular inverse (matching
         // IntegerModP.operator/), so this subset now recovers the same subset-independent result
         // as {1,2} and {2,3} (see Decrypt_LagrangeCoefficients_CombineCorrectly).
         var scenario = TallyTestScenario.Build();
-        var subset = new List<PartialTallyDecryption>
-        {
-            TallyTestScenario.DecryptFor(scenario, scenario.GuardianSet.Guardians[0].Index),
-            TallyTestScenario.DecryptFor(scenario, scenario.GuardianSet.Guardians[2].Index),
-        };
-        var tallyAdmin = new TallyAdmin();
 
-        var decryptedTally = tallyAdmin.Decrypt(subset, scenario.Tally, scenario.GuardianSet.ElectionPublicKeys);
+        var decryptedTally = TallyTestScenario.Decrypt(scenario, 0, 2);
 
         Assert.Equal(2, decryptedTally.Contests["contest-1"].Choices["choice-1"].VoteCount);
         Assert.Equal(1, decryptedTally.Contests["contest-1"].Choices["choice-2"].VoteCount);
     }
 
     [Fact]
-    public void Decrypt_NoValidCombinationFound_ThrowsException()
+    public void Decrypt_PartialDecryptionAlteredInTransit_IsCaughtByTheOtherGuardiansCommitmentCheck()
     {
         var scenario = TallyTestScenario.Build();
-        var guardian1 = scenario.GuardianSet.Guardians[0];
-        var guardian2 = scenario.GuardianSet.Guardians[1];
+        var guardian1 = TallyTestScenario.TallyGuardian(scenario, scenario.GuardianSet.Guardians[0].Index);
+        var guardian2 = TallyTestScenario.TallyGuardian(scenario, scenario.GuardianSet.Guardians[1].Index);
+        var participants = new List<GuardianIndex> { guardian1.Index, guardian2.Index };
 
-        var partial1 = TallyTestScenario.DecryptFor(scenario, guardian1.Index);
-        var partial2 = TallyTestScenario.DecryptFor(scenario, guardian2.Index);
+        var partial1 = guardian1.Commit(scenario.Tally, scenario.EncryptionRecord, participants);
+        var partial2 = guardian2.Commit(scenario.Tally, scenario.EncryptionRecord, participants);
 
-        // Corrupt one guardian's partial decryption share for choice-1 so that no lagrange
-        // combination of {corrupted, valid} reproduces a value t = K^i for any i in
-        // [0, BallotsCast] -- forcing the brute-force loop in TallyAdmin.Decrypt to fail to find a
-        // match (line 109-112).
-        partial1.Contests["contest-1"].Choices["choice-1"] = new PartialTallyDecryption.PartialTallyChoiceDecryption
+        // Corrupt one guardian's partial decryption share for choice-1, in transit, so that no
+        // lagrange combination of {corrupted, valid} reproduces a value t = K^i for any i in
+        // [0, BallotsCast]. Guardian 1 still sees its own message as it sent it; guardian 2 sees
+        // the corrupted copy.
+        var original = partial1.Contests["contest-1"].Choices["choice-1"];
+        var corrupted = new PartialTallyDecryption
+        {
+            GuardianIndex = partial1.GuardianIndex,
+            Contests = partial1.Contests.ToDictionary(
+                contest => contest.Key,
+                contest => new PartialTallyDecryption.PartialTallyContestDecryption
+                {
+                    Choices = new Dictionary<string, PartialTallyDecryption.PartialTallyChoiceDecryption>(contest.Value.Choices),
+                }),
+        };
+        corrupted.Contests["contest-1"].Choices["choice-1"] = new PartialTallyDecryption.PartialTallyChoiceDecryption
         {
             Mi = new IntegerModP(123456789),
+            CommitmentHash = original.CommitmentHash,
         };
 
-        var partials = new List<PartialTallyDecryption> { partial1, partial2 };
-        var tallyAdmin = new TallyAdmin();
+        var reveal1 = guardian1.Reveal([partial1, partial2]);
+        var reveal2 = guardian2.Reveal([corrupted, partial2]);
 
-        var exception = Assert.Throws<Exception>(() => tallyAdmin.Decrypt(partials, scenario.Tally, scenario.GuardianSet.ElectionPublicKeys));
-        Assert.Equal("Tally did not decrypt successfully.", exception.Message);
-        // Plain System.Exception, not VerificationFailedException -- TallyAdmin.Decrypt's
-        // no-solution case is one of the plain-Exception throw sites documented in research.md.
-        Assert.IsType<Exception>(exception);
+        // This used to surface only at the very end, as a plain Exception from the discrete-log
+        // search. Now M_1 is bound into d_1 (eq. 88), so guardian 2 halts the protocol before it
+        // responds, and names guardian 1 (p.48).
+        var exception = Assert.Throws<TallyDecryptionException>(() => guardian2.Respond([reveal1, reveal2]));
+        Assert.Equal(guardian1.Index, exception.OffendingGuardian);
+        Assert.Contains("eq. 88", exception.Message);
+
+        // The decryption is over for guardian 2: it never responds with that u_2.
+        Assert.Throws<InvalidOperationException>(() => guardian2.Respond([reveal1, reveal2]));
     }
 
     [Fact]
@@ -248,21 +254,12 @@ public class TallyAdminTests
         // TallyAdmin.Decrypt now returns VoteCount=0 for every choice instead of throwing.
         EGParameters.Init(new CryptographicParameters(), new GuardianParameters());
         var guardianSet = ElectionFixtureBuilder.CreateGuardianSet();
-        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest();
+        var (manifest, manifestFile) = ElectionFixtureBuilder.CreateMinimalManifest();
+        var encryptionRecord = ElectionFixtureBuilder.CreateEncryptionRecord(guardianSet, manifest, manifestFile).EncryptionRecord;
         var emptyTally = new EncryptedTally(manifest);
         Assert.Equal(0, emptyTally.BallotsCast);
 
-        var guardian1 = guardianSet.Guardians[0];
-        var guardian2 = guardianSet.Guardians[1];
-        var partials = new List<PartialTallyDecryption>
-        {
-            new TallyGuardian(guardian1.Index, guardianSet.SecretShares[guardian1.Index]).Decrypt(emptyTally),
-            new TallyGuardian(guardian2.Index, guardianSet.SecretShares[guardian2.Index]).Decrypt(emptyTally),
-        };
-
-        var tallyAdmin = new TallyAdmin();
-
-        var decryptedTally = tallyAdmin.Decrypt(partials, emptyTally, guardianSet.ElectionPublicKeys);
+        var decryptedTally = ElectionFixtureBuilder.DecryptTally(guardianSet, emptyTally, encryptionRecord, 2);
 
         Assert.Equal(0, decryptedTally.Contests["contest-1"].Choices["choice-1"].VoteCount);
         Assert.Equal(0, decryptedTally.Contests["contest-1"].Choices["choice-2"].VoteCount);
@@ -271,15 +268,13 @@ public class TallyAdminTests
     [Fact]
     public void Decrypt_VoteCountEqualsBallotsCast_RecoversAtUpperSearchBoundary()
     {
-        // MUTATION-GAP REGRESSION: TallyAdmin.Decrypt's discrete-log brute-force loop is
-        // `for (int i = 0; i <= encryptedTally.BallotsCast; i++)`. TallyTestScenario's shared
-        // 3-ballot fixture never drives any choice's true vote count up to exactly BallotsCast (the
-        // max is 2 out of 3 cast ballots), so it cannot distinguish the inclusive upper bound
-        // (`<=`) from an off-by-one exclusive bound (`<`) -- both ranges happen to contain the
-        // scenario's actual answers of 2 and 1. Empirically verified: mutating `<=` to `<` in
-        // TallyGuardian.cs and re-running the full Tally test file left all existing tests green.
-        // Here every ballot votes choice-1, so its true count equals BallotsCast exactly, which is
-        // only reachable if the loop's upper bound is inclusive.
+        // MUTATION-GAP REGRESSION: TallyAdmin.Decrypt's discrete-log search covers
+        // [0, the bound] inclusive. TallyTestScenario's shared 3-ballot fixture never drives any
+        // choice's true vote count up to exactly BallotsCast (the max is 2 out of 3 cast ballots),
+        // so it cannot distinguish the inclusive upper bound from an off-by-one exclusive bound --
+        // both ranges happen to contain the scenario's actual answers of 2 and 1. Here every ballot
+        // votes choice-1, so its true count equals BallotsCast exactly, which is only reachable if
+        // the upper bound is inclusive.
         EGParameters.Init(new CryptographicParameters(), new GuardianParameters());
         var guardianSet = ElectionFixtureBuilder.CreateGuardianSet();
         var (manifest, manifestFile) = ElectionFixtureBuilder.CreateMinimalManifest();
@@ -298,16 +293,7 @@ public class TallyAdminTests
         var tally = ElectionFixtureBuilder.CreateEncryptedTally(manifest, encryptedBallots);
         Assert.Equal(2, tally.BallotsCast);
 
-        var guardian1 = guardianSet.Guardians[0];
-        var guardian2 = guardianSet.Guardians[1];
-        var partials = new List<PartialTallyDecryption>
-        {
-            new TallyGuardian(guardian1.Index, guardianSet.SecretShares[guardian1.Index]).Decrypt(tally),
-            new TallyGuardian(guardian2.Index, guardianSet.SecretShares[guardian2.Index]).Decrypt(tally),
-        };
-
-        var tallyAdmin = new TallyAdmin();
-        var decryptedTally = tallyAdmin.Decrypt(partials, tally, guardianSet.ElectionPublicKeys);
+        var decryptedTally = ElectionFixtureBuilder.DecryptTally(guardianSet, tally, encryptionRecordResult.EncryptionRecord, 2);
 
         // choice-1's true count equals BallotsCast exactly -- only reachable with an inclusive
         // upper search bound.
@@ -358,6 +344,7 @@ public class TallyAdminSearchRangeTests
             ConfirmationCode = new ConfirmationCode(new byte[] { 0x04 }),
             Weight = 1,
             DeviceId = "device-1",
+            Status = BallotStatus.Cast,
         };
     }
 
@@ -375,13 +362,14 @@ public class TallyAdminSearchRangeTests
     {
         EGParameters.Init(new CryptographicParameters(), new GuardianParameters());
         var guardianSet = ElectionFixtureBuilder.CreateGuardianSet();
-        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest();
+        var (manifest, manifestFile) = ElectionFixtureBuilder.CreateMinimalManifest();
         var choices = manifest.Contests[0].Choices;
         for (int i = choices.Count; i < counts.Length; i++)
         {
             choices.Add(new Choice { Id = $"choice-{i + 1}", Name = $"Choice {i + 1}", Index = i + 1 });
         }
 
+        var encryptionRecord = ElectionFixtureBuilder.CreateEncryptionRecord(guardianSet, manifest, manifestFile).EncryptionRecord;
         var choiceIds = choices.Select(x => x.Id).ToList();
         var tally = new EncryptedTally(manifest);
         tally.AddBallots(Enumerable.Range(0, BallotsCast).Select(i => CreatePlaceholderBallot($"ballot-{i}", choiceIds)).ToList());
@@ -396,20 +384,14 @@ public class TallyAdminSearchRangeTests
             choice.B = IntegerModP.PowModP(k, new IntegerModQ((counts[i] ?? 0) + nonce));
         }
 
-        var partials = guardianSet.Guardians
-            .Take(2)
-            .Select(guardian => new TallyGuardian(guardian.Index, guardianSet.SecretShares[guardian.Index]).Decrypt(tally, maxDegreeOfParallelism))
-            .ToList();
+        var guardians = ElectionFixtureBuilder.TallyGuardians(guardianSet, 2);
 
-        for (int i = 0; i < counts.Length; i++)
-        {
-            if (counts[i] is null)
-            {
-                partials[0].Contests["contest-1"].Choices[choiceIds[i]] = new PartialTallyDecryption.PartialTallyChoiceDecryption { Mi = 0 };
-            }
-        }
+        // A corrupt guardian 1 that sends M_1 = 0 (and hashes it consistently into d_1) for every
+        // null count.
+        guardians[0].PartialDecryptionTamperForTesting = (contestIndex, optionIndex, mi) =>
+            counts[optionIndex - 1] is null ? new IntegerModP(0) : mi;
 
-        return new TallyAdmin().Decrypt(partials, tally, guardianSet.ElectionPublicKeys, maxDegreeOfParallelism);
+        return new TallyAdmin().Decrypt(guardians, tally, encryptionRecord, maxDegreeOfParallelism);
     }
 
     [Fact]
@@ -428,13 +410,15 @@ public class TallyAdminSearchRangeTests
     }
 
     [Fact]
-    public void Decrypt_ZeroPartialDecryption_ThrowsPlainException()
+    public void Decrypt_ZeroPartialDecryption_ThrowsNamingTheGuardian()
     {
-        // A zero M has no inverse; it must fail with the same plain Exception as any other
-        // undecryptable choice, not an ArgumentException from the inversion.
-        var exception = Assert.Throws<Exception>(() => DecryptCounts([3, null, 5]));
+        // A zero M has no inverse; it must fail as an undecryptable tally, not with an
+        // ArgumentException from the inversion. It used to be a plain Exception; it is now a
+        // TallyDecryptionException naming the guardian whose M_i is 0.
+        var exception = Assert.Throws<TallyDecryptionException>(() => DecryptCounts([3, null, 5]));
 
-        Assert.Equal("Tally did not decrypt successfully.", exception.Message);
+        Assert.StartsWith("Tally did not decrypt successfully", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(1, exception.OffendingGuardian?.Index);
     }
 
     [Theory]
@@ -494,10 +478,14 @@ public class TallyAdminSearchRangeTests
     [InlineData(BallotsCast + 1)]
     [InlineData(BallotsCast + 9)]
     [InlineData(1000)]
-    public void Decrypt_CountAboveBallotsCast_ThrowsPlainException(int count)
+    public void Decrypt_CountAboveTheBound_Throws(int count)
     {
-        var exception = Assert.Throws<Exception>(() => DecryptCounts(5, count));
+        // The placeholder ballots have weight 1 and R = L = 1, so each option's bound is
+        // BallotsCast. The proof is valid (the aggregate really encrypts the count), so nothing
+        // names a guardian; the count is simply out of range. This used to be a plain Exception.
+        var exception = Assert.Throws<TallyDecryptionException>(() => DecryptCounts(5, count));
 
-        Assert.Equal("Tally did not decrypt successfully.", exception.Message);
+        Assert.StartsWith("Tally did not decrypt successfully", exception.Message, StringComparison.Ordinal);
+        Assert.Null(exception.OffendingGuardian);
     }
 }

@@ -145,6 +145,7 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
             }).ToList(),
             ConfirmationCode = encryptedBallot.ConfirmationCode,
             Weight = encryptedBallot.Weight,
+            Status = encryptedBallot.Status,
         };
 
         Serializer.Serialize(destination, protobufEncryptedBallot);
@@ -234,6 +235,7 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
             }).ToList(),
             ConfirmationCode = new ConfirmationCode(protobufBallot.ConfirmationCode),
             Weight = protobufBallot.Weight,
+            Status = protobufBallot.Status,
         };
 
         return encryptedBallot;
@@ -256,8 +258,20 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
         public required List<ProtobufEncryptedContest> Contests { get; init; }
         [ProtoMember(7)]
         public required byte[] ConfirmationCode { get; init; }
+        /// <summary>
+        /// Decoded as given. A ballot that leaves it off the wire reads as 0, which tallying and
+        /// Verification 9 reject ("9.structure"): eq. (80) weights are positive.
+        /// </summary>
         [ProtoMember(8)]
         public required int Weight { get; init; }
+
+        /// <summary>
+        /// The recorded <see cref="BallotStatus"/> (§3.7). Not required: a ballot serialized before
+        /// it was submitted has none, and 0 (<see cref="BallotStatus.NotSubmitted"/>) is then left
+        /// off the wire.
+        /// </summary>
+        [ProtoMember(9)]
+        public BallotStatus Status { get; init; }
     }
 
     [ProtoContract]

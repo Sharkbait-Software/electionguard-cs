@@ -17,6 +17,7 @@ public class EncryptedTally
             .ToDictionary(x => x.Id, x => new EncryptedAggregateContest
             {
                 ContestId = x.Id,
+                MaximumOptionValue = MaximumOptionValue(x),
                 Choices = x.Choices.ToDictionary(ch => ch.Id, ch => new EncryptedAggregateChoice
                 {
                     ChoiceId = ch.Id,
@@ -38,25 +39,65 @@ public class EncryptedTally
 
     private readonly Manifest _manifest;
     public Dictionary<string, EncryptedAggregateContest> Contests;
+
+    /// <summary>The manifest this tally aggregates over. Its contests and options are the tally's keys.</summary>
+    public Manifest Manifest => _manifest;
+
+    /// <summary>
+    /// The number of cast ballots added. Challenged ballots are not counted (see
+    /// <see cref="AddBallot"/>). This is not the decryption bound: a weighted ballot, or one giving
+    /// an option more than 1, adds more than 1 to a count; see
+    /// <see cref="EncryptedAggregateChoice.MaximumCount"/>.
+    /// </summary>
     public int BallotsCast { get; private set; } = 0;
 
     /// <summary>
-    /// Multiplies <paramref name="encryptedBallot"/>'s ciphertexts into the aggregate. A ballot that
-    /// does not list exactly its ballot style's contests and the manifest's options, each once, is
-    /// rejected before anything is multiplied in, with a <see cref="VerificationFailedException"/> of
-    /// sub-section "9.structure" (Verification 9 recomputes the aggregate through this method; see
-    /// <see cref="BallotStructure"/>). Otherwise a contest or option listed twice would count twice.
+    /// Multiplies a cast <paramref name="encryptedBallot"/>'s ciphertexts into the aggregate, each
+    /// raised to the ballot's weight (eq. 80). Verification 9 recomputes the aggregate through this
+    /// method, so its rejections are Verification 9 failures:
+    /// <list type="bullet">
+    /// <item>A <see cref="BallotStatus.Challenged"/> ballot is skipped: only cast ballots are
+    /// aggregated (§3.5, Verification 9 "all cast ballots").</item>
+    /// <item>A ballot with no recorded status (<see cref="BallotStatus.NotSubmitted"/>) is rejected
+    /// with a <see cref="VerificationFailedException"/> of sub-section "9.structure": the record
+    /// must say whether it was cast.</item>
+    /// <item>A weight below 1 is rejected the same way. Eq. (80) weights are small positive
+    /// integers; a weight of 0 or less used to be counted as 1 (G30).</item>
+    /// <item>A ballot that does not list exactly its ballot style's contests and the manifest's
+    /// options, each once, is rejected the same way before anything is multiplied in (see
+    /// <see cref="BallotStructure"/>). Otherwise a contest or option listed twice would count
+    /// twice.</item>
+    /// </list>
     /// </summary>
     public void AddBallot(EncryptedBallot encryptedBallot)
     {
+        if (encryptedBallot.Status == BallotStatus.Challenged)
+        {
+            return;
+        }
+
+        if (encryptedBallot.Status != BallotStatus.Cast)
+        {
+            throw new VerificationFailedException("9.structure",
+                $"Ballot {encryptedBallot.Id} has status {encryptedBallot.Status}: only a ballot recorded as cast is aggregated, and only a challenged one is left out (§3.7, Verification 9).");
+        }
+
+        if (encryptedBallot.Weight < 1)
+        {
+            throw new VerificationFailedException("9.structure",
+                $"Ballot {encryptedBallot.Id} has weight {encryptedBallot.Weight}: ballot weights are positive integers (eq. 80).");
+        }
+
         BallotStructure.Require(encryptedBallot, _manifest, 9);
 
         foreach(var contest in encryptedBallot.Contests)
         {
             var aggregateContest = Contests[contest.Id];
+            long maximumOptionContribution = (long)encryptedBallot.Weight * aggregateContest.MaximumOptionValue;
             foreach(var choice in contest.Choices)
             {
                 var aggregateChoice = aggregateContest.Choices[choice.ChoiceId];
+                aggregateChoice.MaximumCount += maximumOptionContribution;
 
                 if(encryptedBallot.Weight > 1)
                 {
@@ -189,21 +230,54 @@ public class EncryptedTally
                 var partialChoice = partial.Contests[contestId].Choices[choice.ChoiceId];
                 choice.AProduct.Multiply(partialChoice.AProduct);
                 choice.BProduct.Multiply(partialChoice.BProduct);
+                choice.MaximumCount += partialChoice.MaximumCount;
             }
         });
 
         BallotsCast += partials.Sum(partial => partial.BallotsCast);
     }
 
+    /// <summary>
+    /// The most one cast ballot of weight 1 can add to one option's count in
+    /// <paramref name="contest"/>: an option takes at most R = <see cref="Contest.OptionSelectionLimit"/>
+    /// (§3.3.7) and all options together at most L = <see cref="Contest.SelectionLimit"/>, so
+    /// min(R, L). (A total above L is an overvote, which the encryptor turns into all zeros; a
+    /// ballot whose option value exceeds this cannot carry valid range proofs.)
+    ///
+    /// Stage S5 adds the supplemental fields (overvote, null vote, undervote and write-in counts) as
+    /// options with bounds of their own (1 for an indicator, L for the undervote difference count,
+    /// the number of write-in fields for the write-in count); their bound belongs here, per option.
+    /// </summary>
+    internal static int MaximumOptionValue(Contest contest)
+    {
+        return Math.Max(0, Math.Min(contest.OptionSelectionLimit, contest.SelectionLimit));
+    }
+
     public class EncryptedAggregateContest
     {
         public required string ContestId { get; init; }
         public required Dictionary<string, EncryptedAggregateChoice> Choices { get; init; }
+
+        /// <summary>See <see cref="EncryptedTally.MaximumOptionValue"/>.</summary>
+        internal int MaximumOptionValue { get; init; }
     }
 
     public class EncryptedAggregateChoice
     {
         public required string ChoiceId { get; init; }
+
+        /// <summary>
+        /// The largest count this choice's aggregate can encrypt: the sum, over the cast ballots added,
+        /// of the ballot's weight W (eq. 80) times the most one ballot can give the option,
+        /// min(R, L). Tally decryption searches [0, this] for the count (§3.6.2); the number of
+        /// ballots cast, which it used to search, is too small once a weight or R exceeds 1 (G16).
+        /// Public, since a decrypting administrator reads it, but not a verified value: nothing in
+        /// Verifications 9 to 11 depends on it. Only <see cref="AddBallot"/> and
+        /// <see cref="MergePartials"/> set it: a tally rebuilt through the <see cref="A"/> and
+        /// <see cref="B"/> setters (from a published record, say) has 0 here, so decrypting it fails
+        /// closed for any nonzero count. Restoring it from outside Core is S10's record-loading work.
+        /// </summary>
+        public long MaximumCount { get; internal set; }
 
         /// <summary>
         /// The aggregate alpha, the product of every added ballot's alpha for this choice. Held as a

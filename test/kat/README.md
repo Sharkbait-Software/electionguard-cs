@@ -2,7 +2,7 @@
 
 `eg_kat.py` is an independent reference implementation of the ElectionGuard v2.1.0 hash chain,
 used as a known-answer-test oracle for `ElectionGuard.Core`. It was written from the
-specification text only (sections 3.1-3.4, 4.1.4 and 5, including the section 5.5 domain-separation
+specification text only (sections 3.1-3.4, 3.6.2-3.6.5, 4.1.4 and 5, and Verification 10, including the section 5.5 domain-separation
 tables), without reading the C# source or its existing test expectations, so its outputs are not
 shaped by any encoding bug in the C# code.
 
@@ -37,6 +37,8 @@ This rewrites `test/kat/vectors.json` and prints H_P for n = 3, k = 2.
 | `chain_init` | (74) H_0 = H(H_E; 0x29, B_C,0) |
 | `chain_close_inner`, `chain_close` | (78), (77) |
 | `preencrypted_device_info_hash` | (119) H_DI = H(H_E; 0x43, S_device) |
+| `tally_decryption_commitment_hash` | (88) d_i = H(H_E; 0x30, ind_c, ind_o, i, A, B, a_i, b_i, M_i, U), len(B1) = 2577 + 4 * #U |
+| `tally_decryption_challenge` | (90) c = H_q(H_E; 0x31, ind_c, ind_o, A, B, a, b, M), len(B1) = 2569 (Verification 10.B) |
 
 ## Vector format
 
@@ -51,3 +53,15 @@ B1, so an ordering bug can be located. Every slot is a distinct group element, K
 K-hat = prod K-hat_{i,0} (eqs. 25, 26), and the n = 3, k = 2 case is built so that K = g^5 and K-hat = g^7,
 the key pair `main_chain` uses for H_E. These vectors are appended after all earlier families, so existing
 vector positions are unchanged.
+
+`tally_decryption_commitment_hash` and `tally_decryption_challenge` vectors (sections 3.6.2-3.6.5) are complete,
+valid tally decryption proofs on the `main_chain` election. The guardian polynomials are the ones the n = 3, k = 2
+`guardian_record_hash` vector commits to (s = 5, so K = g^5), z_i = P(i) per eq. (83), and (A, B) is the product of
+three genuine ballot encryptions (eq. 33 nonces) for the given (ind_c, ind_o), so t is known. Three cases cover
+U = {1, 3} (t = 2), U = {1, 2, 3} (t = 3, one u_i = q - 2) and U = {2, 3} (t = 0). The set U is encoded as
+b(#U, 4) followed by b(j, 4) for each j in ascending order; the spec does not state the order, so a consumer
+that orders U differently will disagree. Each challenge vector carries the whole proof under `inputs.proof`
+(c, v, t, T and per guardian w_i, z_i, u_i, M_i, a_i, b_i, d_i, c_i, v_i), and the script asserts Verification
+10 (10.1-10.3 recompute exactly M, a, b; 10.A-10.C) and Note 3.7 (eqs. 94, 95) for each. Verification 10 uses no
+hash other than eq. (90). These vectors carry `b1_layout` and are appended after all earlier families; the
+top-level `tally_decryption` key (after `vectors`) summarizes the setup.

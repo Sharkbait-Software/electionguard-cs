@@ -111,7 +111,7 @@ Two knobs matter most:
 
 - **`phases`** — which optional phases run.
 - **`budgets`** — per-phase wall-clock allowance in minutes, keyed by phase name: `EncryptBallots`,
-  `VerifyBallots`, `Tally`, `VerifyTally`, `DecryptTally`. A phase that exhausts its budget stops
+  `VerifyBallots`, `Tally`, `VerifyTally`, `DecryptTally`, `VerifyDecryption`. A phase that exhausts its budget stops
   at the next chunk boundary and is recorded as `aborted:budgetExceeded`; the run still produces a
   record.
 
@@ -131,6 +131,29 @@ made a million-ballot decryption impossible inside `large`'s 30-minute budget. I
 count with a baby-step giant-step search sharing one table across choices, about
 2·sqrt(choices x BallotsCast) multiplies in all, and `xsmall`'s decryption fell from 28.5 s to about
 50 ms; the budget stays as a backstop.
+
+Since stage S4 of the spec-compliance work, `DecryptTally` is the verifiable decryption of §3.6.5:
+the k guardians' three rounds (partial decryptions with commitment hashes, commitment reveals,
+responses), the administrator's check of the proof before it publishes, and the search, whose bound
+is now the largest option's `MaximumCount` (weights and `OptionSelectionLimit` included) rather than
+`BallotsCast`. The proof costs a few exponentiations per option, so `DecryptTally` grew from about
+20 to 30 ms on `smoke` and from 50 to 90 ms on `xsmall`; its ms/ballot column is a per-option cost
+divided by the ballot count. A sixth phase, `VerifyDecryption`, runs Verifications 10 (the proof)
+and 11 (the tally's labels against the manifest) once after a successful decryption, when
+`tallyVerification` is on, and is absent otherwise (`notes.decryptionVerification` = `ran`). A
+failure there makes the run an `error`: `TallyComparer` checks the counts but cannot see the proof.
+Its budget key is accepted but not enforced: it runs once, on an already decrypted tally.
+
+**`compare` against a pre-S4 record fails on `DecryptTally` allocation, deliberately.** The proof is
+new required work, so its allocation cannot stay within 2% of a decryption that had none: the eq.
+(88) and (90) hash inputs are built in pooled buffers; the remainder (not profiled) is in the proof's
+exponentiations: the `MontgomeryModP.PowModP` outputs and `BigInteger` intermediates of each guardian's
+commitments and partial decryption and of the administrator's combination and proof check. Measured on
+this machine against S3 records: `smoke` 101 B/ballot -> 259 B/ballot (median of 5), `xsmall`
+1,280 B/ballot -> 4,361 B/ballot (1.3 MB -> 4.2 MB per run; 10.2 MB before the hash inputs were
+pooled), and `compare` exits 1 with `DecryptTally allocBytesPerBallot ... REGRESSION`; every other
+phase's allocation stays within 2%. Rebaseline on a post-S4 record. `compare` also warns that
+`VerifyDecryption` ran only in the candidate, which is expected for the same reason.
 
 ## Why the harness streams
 

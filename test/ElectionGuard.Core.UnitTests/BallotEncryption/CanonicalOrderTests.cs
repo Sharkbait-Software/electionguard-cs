@@ -160,6 +160,7 @@ public class CanonicalOrderTests
         Contests = contests,
         ConfirmationCode = confirmationCode,
         Weight = ballot.Weight,
+        Status = ballot.Status,
         DeviceId = ballot.DeviceId,
     };
 

@@ -79,12 +79,12 @@ public class BallotAggregationVerifierTests
 
     private static void AssertFailsVerification9(BallotAggregationVerifier verifier, EncryptedTally tally)
     {
-        var exception = Assert.Throws<Exception>(() => verifier.Verify(tally));
+        var exception = Assert.Throws<VerificationFailedException>(() => verifier.Verify(tally));
 
-        // Same contract as BallotAggregationVerification: plain System.Exception, never
-        // VerificationFailedException (Verification 9 has no SubSection).
-        Assert.IsType<Exception>(exception);
-        Assert.IsNotType<VerificationFailedException>(exception);
+        // Same contract as BallotAggregationVerification. Every use here leaves a ballot out, adds
+        // one twice or weights one differently, which changes both A and B of the first option;
+        // A is compared first (G38: this used to be a plain System.Exception with no sub-section).
+        Assert.Equal("9.A", exception.SubSection);
         Assert.StartsWith("Ballot aggregation verification failed", exception.Message, StringComparison.Ordinal);
     }
 
@@ -232,6 +232,7 @@ public class BallotAggregationVerifierTests
         Contests = [.. ballot.Contests, ballot.Contests[0] with { Id = "contest-not-in-manifest" }],
         ConfirmationCode = ballot.ConfirmationCode,
         Weight = ballot.Weight,
+        Status = ballot.Status,
         DeviceId = ballot.DeviceId,
     };
 
@@ -369,7 +370,8 @@ public class BallotAggregationVerifierTests
         var verification = new BallotAggregationVerification();
 
         Assert.Null(Record.Exception(() => verification.Verify(new LazyBallots(scenario.Ballots), scenario.Manifest, scenario.Tally, maxDegreeOfParallelism)));
-        Assert.Throws<Exception>(() => verification.Verify(new LazyBallots(scenario.Ballots.Skip(1)), scenario.Manifest, scenario.Tally, maxDegreeOfParallelism));
+        var exception = Assert.Throws<VerificationFailedException>(() => verification.Verify(new LazyBallots(scenario.Ballots.Skip(1)), scenario.Manifest, scenario.Tally, maxDegreeOfParallelism));
+        Assert.Equal("9.A", exception.SubSection);
     }
 
     /// <summary>
@@ -392,6 +394,7 @@ public class BallotAggregationVerifierTests
             Contests = ballot.Contests,
             ConfirmationCode = ballot.ConfirmationCode,
             Weight = weight,
+            Status = BallotStatus.Cast,
             DeviceId = ballot.DeviceId,
         };
 

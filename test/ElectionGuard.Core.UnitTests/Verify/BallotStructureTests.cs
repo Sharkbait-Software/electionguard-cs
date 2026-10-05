@@ -120,6 +120,9 @@ public class BallotStructureTests
             ],
         };
         var encrypted = new BallotEncryptor(records.EncryptionRecord, DeviceId, deviceHash).Encrypt(ballot, null);
+
+        // Cast, so that it can be tallied (AddBallot rejects a ballot with no recorded status).
+        encrypted.RecordStatus(BallotStatus.Cast);
         return new Fixture(records.EncryptionRecord, deviceHash, encrypted);
     }
 
@@ -132,6 +135,7 @@ public class BallotStructureTests
         Contests = contests ?? ballot.Contests,
         ConfirmationCode = confirmationCode ?? ballot.ConfirmationCode,
         Weight = ballot.Weight,
+        Status = ballot.Status,
         DeviceId = ballot.DeviceId,
     };
 

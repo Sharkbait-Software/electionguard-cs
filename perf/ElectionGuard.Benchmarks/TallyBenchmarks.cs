@@ -1,13 +1,17 @@
 using BenchmarkDotNet.Attributes;
 using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.Tally;
+using ElectionGuard.Testing.Common;
 
 namespace ElectionGuard.Benchmarks;
 
 /// <summary>
-/// TallyAdmin.Decrypt's discrete-log search is baby-step giant-step over [0, BallotsCast], so its cost
-/// grows with the square root of the ballot count; parameterising by ballot count plots that curve
-/// directly. The fixed cost per choice (combining partial decryptions) dominates at these sizes.
+/// TallyAdmin.Decrypt: the three-round verifiable decryption of §3.6.5 by k = 2 guardians, the
+/// administrator's proof check, and the discrete-log search. The search is baby-step giant-step over
+/// [0, the largest option's MaximumCount], which for these weight-1, R = 1 ballots is BallotsCast,
+/// so its cost grows with the square root of the ballot count; parameterising by ballot count plots
+/// that curve directly. The fixed cost per choice (partial decryptions, commitments, the proof)
+/// dominates at these sizes.
 /// </summary>
 [MemoryDiagnoser]
 public class TallyBenchmarks
@@ -15,7 +19,7 @@ public class TallyBenchmarks
     private BenchmarkElection _election = null!;
     private EncryptedBallot _ballot = null!;
     private EncryptedTally _tally = null!;
-    private List<PartialTallyDecryption> _partials = null!;
+    private List<TallyGuardian> _guardians = null!;
 
     [Params(10, 100, 1000)]
     public int BallotsCast { get; set; }
@@ -32,14 +36,10 @@ public class TallyBenchmarks
             _tally.AddBallot(_ballot);
         }
 
-        _partials = _election.Guardians.Guardians
-            .Take(2)
-            .Select(guardian =>
-                new TallyGuardian(guardian.Index, _election.Guardians.SecretShares[guardian.Index]).Decrypt(_tally))
-            .ToList();
+        _guardians = ElectionFixtureBuilder.TallyGuardians(_election.Guardians, 2);
     }
 
     [Benchmark]
-    public DecryptedTally CombineAndRecoverPlaintext() =>
-        new TallyAdmin().Decrypt(_partials, _tally, _election.Guardians.ElectionPublicKeys);
+    public DecryptedTally DecryptWithProof() =>
+        new TallyAdmin().Decrypt(_guardians, _tally, _election.EncryptionRecord);
 }
