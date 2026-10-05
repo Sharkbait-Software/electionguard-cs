@@ -350,8 +350,157 @@ public class CanonicalOrderTests
         var ordered = OrderedBallot();
         var duplicated = ordered with { Contests = [ordered.Contests[0], ordered.Contests[0] with { }] };
 
-        var exception = Assert.ThrowsAny<Exception>(() => Encrypt(record, deviceHash, duplicated));
+        var exception = Assert.Throws<InvalidBallotException>(() => Encrypt(record, deviceHash, duplicated));
 
         Assert.Contains("more than once", exception.Message);
+    }
+
+    // Labels whose alphabetical order is the reverse of their index order, in both the contests and
+    // the options, so that a regression that sorts by label instead of by index (or by manifest
+    // position) fails these tests. In the fixtures above the two orders coincide.
+
+    private static Contest ContestZulu() => new()
+    {
+        Id = "contest-zulu",
+        Name = "Zulu",
+        SelectionLimit = 1,
+        OptionSelectionLimit = 1,
+        Index = 1,
+        Choices =
+        [
+            new Choice { Id = "zulu-z", Name = "Z", Index = 1 },
+            new Choice { Id = "zulu-m", Name = "M", Index = 2 },
+            new Choice { Id = "zulu-a", Name = "A", Index = 3 },
+        ],
+    };
+
+    private static Contest ContestAlpha() => new()
+    {
+        Id = "contest-alpha",
+        Name = "Alpha",
+        SelectionLimit = 1,
+        OptionSelectionLimit = 1,
+        Index = 2,
+        Choices =
+        [
+            new Choice { Id = "alpha-y", Name = "Y", Index = 1 },
+            new Choice { Id = "alpha-b", Name = "B", Index = 2 },
+        ],
+    };
+
+    /// <summary>The ballot as a label-sorted store would list it: contests and options by label.</summary>
+    private static Ballot LabelOrderedBallot() => new()
+    {
+        Id = "ballot-labels",
+        BallotStyleId = "style-1",
+        Contests =
+        [
+            new BallotContest
+            {
+                Id = "contest-alpha",
+                NumWriteinsSelected = 0,
+                Choices =
+                [
+                    new BallotChoice { Id = "alpha-b", SelectionValue = 1 },
+                    new BallotChoice { Id = "alpha-y", SelectionValue = 0 },
+                ],
+            },
+            new BallotContest
+            {
+                Id = "contest-zulu",
+                NumWriteinsSelected = 0,
+                Choices =
+                [
+                    new BallotChoice { Id = "zulu-a", SelectionValue = 0 },
+                    new BallotChoice { Id = "zulu-m", SelectionValue = 1 },
+                    new BallotChoice { Id = "zulu-z", SelectionValue = 0 },
+                ],
+            },
+        ],
+    };
+
+    private static (EncryptionRecord Record, VotingDeviceInformationHash DeviceHash) CreateLabelReversedRecord() =>
+        CreateRecord([ContestZulu(), ContestAlpha()], ["contest-alpha", "contest-zulu"]);
+
+    [Fact]
+    public void Encrypt_LabelOrderDiffersFromIndexOrder_EmitsAndHashesInIndexOrder()
+    {
+        var (record, deviceHash) = CreateLabelReversedRecord();
+
+        var encrypted = Encrypt(record, deviceHash, LabelOrderedBallot());
+
+        Assert.Equal(["contest-zulu", "contest-alpha"], encrypted.Contests.Select(x => x.Id));
+        var zulu = encrypted.Contests[0];
+        var alpha = encrypted.Contests[1];
+        Assert.Equal(["zulu-z", "zulu-m", "zulu-a"], zulu.Choices.Select(x => x.ChoiceId));
+        Assert.Equal(["alpha-y", "alpha-b"], alpha.Choices.Select(x => x.ChoiceId));
+
+        // Each contest hash is over its options in index order, with its own index.
+        Assert.Equal(HashInStoredOrder(encrypted, zulu, 1), zulu.ContestHash);
+        Assert.Equal(HashInStoredOrder(encrypted, alpha, 2), alpha.ContestHash);
+        var zuluByLabel = zulu with { Choices = zulu.Choices.OrderBy(x => x.ChoiceId, StringComparer.Ordinal).ToList() };
+        Assert.NotEqual(HashInStoredOrder(encrypted, zuluByLabel, 1), zulu.ContestHash);
+
+        // The confirmation code is over the contest hashes in index order, not label order.
+        var chainingField = new ChainingField(ChainingMode.None, deviceHash, record.ExtendedBaseHash, null);
+        Assert.Equal(new ConfirmationCode(encrypted.SelectionEncryptionIdentifierHash, [zulu.ContestHash, alpha.ContestHash], chainingField), encrypted.ConfirmationCode);
+        Assert.NotEqual(new ConfirmationCode(encrypted.SelectionEncryptionIdentifierHash, [alpha.ContestHash, zulu.ContestHash], chainingField), encrypted.ConfirmationCode);
+
+        Assert.Null(Record.Exception(() => new SelectionEncryptionsWellFormedVerification().Verify(encrypted, record)));
+        Assert.Null(Record.Exception(() => new AdherenceToVoteLimitsVerification().Verify(encrypted, record)));
+        Assert.Null(Record.Exception(() => new ConfirmationCodeVerification().Verify(encrypted, deviceHash, record, null)));
+    }
+
+    [Fact]
+    public void Verify8_LabelOrderDiffersFromIndexOrder_StoredInLabelOrder_HashesCanonical_Passes()
+    {
+        var (record, deviceHash) = CreateLabelReversedRecord();
+        var encrypted = Encrypt(record, deviceHash, LabelOrderedBallot());
+
+        // Stored by label, hashed canonically: Verification 8 must look the order up by index.
+        var byLabel = encrypted.Contests
+            .OrderBy(x => x.Id, StringComparer.Ordinal)
+            .Select(contest => contest with { Choices = contest.Choices.OrderBy(x => x.ChoiceId, StringComparer.Ordinal).ToList() })
+            .ToList();
+        Assert.Equal(["contest-alpha", "contest-zulu"], byLabel.Select(x => x.Id));
+        var stored = WithContests(encrypted, byLabel, encrypted.ConfirmationCode);
+
+        Assert.Null(Record.Exception(() => new ConfirmationCodeVerification().Verify(stored, deviceHash, record, null)));
+    }
+
+    [Fact]
+    public void Verify8_LabelOrderDiffersFromIndexOrder_ConfirmationCodeInLabelOrder_Fails8B()
+    {
+        var (record, deviceHash) = CreateLabelReversedRecord();
+        var encrypted = Encrypt(record, deviceHash, LabelOrderedBallot());
+
+        var byLabel = encrypted.Contests.OrderBy(x => x.Id, StringComparer.Ordinal).ToList();
+        var chainingField = new ChainingField(ChainingMode.None, deviceHash, record.ExtendedBaseHash, null);
+        var labelOrderCode = new ConfirmationCode(encrypted.SelectionEncryptionIdentifierHash, byLabel.Select(x => x.ContestHash).ToList(), chainingField);
+        Assert.NotEqual(encrypted.ConfirmationCode, labelOrderCode);
+        var tampered = WithContests(encrypted, byLabel, labelOrderCode);
+
+        var exception = Assert.Throws<VerificationFailedException>(() => new ConfirmationCodeVerification().Verify(tampered, deviceHash, record, null));
+        Assert.Equal("8.B", exception.SubSection);
+    }
+
+    [Fact]
+    public void Verify8_LabelOrderDiffersFromIndexOrder_ContestHashInLabelOrder_Fails8A()
+    {
+        var (record, deviceHash) = CreateLabelReversedRecord();
+        var encrypted = Encrypt(record, deviceHash, LabelOrderedBallot());
+
+        // Contest Zulu with its options listed, and hashed, by label, and the confirmation code
+        // recomputed over that contest hash so that only the option order is wrong.
+        var zulu = encrypted.Contests[0];
+        var zuluByLabel = zulu with { Choices = zulu.Choices.OrderBy(x => x.ChoiceId, StringComparer.Ordinal).ToList() };
+        zuluByLabel = zuluByLabel with { ContestHash = HashInStoredOrder(encrypted, zuluByLabel, 1) };
+        var contests = new List<EncryptedContest> { zuluByLabel, encrypted.Contests[1] };
+        var chainingField = new ChainingField(ChainingMode.None, deviceHash, record.ExtendedBaseHash, null);
+        var code = new ConfirmationCode(encrypted.SelectionEncryptionIdentifierHash, contests.Select(x => x.ContestHash).ToList(), chainingField);
+        var tampered = WithContests(encrypted, contests, code);
+
+        var exception = Assert.Throws<VerificationFailedException>(() => new ConfirmationCodeVerification().Verify(tampered, deviceHash, record, null));
+        Assert.Equal("8.A", exception.SubSection);
     }
 }

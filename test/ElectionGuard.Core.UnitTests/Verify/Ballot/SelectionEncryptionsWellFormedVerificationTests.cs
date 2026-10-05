@@ -103,13 +103,17 @@ public class SelectionEncryptionsWellFormedVerificationTests
         Assert.Equal("6.A", exception.SubSection);
     }
 
+    /// <summary>
+    /// G33: Z_q = {x : 0 &lt;= x &lt; q}, so a challenge of 0 passes 6.B. Tampered in without
+    /// re-proving, it then fails only the challenge sum, 6.D. (6.B/6.C used to reject 0; an
+    /// IntegerModQ cannot hold anything else outside Z_q, and a decoded record is range-checked by
+    /// IntegerModQ.FromCanonicalBytes.)
+    /// </summary>
     [Fact]
-    public void Verify_ProofChallengeOutOfRange_Throws_SubSection6BC()
+    public void Verify_ZeroChallenge_IsInZq_FailsOnlyTheSumCheck_SubSection6D()
     {
         var (ballot, encryptionRecord) = BuildValidBallot();
 
-        // IntegerModQ's public constructor always reduces into [0, Q), so the only reachable
-        // "out of Zq" value via the public API is the <= 0 boundary (0 itself).
         var tampered = WithTamperedFirstSelection(ballot, s =>
         {
             var proofs = (ChallengeResponsePair[])s.Proofs.Clone();
@@ -120,11 +124,12 @@ public class SelectionEncryptionsWellFormedVerificationTests
         var verification = new SelectionEncryptionsWellFormedVerification();
 
         var exception = Assert.Throws<VerificationFailedException>(() => verification.Verify(tampered, encryptionRecord));
-        Assert.Equal("6.B/C", exception.SubSection);
+        Assert.Equal("6.D", exception.SubSection);
     }
 
+    /// <summary>G33: a response of 0 passes 6.C, and the tampered proof fails only 6.D.</summary>
     [Fact]
-    public void Verify_ProofResponseOutOfRange_Throws_SubSection6BC()
+    public void Verify_ZeroResponse_IsInZq_FailsOnlyTheSumCheck_SubSection6D()
     {
         var (ballot, encryptionRecord) = BuildValidBallot();
 
@@ -138,7 +143,37 @@ public class SelectionEncryptionsWellFormedVerificationTests
         var verification = new SelectionEncryptionsWellFormedVerification();
 
         var exception = Assert.Throws<VerificationFailedException>(() => verification.Verify(tampered, encryptionRecord));
-        Assert.Equal("6.B/C", exception.SubSection);
+        Assert.Equal("6.D", exception.SubSection);
+    }
+
+    /// <summary>
+    /// G33: a valid proof whose simulated branch has c_j = 0 and v_j = 0, as another implementation
+    /// may produce, passes Verification 6. See <see cref="ZeroChallengeRangeProof"/>.
+    /// </summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public void Verify_ValidProofWithAZeroChallengeAndResponse_Passes(int selection)
+    {
+        var (ballot, encryptionRecord) = BuildValidBallot();
+        var manifestContest = encryptionRecord.Manifest.Contests.Single();
+        var tampered = WithTamperedSelection(ballot, selection, s =>
+        {
+            var manifestChoice = manifestContest.Choices.Single(x => x.Id == s.ChoiceId);
+            int value = s.ChoiceId == "choice-1" ? 1 : 0;
+            var proofs = ZeroChallengeRangeProof.Prove(
+                s.Alpha, s.Beta, s.EncryptionNonce!.Value, value, manifestContest.OptionSelectionLimit,
+                encryptionRecord.ElectionPublicKeys.VoteEncryptionKey, ballot.SelectionEncryptionIdentifierHash,
+                manifestContest.Index, manifestChoice.Index);
+            return s with { Proofs = proofs };
+        });
+        Assert.Contains(
+            tampered.Contests[0].Choices[selection].Proofs,
+            proof => proof.Challenge == new IntegerModQ(0) && proof.Response == new IntegerModQ(0));
+
+        var exception = Record.Exception(() => new SelectionEncryptionsWellFormedVerification().Verify(tampered, encryptionRecord));
+
+        Assert.Null(exception);
     }
 
     [Fact]

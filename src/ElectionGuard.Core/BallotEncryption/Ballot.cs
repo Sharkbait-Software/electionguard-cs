@@ -21,6 +21,18 @@ public record BallotChoice
     public required int SelectionValue { get; set; }
 }
 
+/// <summary>
+/// A plaintext ballot the encryptor refuses: a contest listed twice or not in the manifest, a
+/// contest that does not list exactly the manifest's options, a selection value outside
+/// [0, option selection limit], or a ballot that does not list exactly its ballot style's contests.
+/// </summary>
+public class InvalidBallotException : ArgumentException
+{
+    public InvalidBallotException(string message) : base(message)
+    {
+    }
+}
+
 //public class Ballot
 //{
 //    public Ballot(IntegerModP electionPublicKey)

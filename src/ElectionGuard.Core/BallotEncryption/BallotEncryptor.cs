@@ -119,7 +119,7 @@ public class BallotEncryptor
         // Each contest appears once
         if (ballot.Contests.Select(x => x.Id).Distinct().Count() != ballot.Contests.Count)
         {
-            throw new Exception($"Ballot {ballot.Id} lists a contest more than once.");
+            throw new InvalidBallotException($"Ballot {ballot.Id} lists a contest more than once.");
         }
 
         // All contests exist in the manifest
@@ -128,7 +128,7 @@ public class BallotEncryptor
             var manifestContest = _encryptionRecord.Manifest.Contests.SingleOrDefault(x => x.Id == contest.Id);
             if(manifestContest == null)
             {
-                throw new Exception($"Contest with id {contest.Id} not found in manifest.");
+                throw new InvalidBallotException($"Contest with id {contest.Id} not found in manifest.");
             }
 
             // All choices exist in the manifest
@@ -139,7 +139,7 @@ public class BallotEncryptor
                 || manifestChoices.Except(choices).Any()
                 || choices.Except(manifestChoices).Any())
             {
-                throw new Exception($"Contest with id {contest.Id} did not provide all choice selections from the manifest.");
+                throw new InvalidBallotException($"Contest with id {contest.Id} did not provide all choice selections from the manifest.");
             }
 
             // All options for each contest have a selectionValue within the expected limits.
@@ -148,7 +148,7 @@ public class BallotEncryptor
                 var manifestChoice = manifestContest.Choices.Single(x => x.Id == choice.Id);
                 if(choice.SelectionValue < 0 || choice.SelectionValue > manifestContest.OptionSelectionLimit)
                 {
-                    throw new Exception($"Choice for id {choice.Id} exceeds option selection limit.");
+                    throw new InvalidBallotException($"Choice for id {choice.Id} exceeds option selection limit.");
                 }
             }
 
@@ -165,14 +165,14 @@ public class BallotEncryptor
         var ballotStyle = _encryptionRecord.Manifest.BallotStyles.SingleOrDefault(x => x.Id == ballot.BallotStyleId);
         if(ballotStyle == null)
         {
-            throw new Exception($"Could not find ballot style with id {ballot.BallotStyleId} in manifest.");
+            throw new InvalidBallotException($"Could not find ballot style with id {ballot.BallotStyleId} in manifest.");
         }
         var contestIds = ballot.Contests.Select(x => x.Id).ToList();
         if(contestIds.Count != ballotStyle.ContestIds.Count
             || contestIds.Except(ballotStyle.ContestIds).Any()
             || ballotStyle.ContestIds.Except(contestIds).Any())
         {
-            throw new Exception($"Ballot with id {ballot.BallotStyleId} did not specify all contestIds for the ballot style.");
+            throw new InvalidBallotException($"Ballot with id {ballot.BallotStyleId} did not specify all contestIds for the ballot style.");
         }
     }
 

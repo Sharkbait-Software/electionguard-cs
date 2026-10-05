@@ -14,6 +14,11 @@ public class ConfirmationCodeVerification
         // here because EncryptionRecord validated the manifest (§3.1.3) when it was built;
         // re-validating the whole manifest per ballot would cost O(manifest) each time.
 
+        // Exactly the ballot style's contests and the manifest's options, each once, before anything
+        // else (see BallotStructure). Without it, a contest listed twice would be hashed twice into
+        // a confirmation code that then matches, and the ballot would be tallied twice.
+        BallotStructure.Require(ballot, encryptionRecord.Manifest, 8);
+
         // The hashes are recomputed in the canonical order of eqs. (70) and (71) -- options in
         // option-index order within each contest, contests in contest-index order -- looked up by
         // label, whatever order the ballot happens to list them in. A ballot whose hashes were
@@ -90,8 +95,8 @@ public class ConfirmationCodeVerification
 
     /// <summary>
     /// A contest's selections in manifest option-index order (eq. 70): the stored list itself when it
-    /// is already in that order, otherwise a sorted copy. A selection whose label is not in the
-    /// manifest sorts last, so the recomputed hash simply fails to match rather than throwing here.
+    /// is already in that order, otherwise a sorted copy. (BallotStructure has already required
+    /// exactly the manifest's options, each once; an unknown label would sort last.)
     /// </summary>
     private static IEnumerable<EncryptedSelection> InManifestOrder(List<EncryptedSelection> choices, Contest manifestContest)
     {

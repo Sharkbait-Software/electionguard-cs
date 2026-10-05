@@ -234,8 +234,8 @@ public class RangeProofChallengeTests : IDisposable
     public void Compute_ZeroAndEdgeExponents_MatchesStraightforwardHash(bool allowAvx512)
     {
         // A zero challenge takes the shared-squaring path's "result is one" branch, a zero response
-        // gives g^0, and q - 1 has every bit the exponent can have. The verifications reject zero
-        // challenges and responses before calling this, but the arithmetic must still be right.
+        // gives g^0, and q - 1 has every bit the exponent can have. Zero is in Z_q, so 6.B/6.C and
+        // 7.B/7.C accept zero challenges and responses (G33) and they do reach this.
         IntegerModP key = IntegerModP.PowModP(EGParameters.G, ElectionGuardRandom.GetIntegerModQ());
         IntegerModP alpha = IntegerModP.PowModP(EGParameters.G, ElectionGuardRandom.GetIntegerModQ());
         IntegerModP beta = IntegerModP.PowModP(EGParameters.G, ElectionGuardRandom.GetIntegerModQ());

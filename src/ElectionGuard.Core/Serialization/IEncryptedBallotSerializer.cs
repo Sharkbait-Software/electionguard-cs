@@ -154,10 +154,13 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
     {
         var protobufBallot = Serializer.Deserialize<ProtobufEncryptedBallot>(source);
 
+        // Every group element, Z_q value and id_B is decoded strictly: a non-canonical encoding
+        // throws NonCanonicalEncodingException rather than being reduced into range.
+
         var encryptedBallot = new EncryptedBallot
         {
             Id = protobufBallot.Id,
-            SelectionEncryptionIdentifier = new SelectionEncryptionIdentifier(protobufBallot.SelectionEncryptionIdentifier),
+            SelectionEncryptionIdentifier = SelectionEncryptionIdentifier.FromCanonicalBytes(protobufBallot.SelectionEncryptionIdentifier),
             SelectionEncryptionIdentifierHash = new SelectionEncryptionIdentifierHash(protobufBallot.SelectionEncryptionIdentifierHash),
             BallotStyleId = protobufBallot.BallotStyleId,
             DeviceId = protobufBallot.DeviceId,
@@ -167,65 +170,65 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
                 Choices = c.Choices.Select(s => new EncryptedSelection
                 {
                     ChoiceId = s.ChoiceId,
-                    Alpha = new IntegerModP(s.Alpha),
-                    Beta = new IntegerModP(s.Beta),
+                    Alpha = IntegerModP.FromCanonicalBytes(s.Alpha),
+                    Beta = IntegerModP.FromCanonicalBytes(s.Beta),
                     Proofs = s.Proofs.Select(p => new ChallengeResponsePair
                     {
-                        Challenge = new IntegerModQ(p.Challenge),
-                        Response = new IntegerModQ(p.Response)
+                        Challenge = IntegerModQ.FromCanonicalBytes(p.Challenge),
+                        Response = IntegerModQ.FromCanonicalBytes(p.Response)
                     }).ToArray()
                 }).ToList(),
                 Proofs = c.Proofs.Select(p => new ChallengeResponsePair
                 {
-                    Challenge = new IntegerModQ(p.Challenge),
-                    Response = new IntegerModQ(p.Response)
+                    Challenge = IntegerModQ.FromCanonicalBytes(p.Challenge),
+                    Response = IntegerModQ.FromCanonicalBytes(p.Response)
                 }).ToArray(),
                 OvervoteCount = new EncryptedValueWithProofs
                 {
-                    Alpha = new IntegerModP(c.OvervoteCount.Alpha),
-                    Beta = new IntegerModP(c.OvervoteCount.Beta),
+                    Alpha = IntegerModP.FromCanonicalBytes(c.OvervoteCount.Alpha),
+                    Beta = IntegerModP.FromCanonicalBytes(c.OvervoteCount.Beta),
                     Proofs = c.OvervoteCount.Proofs.Select(p => new ChallengeResponsePair
                     {
-                        Challenge = new IntegerModQ(p.Challenge),
-                        Response = new IntegerModQ(p.Response)
+                        Challenge = IntegerModQ.FromCanonicalBytes(p.Challenge),
+                        Response = IntegerModQ.FromCanonicalBytes(p.Response)
                     }).ToArray()
                 },
                 NullvoteCount = new EncryptedValueWithProofs
                 {
-                    Alpha = new IntegerModP(c.NullvoteCount.Alpha),
-                    Beta = new IntegerModP(c.NullvoteCount.Beta),
+                    Alpha = IntegerModP.FromCanonicalBytes(c.NullvoteCount.Alpha),
+                    Beta = IntegerModP.FromCanonicalBytes(c.NullvoteCount.Beta),
                     Proofs = c.NullvoteCount.Proofs.Select(p => new ChallengeResponsePair
                     {
-                        Challenge = new IntegerModQ(p.Challenge),
-                        Response = new IntegerModQ(p.Response)
+                        Challenge = IntegerModQ.FromCanonicalBytes(p.Challenge),
+                        Response = IntegerModQ.FromCanonicalBytes(p.Response)
                     }).ToArray()
                 },
                 UndervoteCount = new EncryptedValueWithProofs
                 {
-                    Alpha = new IntegerModP(c.UndervoteCount.Alpha),
-                    Beta = new IntegerModP(c.UndervoteCount.Beta),
+                    Alpha = IntegerModP.FromCanonicalBytes(c.UndervoteCount.Alpha),
+                    Beta = IntegerModP.FromCanonicalBytes(c.UndervoteCount.Beta),
                     Proofs = c.UndervoteCount.Proofs.Select(p => new ChallengeResponsePair
                     {
-                        Challenge = new IntegerModQ(p.Challenge),
-                        Response = new IntegerModQ(p.Response)
+                        Challenge = IntegerModQ.FromCanonicalBytes(p.Challenge),
+                        Response = IntegerModQ.FromCanonicalBytes(p.Response)
                     }).ToArray()
                 },
                 WriteInVoteCount = new EncryptedValueWithProofs
                 {
-                    Alpha = new IntegerModP(c.WriteInVoteCount.Alpha),
-                    Beta = new IntegerModP(c.WriteInVoteCount.Beta),
+                    Alpha = IntegerModP.FromCanonicalBytes(c.WriteInVoteCount.Alpha),
+                    Beta = IntegerModP.FromCanonicalBytes(c.WriteInVoteCount.Beta),
                     Proofs = c.WriteInVoteCount.Proofs.Select(p => new ChallengeResponsePair
                     {
-                        Challenge = new IntegerModQ(p.Challenge),
-                        Response = new IntegerModQ(p.Response)
+                        Challenge = IntegerModQ.FromCanonicalBytes(p.Challenge),
+                        Response = IntegerModQ.FromCanonicalBytes(p.Response)
                     }).ToArray()
                 },
                 ContestData = c.ContestData != null ? new EncryptedData
                 {
                     C0 = c.ContestData.C0,
                     C1 = c.ContestData.C1,
-                    Challenge = new IntegerModQ(c.ContestData.Challenge),
-                    Response = new IntegerModQ(c.ContestData.Response)
+                    Challenge = IntegerModQ.FromCanonicalBytes(c.ContestData.Challenge),
+                    Response = IntegerModQ.FromCanonicalBytes(c.ContestData.Response)
                 } : null,
                 ContestHash = new ContestHash(c.ContestHash),
             }).ToList(),

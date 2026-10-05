@@ -73,10 +73,22 @@ const REVIEW_SCHEMA = {
   required: ['findings', 'verdict'],
 }
 
+// Agents return null when they die on a terminal API error (e.g. 529 overloaded); retry those.
+async function agentRetry(prompt, opts, tries = 3) {
+  for (let t = 1; t <= tries; t++) {
+    const r = await agent(t === 1 ? prompt : `${prompt}\n\nNOTE: a previous attempt at this exact task died on an API error part-way. Any edits it made are still in the worktree -- inspect git status/diff before redoing work.`, { ...opts, label: t === 1 ? opts.label : `${opts.label}#retry${t}` })
+    if (r) return r
+    log(`${opts.label}: attempt ${t} returned null`)
+  }
+  return null
+}
+
+const RESUME = S.resume_note ? `\nRESUMING AN INTERRUPTED STAGE: ${S.resume_note}\n` : ''
+
 let kat = null
 if (S.kat) {
   phase('Oracle')
-  kat = await agent(`You maintain an INDEPENDENT spec-only Python known-answer-test oracle for the ElectionGuard v2.1.0 C# library at ${WT}\\test\\kat\\eg_kat.py (outputs ${WT}\\test\\kat\\vectors.json, documented in ${WT}\\test\\kat\\README.md).
+  kat = await agentRetry(`You maintain an INDEPENDENT spec-only Python known-answer-test oracle for the ElectionGuard v2.1.0 C# library at ${WT}\\test\\kat\\eg_kat.py (outputs ${WT}\\test\\kat\\vectors.json, documented in ${WT}\\test\\kat\\README.md).
 CRITICAL ISOLATION RULE: derive everything from the SPEC ONLY. Do NOT open, grep or read any file under ${WT}\\src or any *.cs file anywhere -- the C# code may have bugs you must not reproduce. You may read eg_kat.py/vectors.json/README.md, the spec, and the tracker's Decisions section in ${TRACKER} (binding user decisions on spec contradictions).
 ${SPEC_HELP}
 TASK: extend the oracle with these vector families (keep every existing family and its values unchanged unless you find it is spec-incorrect -- then say so loudly): ${S.kat}
@@ -90,13 +102,14 @@ Use deterministic labelled inputs, include all inputs and outputs in vectors.jso
 }
 
 phase('Implement')
-const impl = await agent(`You are the single implementer for stage ${S.stage} (${S.title}) of a spec-compliance fix effort on the C# ElectionGuard repo.
+const impl = await agentRetry(`You are the single implementer for stage ${S.stage} (${S.title}) of a spec-compliance fix effort on the C# ElectionGuard repo.${RESUME}
 G-ITEMS: ${S.gids.join(', ')}
 SCOPE AND GUIDANCE:
 ${S.scope}
 ${kat ? `KAT ORACLE was just extended (spec-only): ${JSON.stringify(kat)} -- add/extend KnownAnswerTests to check the new families against the library.` : ''}
 ${RULES}
 ${GATE}`, { label: `implement:${S.stage}`, phase: 'Implement', schema: IMPL_SCHEMA })
+if (!impl) { log('implementer failed after retries; stopping stage'); return { stage: S.stage, kat, impl: null, reviews: [], fixes: [], final: null, aborted: true } }
 
 let lastReport = impl
 const allReviews = []
@@ -109,11 +122,11 @@ Stage scope: ${S.scope}
 Implementer report (latest): ${JSON.stringify(lastReport)}
 Report only real problems with evidence; an empty findings list is a fine answer. Severity: blocker = wrong vs spec/decision, security hole, or broken gate; major = missing part of the scope or a test that cannot catch the bug it claims to; minor/nit otherwise.`
   const reviews = await parallel([
-    () => agent(`${reviewCommon}
+    () => agentRetry(`${reviewCommon}
 LENS: SPEC CONFORMANCE. For each G-item check the new code against the spec formulas and lettered verification sub-checks (exact separators, keys, argument order, widths, ranges, failure SubSection labels) and against the Decisions. Recompute anything hash-shaped independently (Python) where feasible.`, { label: `review:spec:${S.stage}:r${round}`, phase: 'Review', schema: REVIEW_SCHEMA }),
-    () => agent(`${reviewCommon}
+    () => agentRetry(`${reviewCommon}
 LENS: CODE CORRECTNESS, SECURITY & REGRESSIONS. Look for bugs, unhandled edge cases, secret material reaching variable-time paths, missed call sites (grep for every consumer of changed APIs, including perf/, test/ElectionGuard.Testing.*, src/ElectionGuard.InMemory.Console), serialization gaps (JSON and protobuf), thread-safety, perf regressions in hot paths (CLAUDE.md rules).`, { label: `review:code:${S.stage}:r${round}`, phase: 'Review', schema: REVIEW_SCHEMA }),
-    () => agent(`${reviewCommon}
+    () => agentRetry(`${reviewCommon}
 LENS: TEST ADEQUACY & PIN HONESTY. Would each new/changed test fail if its bug were reintroduced? Were pinned expectations replaced with spec-derived values rather than re-captured output? Any test weakened/skipped/deleted? Negative tests for every new verification failure path with the right SubSection? Run: dotnet test "${WT}\\electionguard-cs.sln" -c Release and report the summary.`, { label: `review:tests:${S.stage}:r${round}`, phase: 'Review', schema: REVIEW_SCHEMA }),
   ])
   const findings = reviews.filter(Boolean).flatMap((r, i) => r.findings.map(f => ({ lens: ['spec', 'code', 'tests'][i], round, ...f })))
@@ -123,7 +136,7 @@ LENS: TEST ADEQUACY & PIN HONESTY. Would each new/changed test fail if its bug w
   log(`${S.stage} review round ${round}: ${findings.length} findings (${serious.length} blocker/major)`)
   if (!actionable.length) break
   phase('Fix')
-  const fix = await agent(`You are the ${S.stage} implementer again (round ${round}), applying review findings. Judge each finding: fix it, or explain precisely why it is wrong -- do not blindly apply.
+  const fix = await agentRetry(`You are the ${S.stage} implementer again (round ${round}), applying review findings. Judge each finding: fix it, or explain precisely why it is wrong -- do not blindly apply.
 FINDINGS: ${JSON.stringify(actionable)}
 Previous report: ${JSON.stringify(lastReport)}
 ${RULES}

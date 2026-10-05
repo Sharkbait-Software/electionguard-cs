@@ -15,8 +15,9 @@ public class IntegerModQJsonConverter : JsonConverter<IntegerModQ>
             throw new JsonException("Hex string is null");
         }
 
+        // Strict: exactly 32 bytes below q (see NonCanonicalEncodingException).
         byte[] bytes = Convert.FromBase64String(hexString);
-        return new IntegerModQ(bytes);
+        return IntegerModQ.FromCanonicalBytes(bytes);
     }
 
     public override void Write(Utf8JsonWriter writer, IntegerModQ value, JsonSerializerOptions options)
@@ -37,8 +38,9 @@ public class IntegerModPJsonConverter : JsonConverter<IntegerModP>
             throw new JsonException("Hex string is null");
         }
 
+        // Strict: exactly 512 bytes below p (see NonCanonicalEncodingException).
         byte[] bytes = Convert.FromBase64String(hexString);
-        return new IntegerModP(bytes);
+        return IntegerModP.FromCanonicalBytes(bytes);
     }
 
     public override void Write(Utf8JsonWriter writer, IntegerModP value, JsonSerializerOptions options)
@@ -125,8 +127,9 @@ public class SelectionEncryptionIdentifierJsonConverter : JsonConverter<Selectio
             throw new JsonException("Hex string is null");
         }
 
+        // Strict: exactly 32 bytes, b(id_B, 32) in eq. (32).
         byte[] bytes = Convert.FromBase64String(hexString);
-        return new SelectionEncryptionIdentifier(bytes);
+        return SelectionEncryptionIdentifier.FromCanonicalBytes(bytes);
     }
 
     public override void Write(Utf8JsonWriter writer, SelectionEncryptionIdentifier value, JsonSerializerOptions options)

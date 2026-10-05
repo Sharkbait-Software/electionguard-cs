@@ -1,6 +1,7 @@
 using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.Models;
 using ElectionGuard.Core.PreEncryption;
+using ElectionGuard.Core.Verify.PreEncryption;
 using ElectionGuard.Testing.Common;
 using System.Security.Cryptography;
 using System.Text;
@@ -229,6 +230,49 @@ public class BallotPreEncryptorTests
         var ballot = PreEncrypt(encryptor, seed: 1);
 
         Assert.Equal(["contest-earlier", "contest-later"], ballot.Contests.Select(c => c.ContestId));
+    }
+
+    [Fact]
+    public void PreEncrypt_LabelOrderDiffersFromIndexOrder_OrdersContestsAndOptionsByIndex()
+    {
+        // In the test above, label order and index order coincide. Here the labels sort the other way
+        // round, in both the contests and the options, so ordering by label would be caught. The
+        // ballot then passes Verification 16, which recomputes the confirmation code in index order.
+        var record = CreateEncryptionRecord();
+        var template = record.Manifest.Contests[0];
+        Choice[] options =
+        [
+            new Choice { Id = "option-z", Name = "Z", Index = 1 },
+            new Choice { Id = "option-a", Name = "A", Index = 2 },
+        ];
+        var zulu = template with { Id = "contest-zulu", Index = 1, Choices = [.. options] };
+        var alpha = template with { Id = "contest-alpha", Index = 2, Choices = [.. options] };
+        var manifest = record.Manifest with
+        {
+            Contests = [zulu, alpha],
+            BallotStyles = [new BallotStyle { Id = BallotStyleId, Name = "style", ContestIds = ["contest-alpha", "contest-zulu"] }],
+        };
+        var reordered = WithManifest(record, manifest);
+        var encryptor = new BallotPreEncryptor(reordered, DeviceId);
+
+        var ballot = PreEncrypt(encryptor, seed: 1);
+
+        Assert.Equal(["contest-zulu", "contest-alpha"], ballot.Contests.Select(c => c.ContestId));
+        Assert.Equal([1, 2], ballot.Contests.Select(c => c.ContestIndex));
+        foreach (var contest in ballot.Contests)
+        {
+            Assert.Equal(["option-z", "option-a"], contest.Selections.Where(s => !s.IsNullVote).Select(s => s.ChoiceId));
+        }
+
+        var expected = ConfirmationCode.ForPreEncryptedBallot(
+            ballot.SelectionEncryptionIdentifierHash, ballot.Contests.Select(c => c.ContestHash), ballot.ChainingField);
+        var byLabel = ConfirmationCode.ForPreEncryptedBallot(
+            ballot.SelectionEncryptionIdentifierHash, ballot.Contests.OrderBy(c => c.ContestId, StringComparer.Ordinal).Select(c => c.ContestHash), ballot.ChainingField);
+        Assert.Equal(expected, ballot.ConfirmationCode);
+        Assert.NotEqual(byLabel, ballot.ConfirmationCode);
+
+        var deviceHash = VotingDeviceInformationHash.ForPreEncryptedBallots(reordered.ExtendedBaseHash, DeviceId);
+        Assert.Null(Record.Exception(() => new PreEncryptedConfirmationCodeVerification().Verify(ballot, deviceHash, reordered, null)));
     }
 
     [Fact]

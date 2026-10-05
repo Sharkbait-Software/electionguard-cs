@@ -369,7 +369,7 @@ public class BallotEncryptorTests
 
         var encryptor = new BallotEncryptor(encryptionRecordResult.EncryptionRecord, "device-8", deviceHash);
 
-        Assert.Throws<Exception>(() => encryptor.Encrypt(ballot, null));
+        Assert.Throws<InvalidBallotException>(() => encryptor.Encrypt(ballot, null));
     }
 
     [Fact]
@@ -382,7 +382,7 @@ public class BallotEncryptorTests
 
         var encryptor = new BallotEncryptor(encryptionRecordResult.EncryptionRecord, "device-9", deviceHash);
 
-        Assert.Throws<Exception>(() => encryptor.Encrypt(ballot, null));
+        Assert.Throws<InvalidBallotException>(() => encryptor.Encrypt(ballot, null));
     }
 
     [Fact]
@@ -398,7 +398,7 @@ public class BallotEncryptorTests
 
         var encryptor = new BallotEncryptor(encryptionRecordResult.EncryptionRecord, "device-10", deviceHash);
 
-        Assert.Throws<Exception>(() => encryptor.Encrypt(tamperedBallot, null));
+        Assert.Throws<InvalidBallotException>(() => encryptor.Encrypt(tamperedBallot, null));
     }
 
     [Fact]
@@ -426,7 +426,7 @@ public class BallotEncryptorTests
 
         var encryptor = new BallotEncryptor(encryptionRecordResult.EncryptionRecord, "device-11", deviceHash);
 
-        Assert.Throws<Exception>(() => encryptor.Encrypt(tamperedBallot, null));
+        Assert.Throws<InvalidBallotException>(() => encryptor.Encrypt(tamperedBallot, null));
     }
 
     [Fact]
@@ -444,7 +444,7 @@ public class BallotEncryptorTests
 
         var encryptor = new BallotEncryptor(encryptionRecordResult.EncryptionRecord, "device-12", deviceHash);
 
-        Assert.Throws<Exception>(() => encryptor.Encrypt(ballot, null));
+        Assert.Throws<InvalidBallotException>(() => encryptor.Encrypt(ballot, null));
     }
 
     [Fact]
@@ -459,6 +459,6 @@ public class BallotEncryptorTests
 
         var encryptor = new BallotEncryptor(encryptionRecordResult.EncryptionRecord, "device-13", deviceHash);
 
-        Assert.Throws<Exception>(() => encryptor.Encrypt(ballot, null));
+        Assert.Throws<InvalidBallotException>(() => encryptor.Encrypt(ballot, null));
     }
 }

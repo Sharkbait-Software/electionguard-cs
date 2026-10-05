@@ -2,6 +2,7 @@
 using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.Extensions;
 using ElectionGuard.Core.Models;
+using System.Numerics;
 
 namespace ElectionGuard.Core.Verify.Ballot;
 
@@ -15,6 +16,10 @@ public class SelectionEncryptionsWellFormedVerification
         // The proof challenges recomputed below hash the manifest's contest and option indices. They
         // are trusted here because EncryptionRecord validated the manifest (§3.1.3) when it was
         // built; re-validating the whole manifest per ballot would cost O(manifest) each time.
+
+        // "For each selectable option within each contest": exactly the ballot style's contests and
+        // the manifest's options, each once, before anything else (see BallotStructure).
+        BallotStructure.Require(encryptedBallot, encryptionRecord.Manifest, 6);
 
         // 6.A is read off the squaring chains the proof checks walk anyway, when the active q allows
         // it (see RangeProofChallenge). That reorders the work but must not reorder the failures:
@@ -233,9 +238,16 @@ public class SelectionEncryptionsWellFormedVerification
         return sumC;
     }
 
+    /// <summary>
+    /// Z_q = {x : 0 &lt;= x &lt; q} (6.B/6.C), so 0 is accepted: a prover may simulate a branch with
+    /// c_j = 0. <see cref="IntegerModQ"/> holds only reduced values, so this holds by construction
+    /// for anything built under the active q; what a record encodes is range-checked when it is
+    /// decoded (<see cref="IntegerModQ.FromCanonicalBytes"/>).
+    /// </summary>
     private static bool IsInZq(IntegerModQ value)
     {
-        return !(value <= 0 || value > EGParameters.Q);
+        BigInteger x = value.ToBigInteger();
+        return x >= 0 && x < EGParameters.Q;
     }
 
     private static void VerifyIsInZq(IntegerModQ value)

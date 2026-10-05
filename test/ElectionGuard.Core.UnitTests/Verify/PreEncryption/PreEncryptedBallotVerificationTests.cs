@@ -209,6 +209,99 @@ public class PreEncryptedBallotVerificationTests
         Assert.Equal("16.F", exception.SubSection);
     }
 
+    // Verification 16 structure (G24): eqs. (113)-(115) give each contest with m options and
+    // selection limit L exactly m option vectors, one per option, and L null vectors, each of m
+    // encryptions; the ballot lists exactly its ballot style's contests (eq. 116). The fixture has
+    // m = 2 and L = 2.
+
+    private static PreEncryptedContest Contest(PreEncryptedBallot ballot) => ballot.Contests[0];
+
+    private static PreEncryptedBallot WithSelections(PreEncryptedBallot ballot, Func<List<PreEncryptedSelection>, List<PreEncryptedSelection>> change) =>
+        ballot with { Contests = [Contest(ballot) with { Selections = change(Contest(ballot).Selections.ToList()) }] };
+
+    private static readonly Dictionary<string, Func<PreEncryptedBallot, PreEncryptedBallot>> PreEncryptedShapes = new()
+    {
+        ["missing null vector"] = b => WithSelections(b, s => s.Take(s.Count - 1).ToList()),
+        ["extra null vector"] = b => WithSelections(b, s => [.. s, s[^1]]),
+        ["option vector in place of a null vector"] = b => WithSelections(b, s => [s[0], s[1], s[2], s[0]]),
+        ["null vector in place of an option vector"] = b => WithSelections(b, s => [s[2], s[1], s[2], s[3]]),
+        ["option vector twice, one option missing"] = b => WithSelections(b, s => [s[0], s[0], s[2], s[3]]),
+        ["vector for an option not in the manifest"] = b => WithSelections(b, s => [s[0] with { ChoiceId = "not-an-option" }, s[1], s[2], s[3]]),
+        ["short vector"] = b => WithSelections(b, s => [s[0] with { Vector = s[0].Vector.Take(1).ToList() }, s[1], s[2], s[3]]),
+        ["long vector"] = b => WithSelections(b, s => [s[0] with { Vector = [.. s[0].Vector, s[0].Vector[0]] }, s[1], s[2], s[3]]),
+        ["duplicated contest"] = b => b with { Contests = [Contest(b), Contest(b)] },
+        ["missing contest"] = b => b with { Contests = [] },
+        ["contest not in the manifest"] = b => b with { Contests = [Contest(b) with { ContestId = "not-a-contest" }] },
+        ["wrong contest index"] = b => b with { Contests = [Contest(b) with { ContestIndex = 2 }] },
+        ["unknown ballot style"] = b => b with { BallotStyleId = "not-a-style" },
+    };
+
+    public static TheoryData<string> PreEncryptedShapeNames()
+    {
+        var data = new TheoryData<string>();
+        foreach (var shape in PreEncryptedShapes.Keys)
+        {
+            data.Add(shape);
+        }
+
+        return data;
+    }
+
+    /// <summary>
+    /// Every selection hash, contest hash and the confirmation code recomputed over the reshaped
+    /// ballot, so that 16.A-16.C would all hold: only the structural check can reject it.
+    /// </summary>
+    private static PreEncryptedBallot Rehashed(PreEncryptedBallot ballot)
+    {
+        var hashI = ballot.SelectionEncryptionIdentifierHash;
+        var contests = ballot.Contests
+            .Select(contest =>
+            {
+                var selections = contest.Selections
+                    .Select(s => s with { SelectionHash = new SelectionHash(hashI, s.Vector) })
+                    .ToList();
+                return contest with
+                {
+                    Selections = selections,
+                    ContestHash = ContestHash.ForPreEncryptedContest(hashI, contest.ContestIndex, selections.Select(s => s.SelectionHash)),
+                };
+            })
+            .ToList();
+        return ballot with
+        {
+            Contests = contests,
+            ConfirmationCode = ConfirmationCode.ForPreEncryptedBallot(hashI, contests.Select(c => c.ContestHash), ballot.ChainingField),
+        };
+    }
+
+    [Fact]
+    public void ConfirmationCode_Rehashed_ValidBallot_StillPasses()
+    {
+        // Rehashed reproduces the generator's own hashes, so a shape it leaves alone passes.
+        var record = CreateEncryptionRecord(selectionLimit: 2);
+        var ballot = new BallotPreEncryptor(record, DeviceId).PreEncrypt("ballot-1", BallotStyleId, null);
+        Assert.Equal(4, Contest(ballot).Selections.Count);
+
+        var rehashed = Rehashed(ballot);
+
+        Assert.Equal(ballot.ConfirmationCode, rehashed.ConfirmationCode);
+        Assert.Null(Record.Exception(() => new PreEncryptedConfirmationCodeVerification().Verify(rehashed, DeviceHash(record), record, null)));
+    }
+
+    [Theory]
+    [MemberData(nameof(PreEncryptedShapeNames))]
+    public void ConfirmationCode_MalformedButSelfConsistentBallot_Fails16Structure(string shape)
+    {
+        var record = CreateEncryptionRecord(selectionLimit: 2);
+        var ballot = new BallotPreEncryptor(record, DeviceId).PreEncrypt("ballot-1", BallotStyleId, null);
+        var malformed = Rehashed(PreEncryptedShapes[shape](ballot));
+
+        var exception = Assert.Throws<VerificationFailedException>(() =>
+            new PreEncryptedConfirmationCodeVerification().Verify(malformed, DeviceHash(record), record, null));
+
+        Assert.Equal("16.structure", exception.SubSection);
+    }
+
     // Verification 17
 
     [Fact]

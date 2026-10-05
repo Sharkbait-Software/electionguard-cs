@@ -186,13 +186,15 @@ try
     var extendedBaseHashVerification = new ExtendedBaseHashVerification();
     extendedBaseHashVerification.Verify(encryptionRecord.ExtendedBaseHash, encryptionRecord.ElectionBaseHash, encryptionRecord.ElectionPublicKeys);
 
-    // Verification 5
+    // Verification 5.A, over the identifiers of every submitted ballot at once: a list per ballot
+    // would check nothing.
+    var selectionEncryptionIdentifierVerification = new SelectionEncryptionIdentifierVerification();
+    selectionEncryptionIdentifierVerification.Verify(encryptedBallots.Select(x => x.SelectionEncryptionIdentifier).ToList());
+
     Parallel.ForEach(encryptedBallots, encryptedBallot =>
     {
-        var selectionEncryptionIdentifierVerification = new SelectionEncryptionIdentifierVerification();
-        var selectionEncryptionIdentifiers = new List<SelectionEncryptionIdentifier>();
-        selectionEncryptionIdentifiers.Add(encryptedBallot.SelectionEncryptionIdentifier);
-        selectionEncryptionIdentifierVerification.Verify(selectionEncryptionIdentifiers);
+        // Verification 5.B
+        selectionEncryptionIdentifierVerification.Verify(encryptedBallot.SelectionEncryptionIdentifier, encryptedBallot.SelectionEncryptionIdentifierHash, encryptionRecord.ExtendedBaseHash);
 
         // Verification 6
         var selectionEncryptionsWellFormedVerification = new SelectionEncryptionsWellFormedVerification();

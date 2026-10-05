@@ -242,12 +242,13 @@ public class BallotAggregationVerifierTests
     }
 
     /// <summary>
-    /// A malformed ballot throws partway through being added, leaving part of it (and, depending on
-    /// chunking and parallelism, part of its chunk) in the recomputation. Whatever was kept, the
-    /// verifier must refuse to reach a verdict afterwards -- against the tally of the well-formed
-    /// ballots, the full tally, or anything else -- rather than give one that depends on how the
-    /// ballots were grouped. The sequential path (maxDegreeOfParallelism 1, or 16 ballots or fewer)
-    /// keeps the partial ballot; the parallel one drops the whole chunk before merging.
+    /// A malformed ballot throws while its chunk is being added. The structural check rejects it
+    /// before any of its own ciphertexts are multiplied in, but depending on chunking and parallelism
+    /// some of its neighbours' may already be in the recomputation. Whatever was kept, the verifier
+    /// must refuse to reach a verdict afterwards -- against the tally of the well-formed ballots, the
+    /// full tally, or anything else -- rather than give one that depends on how the ballots were
+    /// grouped. The sequential path (maxDegreeOfParallelism 1, or 16 ballots or fewer) keeps the
+    /// ballots before the malformed one; the parallel one drops the whole chunk before merging.
     /// </summary>
     [Theory]
     [InlineData(5, 1)]
@@ -280,7 +281,12 @@ public class BallotAggregationVerifierTests
         var verifier = new BallotAggregationVerifier(scenario.Manifest);
 
         verifier.AddBallot(scenario.Ballots[0]);
-        Assert.Throws<KeyNotFoundException>(() => verifier.AddBallot(WithUnknownTrailingContest(scenario.Ballots[1])));
+
+        // A contest the manifest lacks is a structural failure (BallotStructure), rejected before any
+        // of the ballot's ciphertexts are multiplied in. It used to surface as a KeyNotFoundException
+        // from the aggregate's dictionary, after the ballot's earlier contests had been added.
+        var exception = Assert.Throws<VerificationFailedException>(() => verifier.AddBallot(WithUnknownTrailingContest(scenario.Ballots[1])));
+        Assert.Equal("9.structure", exception.SubSection);
 
         Assert.Equal(1, verifier.BallotsAdded);
         AssertFaulted(verifier, ElectionFixtureBuilder.CreateEncryptedTally(scenario.Manifest, scenario.Ballots[0]));

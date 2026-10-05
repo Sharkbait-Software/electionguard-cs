@@ -1,3 +1,4 @@
+using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.Models;
 using ElectionGuard.Perf.Cli.Configuration;
 using ElectionGuard.Perf.Cli.Results;
@@ -407,6 +408,53 @@ public class ScenarioRunnerTests
         // excludes them instead of treating a future comparison's zero baseline as real.
         Assert.True(outcome.Phases[PhaseNames.EncryptBallots].Aborted);
         Assert.True(outcome.Phases[PhaseNames.Tally].Aborted);
+    }
+
+    /// <summary>
+    /// G13: Verification 5.A holds across the whole run, not per chunk. The first ballot of the
+    /// second chunk is replaced by the first chunk's first ballot, so the only fault is an id_B that
+    /// repeats one from an earlier chunk. A set of identifiers kept per chunk would pass this run.
+    /// </summary>
+    [Fact]
+    public void Run_FailsVerification5A_WhenALaterChunkRepeatsAnEarlierChunksIdentifier()
+    {
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest();
+        EncryptedBallot? first = null;
+        var runner = new ScenarioRunner(Scenario(ballotCount: 8, chunkSize: 4, ballotVerification: true), manifest)
+        {
+            EncryptedBallotHookForTesting = (index, ballot) =>
+            {
+                first ??= ballot;
+                return index == 4 ? first : ballot;
+            },
+        };
+
+        var outcome = runner.Run();
+
+        Assert.Equal(CorrectnessStatus.Error, outcome.Correctness.Status);
+        Assert.Contains("VerificationFailedException", outcome.Notes["error"], StringComparison.Ordinal);
+        Assert.Contains("Duplicate selection encryption identifier", outcome.Notes["error"], StringComparison.Ordinal);
+    }
+
+    /// <summary>The control for the test above: the same run with the hook leaving every ballot alone passes.</summary>
+    [Fact]
+    public void Run_PassesVerification5A_WhenTheHookChangesNothing()
+    {
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest();
+        var indices = new List<int>();
+        var runner = new ScenarioRunner(Scenario(ballotCount: 8, chunkSize: 4, ballotVerification: true), manifest)
+        {
+            EncryptedBallotHookForTesting = (index, ballot) =>
+            {
+                indices.Add(index);
+                return ballot;
+            },
+        };
+
+        var outcome = runner.Run();
+
+        Assert.Equal(CorrectnessStatus.Passed, outcome.Correctness.Status);
+        Assert.Equal(Enumerable.Range(0, 8), indices);
     }
 
     /// <summary>

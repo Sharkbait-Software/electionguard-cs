@@ -1,6 +1,7 @@
 ﻿using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.Models;
+using ElectionGuard.Core.Verify;
 using System.Collections.Concurrent;
 using static ElectionGuard.Core.Tally.EncryptedTally;
 
@@ -39,8 +40,17 @@ public class EncryptedTally
     public Dictionary<string, EncryptedAggregateContest> Contests;
     public int BallotsCast { get; private set; } = 0;
 
+    /// <summary>
+    /// Multiplies <paramref name="encryptedBallot"/>'s ciphertexts into the aggregate. A ballot that
+    /// does not list exactly its ballot style's contests and the manifest's options, each once, is
+    /// rejected before anything is multiplied in, with a <see cref="VerificationFailedException"/> of
+    /// sub-section "9.structure" (Verification 9 recomputes the aggregate through this method; see
+    /// <see cref="BallotStructure"/>). Otherwise a contest or option listed twice would count twice.
+    /// </summary>
     public void AddBallot(EncryptedBallot encryptedBallot)
     {
+        BallotStructure.Require(encryptedBallot, _manifest, 9);
+
         foreach(var contest in encryptedBallot.Contests)
         {
             var aggregateContest = Contests[contest.Id];

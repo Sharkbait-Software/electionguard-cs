@@ -23,6 +23,12 @@ public class PreEncryptedConfirmationCodeVerification
         // here because EncryptionRecord validated the manifest (§3.1.3) when it was built;
         // re-validating the whole manifest per ballot would cost O(manifest) each time.
 
+        // 16.A-16.C recompute hashes over whatever the ballot publishes, so a ballot missing a null
+        // vector, with a short vector, or repeating a contest would be internally consistent. Its
+        // shape is checked first: the ballot style's contests, each once, and per contest m option
+        // vectors and L null vectors of m encryptions each (eqs. 112-115; see BallotStructure).
+        BallotStructure.Require(ballot, encryptionRecord.Manifest, 16);
+
         var selectionEncryptionIdentifierHash = ballot.SelectionEncryptionIdentifierHash;
         var contestHashes = new List<(int ContestIndex, ContestHash ContestHash)>();
 

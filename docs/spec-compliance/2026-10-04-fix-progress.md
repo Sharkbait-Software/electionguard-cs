@@ -84,8 +84,8 @@ User answers (2026-10-04):
 | Stage | G-IDs | Blocked on | Status | Commit |
 |---|---|---|---|---|
 | S1 Hash encodings, indices, canonical order | G1, G6, G7, G35, G26 (1.F compare and constructor reuse), G12, G9 | — | done | 3cec099 |
-| S2 Key-generation hardening | G5, G14, G15, G25, G34, G26 (H_B in record and guardian check) | S1 | done | see next commit |
-| S3 Ballot verification strictness | G4, G13, G33, G23, G24, G36; plus the push security-review findings on V8 (missing completeness/validation checks: ballot contest set vs ballot style, option set vs manifest, duplicates) | — | todo | |
+| S2 Key-generation hardening | G5, G14, G15, G25, G34, G26 (H_B in record and guardian check) | S1 | done | 6fbc25c |
+| S3 Ballot verification strictness | G4, G13, G33, G23, G24, G36; plus the push security-review findings on V8 (missing completeness/validation checks: ballot contest set vs ballot style, option set vs manifest, duplicates) | — | done | see next commit |
 | S4 Tally soundness | G2, G27, G28, G20, G21, G30, G38, G16 | — | todo | |
 | S5 Supplemental fields redesign | G3, G8, G22, G29, G10 | — | todo | |
 | S6 Contest data | G11, G32 | after S4 | todo | |
@@ -120,7 +120,271 @@ H_B), which is local to each guardian and never published; it is pinned by the n
 (`KnownAnswerTests.GuardianRecordHash_Eq27`), not by a literal. The tests S2 changed are behavior pins, listed in the
 S2 log entry.
 
+S3: no hash, nonce, ciphertext, confirmation code or KAT value moved (every KAT passed before and after; smoke and
+console tallies unchanged). The 11 tests S3 re-pinned are behavior pins (exception types and the 0-in-Z_q rule),
+listed in the S3 log entry.
+
 ## Log
+
+### 2026-10-05 — S3 review response (round 1)
+Five minor findings (two code, three tests). All five were correct and all are fixed. No production behavior
+changes apart from F1, and no pinned value moved.
+- **F1, a protobuf ballot without id_B threw `ArgumentNullException` (G23, code): fixed.**
+  `SelectionEncryptionIdentifier.FromCanonicalBytes` now takes `ReadOnlySpan<byte>`, like the `IntegerModP` and
+  `IntegerModQ` decoders, and copies the bytes. A null array arrives as an empty span and fails the length check
+  with `NonCanonicalEncodingException`. Tests: `SelectionEncryptionIdentifier_FromCanonicalBytes_RejectsNull`, and
+  the protobuf site "id_B missing", which leaves the field off the wire. That case asserts that protobuf-net reads
+  the absent field back as null, not as an empty array, so the old code would have thrown `ArgumentNullException`.
+- **F2, no test where only the per-selection ^q test catches a 7.A failure (G36, code): fixed.**
+  - The finding's analysis holds. -1 is a non-residue (p = 3 mod 4), so negating alphas is caught by the exact
+    Jacobi pass.
+  - New `Verify_TwoQuadraticResidueNonMembersWhoseProductIsAMember_Throws_SubSection7A` sets beta_1·x and
+    beta_2·x^-1, with x = 2^(2q) mod p, a square of order dividing r'.
+  - It asserts that x != 1, that x is not a member, and that both tampered betas pass Euler's criterion but are not
+    members. It also asserts that the aggregate equals the honest aggregate and is a member, and that the untouched
+    proof's challenge sum checks. V7 must then fail with 7.A.
+- **F3, the order of failures was not pinned (tests): fixed.** Three tests in `BallotStructureTests`, which has a
+  two-contest fixture:
+  - `Verification7_NonMemberInALaterContest_IsReportedBeforeAnEarlierContestsSumFailure`: contest A's contest
+    proof fails 7.D and contest B has alpha_i = 2. Expects 7.A. Each fault alone gives 7.D and 7.A.
+  - `Verification6_NonMemberInALaterContest_IsReportedBeforeAnEarlierSelectionsSumFailure`: the same for V6 (6.D
+    on A's first selection, a non-member in B). Expects 6.A. The ballot is structurally valid, so this takes the
+    fused path.
+  - `MalformedBallotWithANonMember_IsRejected_AsStructure` (6 and 7): a duplicated option plus a non-member
+    alpha. Expects `"N.structure"`. The non-member alone gives `N.A`.
+- **F4, the protobuf tests covered 3 of about 22 strict-decode sites (tests): fixed.**
+  - `Protobuf_NonCanonicalEncoding_IsRejected` is now table-driven over every mapped site, 28 cases:
+    - id_B: 31 bytes, and missing.
+    - Padded encodings: one selection alpha, one proof response.
+    - Set to p or q: the selection's alpha, beta, proof challenge and response; the contest proof's challenge and
+      response; the overvote, nullvote, undervote and write-in alpha, beta, proof challenge and response; the
+      ContestData challenge and response.
+  - The fixture ballot now carries contest data, because the encryptor only emits `EncryptedData` for a contest
+    that has some. Its guardian set is built from its own manifest file.
+  - The test asserts that every site exists on the ballot, so no tampering can be a no-op.
+  - The JSON test is unchanged: there is one converter per type, applied to every property of that type.
+- **F5, 5.A across chunks in the perf harness was untested (G13, tests): fixed.**
+  - A `VerifyChunk`-level test could not catch the regression described, a set created per chunk inside `Run`.
+  - So `ScenarioRunner` gained an internal test seam, `EncryptedBallotHookForTesting`. It is called per ballot with
+    the run-wide index, after the encrypt timing and before verification and tally. It is null outside tests.
+  - `Run_FailsVerification5A_WhenALaterChunkRepeatsAnEarlierChunksIdentifier`: 8 ballots in chunks of 4, ballot
+    4 replaced by ballot 0. Expects an Error status and a `VerificationFailedException` "Duplicate selection
+    encryption identifier" note.
+  - `Run_PassesVerification5A_WhenTheHookChangesNothing` is the control. It also checks that the hook sees indices
+    0-7.
+- Mutation checks (each was applied, the targeted classes were rebuilt and run, and the file was restored from a
+  copy, verified with `cmp`):
+  - V7's 7.A moved inside the per-contest loop over that contest's components: only the new V7 cross-contest test
+    failed. Every other V7 test passed, which confirms the finding.
+  - Per-selection Euler criterion plus exact ^q only on the aggregates: the new QR test failed, and so did the V7
+    cross-contest test (2 is a QR mod p).
+  - Whole-ballot 7.A moved before `BallotStructure.Require`: only `MalformedBallotWithANonMember(7)` failed.
+  - V6's fused path without the batch test on a 6.D: the new V6 cross-contest test and the existing
+    `Verify_SumMismatchBeforeANonMember` failed.
+  - The protobuf overvote beta reverted to `new IntegerModP(bytes)`: only the "overvote beta = p" case failed.
+  - The perf harness with a fresh set per ballot: only the new 5.A run test failed.
+- Decision taken (low stakes, test-only API): `ScenarioRunner.EncryptedBallotHookForTesting` is an `internal`
+  init-only property, reached through the existing `InternalsVisibleTo` for Perf.UnitTests. It is chosen over
+  injecting the identifier set, which could not detect a per-chunk set created inside `Run`.
+- Carry-over: a protobuf document that leaves out a nested message (`OvervoteCount`, a `Proofs` array,
+  `Contests`) still fails with `NullReferenceException`. That is a truncated document, not a non-canonical value
+  encoding, so it is outside G23. Record it for S10's deserializer work, or for S5, which redesigns the
+  supplemental fields.
+- Gate (no pinned value moved, so nothing was re-pinned; the before and after gates are the same run):
+  - Build: `0 Warning(s)`, `0 Error(s)`.
+  - Smoke: `correctness passed`, twice.
+    - dkg 126 ms.
+    - EncryptBallots 0.197 and 0.200 ms/ballot, 134.7 MB.
+    - VerifyBallots 0.454 and 0.460 ms/ballot, 6.2 MB.
+    - Tally 6 ms, VerifyTally 3 ms, DecryptTally 19 ms.
+  - Console: `Done.`, then the expected ReadKey exception. tally.json was rewritten at 10:45:40:
+    `{"Contests":{"0":{"Choices":{"0-0":{"VoteCount":3},"0-1":{"VoteCount":0}}}}}`.
+  - Tests: Core `Passed: 998, Total: 998` (969 + 29: 23 more protobuf cases, 1 null id_B, 1 V7 QR, 4 ordering);
+    Perf `Passed: 201, Total: 201` (199 + 2).
+- Perf: no hot path changed. id_B decoding copies 32 bytes per ballot, and the runner does one null check per
+  chunk. Smoke VerifyBallots (0.454 and 0.460 ms/ballot, 6.2 MB) matches S3's 0.459-0.466 ms/ballot and 6.1-6.2 MB.
+
+### 2026-10-05 — S3 (ballot verification strictness: G4, G13, G33, G23, G24, G36, V8 review findings, S1 carry-overs)
+Resumed from an implementer that died mid-stage (API 529) with uncommitted edits. Those edits were reviewed and kept,
+with one change (the `AggressiveOptimization` attributes were measured, then kept with a justifying comment; see
+Perf). Its `scratch-s3/` (a HEAD copy used as the perf baseline, a bench script, a `.orig`) is deleted. It had
+written no tests and had not touched this tracker.
+- Code changes (uncommitted; the orchestrator commits):
+  - **G4 + V8 security-review findings** (missing-validation ×2, missing-completeness-check on
+    `ConfirmationCodeVerification`): new `Verify/BallotStructure.cs`. `BallotStructure.Require(ballot, manifest, N)`
+    requires that the ballot style is in the manifest (and its contest ids resolve, each once); that the ballot lists
+    exactly the style's contests, each once; and that each contest lists exactly the manifest's options, each once
+    (no missing, extra or duplicated option, and no option of another contest). The per-contest supplemental fields
+    are unchanged; S5 redesigns them. It is called first in V6, V7 and V8, and in `EncryptedTally.AddBallot`, which
+    V9's `BallotAggregationVerifier` reuses. So a malformed ballot is rejected before any of its ciphertexts are
+    multiplied into a tally.
+    - The pass path allocates nothing. It uses stack flags up to 256 contests or options, and a hinted linear search
+      that costs one comparison per lookup on a canonically ordered ballot.
+    - The audit's attack (copy a valid contest verbatim, with the confirmation code hashed over the copies) passed
+      V5-V9 and was tallied twice. Now V6, V7, V8 and AddBallot each reject it.
+  - **G13:** `SelectionEncryptionIdentifier` implements `IEquatable`, `==`/`!=` and `ToString` by content. The hash is
+    over all 32 bytes through `HashCode.AddBytes`, which is per-process seeded, so a crafted record cannot collide
+    the 5.A set.
+    - New `SelectionEncryptionIdentifierSet`: an incremental 5.A that holds identifiers only. `Verify(...)` takes an
+      `IReadOnlyCollection` and uses it.
+    - Program.cs runs 5.A once over all submitted ballots before the per-ballot loop; the loop now runs 5.B, which it
+      did not before.
+    - The perf harness keeps one set across all chunks (32 bytes per ballot) instead of checking within a chunk.
+  - **G33:** the `IsInZq` helpers of V6 and V7 are `0 <= x < q`. They used to reject 0. An `IntegerModQ` can hold
+    nothing else, so the range half is enforced at decode time (G23).
+  - **G23:** new strict decoders, all throwing `NonCanonicalEncodingException` (a `FormatException`):
+    - `IntegerModP.FromCanonicalBytes`: exactly 512 bytes, value < p.
+    - `IntegerModQ.FromCanonicalBytes`: exactly 32 bytes, value < q.
+    - `SelectionEncryptionIdentifier.FromCanonicalBytes`: exactly 32 bytes.
+    - The JSON converters (`IntegerModP`, `IntegerModQ`, id_B) and every protobuf mapping of those types use them.
+      System.Text.Json lets the exception propagate unwrapped (tested).
+    - The reducing byte constructors stay, documented as internal-arithmetic only.
+    - The strict paths are public, so the Z_q-range half of 2.B is available to a future record deserializer (none
+      exists yet; S10).
+  - **G24:** the `PreEncryptedBallot` overload of `BallotStructure.Require` runs first in V16
+    (`PreEncryptedConfirmationCodeVerification`). It requires:
+    - the ballot style exists, and the ballot lists exactly its contests, each once;
+    - each contest's `ContestIndex` equals the manifest's;
+    - `Selections.Count == m + L`, and every vector has exactly m entries;
+    - each option has exactly one vector, and there are exactly L null vectors (eqs. 113-115, 16.A-16.C p.65).
+  - **G36 (Q8 "per-selection as written"):** V7 now runs `SubgroupMembership.IndexOfFirstNonMember` over every
+    selection's alpha_i and beta_i, after the structure check and before any other 7.x check.
+    - V7's fused chain path and its structural pre-pass are removed. Its chains are the aggregates', so they cannot
+      decide per-selection membership. The aggregates need no separate test: Z_p^r is closed under multiplication.
+    - V6 keeps its fused exact path.
+  - **S1 carry-over:** `BallotEncryptor.Validate` throws the new `InvalidBallotException : ArgumentException` (in
+    `Ballot.cs`) instead of a bare `Exception`.
+- Gate before re-pinning (code complete, no test expectation touched):
+  - Build: `0 Warning(s)`, `0 Error(s)`.
+  - Smoke: `correctness passed`. dkg 135 ms; EncryptBallots 0.201 ms/ballot, 134.7 MB; VerifyBallots 0.487 ms/ballot,
+    6.2 MB; Tally 6 ms; VerifyTally 3 ms; DecryptTally 20 ms.
+  - Console: `Done.`, then the expected ReadKey exception. tally.json
+    `{"Contests":{"0":{"Choices":{"0-0":{"VoteCount":3},"0-1":{"VoteCount":0}}}}}`.
+  - Tests: Core `Failed: 11, Passed: 855, Total: 866`; Perf `Passed: 199`. Every KAT passed. The failures:
+    - `SelectionEncryptionsWellFormedVerificationTests.Verify_ProofChallengeOutOfRange_Throws_SubSection6BC`, `..._ProofResponseOutOfRange_Throws_SubSection6BC`
+    - `AdherenceToVoteLimitsVerificationTests.Verify_ProofChallengeOutOfRange_Throws_SubSection7BC`, `..._ProofResponseOutOfRange_Throws_SubSection7BC`
+    - `BallotEncryptorTests.Encrypt_InvalidManifestReference_ThrowsException`, `Encrypt_BallotStyleMismatch_ThrowsException`,
+      `Encrypt_ChoiceCountMismatch_ThrowsException`, `Encrypt_ChoiceIdMismatch_SameChoiceCount_ThrowsException`,
+      `Encrypt_SelectionValueExceedsOptionSelectionLimit_ThrowsException`, `Encrypt_NegativeSelectionValue_ThrowsException`
+    - `BallotAggregationVerifierTests.AddBallot_AMalformedBallot_FaultsTheVerifier`
+- Re-pinned and why (none weakened):
+  - The four `*OutOfRange_Throws_SubSection6BC/7BC` tests pinned the G33 bug (0 rejected). They are now
+    `Verify_ZeroChallenge_IsInZq_FailsOnlyTheSumCheck_SubSection6D/7D` and `Verify_ZeroResponse_...`. The same
+    tamper, without re-proving, now passes 6.B/6.C or 7.B/7.C and fails 6.D or 7.D.
+  - New tests show that a valid proof with c_j = v_j = 0 passes V6 (both selections) and V7. The helper,
+    `ZeroChallengeRangeProof`, simulates branches with c_j = v_j = 0.
+  - The six encryptor tests asserted an exact `Exception`. They now assert `InvalidBallotException`, a subclass,
+    which is strictly stronger.
+  - `AddBallot_AMalformedBallot_FaultsTheVerifier` pinned a `KeyNotFoundException` from the tally's dictionary. It
+    now asserts `VerificationFailedException` with `SubSection == "9.structure"`. The fault-state assertions are
+    unchanged. The doc comments of that test and of `BallotAggregationVerifier` were corrected: the malformed
+    ballot's own ciphertexts are no longer partly added.
+  - `CanonicalOrderTests.Encrypt_BallotListingAContestTwice_IsRejected` was tightened from `ThrowsAny<Exception>` to
+    `Throws<InvalidBallotException>`. The comment in `RangeProofChallengeTests` that said the verifications reject
+    zero is fixed.
+- New tests (103; Core 866 → 969):
+  - `Verify/BallotStructureTests` (G4). The valid ballot passes V6, V7, V8 and AddBallot. Eleven malformed shapes
+    × {V6, V7, V8, AddBallot} each fail as `"N.structure"`:
+    - duplicated contest;
+    - duplicated option, appended or in place of another option;
+    - missing option, extra option, an option of another contest;
+    - missing style contest;
+    - a manifest contest not on the style, a contest not in the manifest;
+    - an unknown ballot style, another ballot style.
+  - Also in `BallotStructureTests`:
+    - A malformed ballot adds nothing to a tally (BallotsCast stays 0 and the aggregates stay at identity).
+    - The verbatim contest-copy attack, with a matching confirmation code, passes 5.B and is rejected by V6, V7, V8,
+      AddBallot and `BallotAggregationVerifier.AddBallot`.
+  - G13:
+    - Equal identifiers in separate arrays fail 5.A.
+    - Equality and hash code are by content.
+    - `SelectionEncryptionIdentifierSet` catches a duplicate in a later batch.
+  - G23, `Serialization/StrictDecodingTests`:
+    - Boundaries for each decoder: 0 and p-1 (or q-1) are accepted; p, p+1, 2^4096-1, q and 2^256-1 are rejected.
+    - Wrong lengths are rejected (0/32/511/513, 31/33/512, 0/31/33).
+    - The reducing constructor turns p (or q) into 0, which documents the old hole.
+    - JSON and protobuf × {alpha padded to 513 bytes, alpha = p, response = q, response padded to 33 bytes, 31-byte
+      id_B} each throw `NonCanonicalEncodingException`, while the untampered document decodes.
+  - G24, `PreEncryptedBallotVerificationTests`: 13 shapes, each re-hashed so that 16.A-16.C would hold, fail
+    `"16.structure"`:
+    - a missing or extra null vector;
+    - an option vector in place of a null vector, or a null vector in place of an option vector;
+    - an option twice with one missing, or an unknown option;
+    - a short or long vector;
+    - a duplicated or missing contest, a contest not in the manifest, a wrong contest index;
+    - an unknown style.
+  - Also in `PreEncryptedBallotVerificationTests`: a re-hash of the valid ballot reproduces its confirmation code and
+    passes.
+  - G36: `Verify_TwoNonMemberSelectionsWhoseProductIsAMember_Throws_SubSection7A`. Both alphas of the contest are
+    negated. The test asserts that the aggregate is unchanged and a member, and that the untouched contest proof
+    still satisfies 7.D, so the old aggregate check passed this ballot. It now fails 7.A.
+  - S1 carry-over, canonical-order fixtures where label order is the reverse of index order, for contests and
+    options alike:
+    - `CanonicalOrderTests`: the encryptor emits and hashes in index order, and V6, V7, V8 pass. A ballot stored in
+      label order with canonical hashes passes V8. A confirmation code over label order fails 8.B. A contest hash
+      over label-ordered options fails 8.A.
+    - `BallotPreEncryptorTests.PreEncrypt_LabelOrderDiffersFromIndexOrder_OrdersContestsAndOptionsByIndex`: the
+      output order is by index, the confirmation code differs from the label-order one, and V16 passes.
+- Gate after:
+  - Build: `0 Warning(s)`, `0 Error(s)`.
+  - Smoke ×3: `correctness passed` each time. dkg 127-128 ms; EncryptBallots 0.201-0.205 ms/ballot, 134.7 MB;
+    VerifyBallots 0.459 / 0.462 / 0.466 ms/ballot, 6.1-6.2 MB; Tally 6 ms; VerifyTally 3-4 ms; DecryptTally 19-20 ms.
+  - Console: `Done.`, then the expected ReadKey exception. tally.json
+    `{"Contests":{"0":{"Choices":{"0-0":{"VoteCount":3},"0-1":{"VoteCount":0}}}}}`.
+  - Tests: Core `Passed: 969, Total: 969`; Perf `Passed: 199`.
+- **Perf (the user asked for the G36 cost).** Same machine, sequential runs. The baseline is a HEAD (6fbc25c) copy of
+  the tree, confirmed identical to HEAD apart from line endings.
+
+  | Scenario | Metric | HEAD | S3 | Change |
+  |---|---|---|---|---|
+  | smoke (1 contest, 2 options; 3 runs each) | VerifyBallots ms/ballot | 0.365 / 0.368 / 0.365 | 0.459 / 0.462 / 0.466 | about +26% |
+  | smoke | VerifyBallots alloc | 5.8 MB | 6.1-6.2 MB | +0.4 MB |
+  | xsmall (famous-names-large manifest, medium's manifest; 2 runs each) | VerifyBallots ms/ballot | 6.655 / 6.662 | 7.249 / 7.710 | about +12% |
+  | xsmall | VerifyBallots alloc | 82 MB | 88 MB | +6 MB |
+
+  - EncryptBallots, Tally, VerifyTally and DecryptTally are unchanged.
+  - The extra time is V7's per-ballot batch test (a Jacobi pass over 2·selections values, one 128-bit
+    multi-exponentiation, one ^q). The `AggressiveOptimization` experiment below moves it by 0.3 ms/ballot. The
+    structure check is a few comparisons per contest, and its pass path allocates nothing by construction. The
+    extra allocation is attributed, without being measured separately, to V7's per-ballot components list and the
+    batch test.
+  - medium (100k ballots) was not run: at about 7.4 ms/ballot verify plus 3.5 ms/ballot encrypt it takes roughly 20
+    minutes. xsmall uses medium's manifest, so its per-ballot cost stands in for medium's.
+  - `AggressiveOptimization` on `SubgroupMembership.BatchTest`, `TryJacobiDivsteps`, `PosDivsteps62` and
+    `ApplyTransition`, measured:
+    - Without it: smoke VerifyBallots 0.759 / 0.761 / 0.767 ms/ballot.
+    - With it: 0.47-0.49 ms/ballot.
+    - xsmall: within noise either way.
+    - Reason: a short run never tiers these loops up, and they used to run only on failing ballots. Kept, following
+      the precedent on `ModInverseVariableTime`.
+  - `egperf compare` against a pre-S3 smoke run will flag the VerifyBallots allocation. That is expected from Q8.
+- Decisions taken (low-stakes API shape; none changes interoperable bytes):
+  - **Structure SubSection convention:**
+    - `"N.structure"`, with N the verification that found the failure: 6, 7, 8, 9 (`EncryptedTally.AddBallot`) or 16.
+    - The message names the violation and says it is a §3.1.3 structural check that runs before the verification's
+      lettered checks. The spec letters no such sub-check: it is implicit in the index-keyed model (§3.1.3 p.17,
+      V6 preamble p.36, V7, V9).
+    - Ordering: structure first, then 6.A or 7.A, then the remaining lettered checks. The structure decides which
+      ciphertexts the lettered checks range over, so it cannot come after them. This refines the earlier rule that
+      "6.A/7.A for any value is reported before anything else": that rule now means before any other lettered check.
+  - **Ballot-style checks** are enforced for every regular ballot, not just challenged and pre-encrypted ones. The
+    audit calls this hardening beyond the spec's 14.B and 19.B. The task scope asked for it.
+  - **`NonCanonicalEncodingException`** is a deserialization error, not a 2.x/6.x/7.x sub-section:
+    - A decoder does not know which checks a value feeds; one alpha enters 6.A, 7.A and V9.
+    - Once a value is decoded, the types can hold only canonical values, so the range halves become invariants.
+    - A record that does not decode does not verify.
+  - **5.B and id_B length:** 5.B (`Verify(identifier, hash, H_E)`) still hashes the identifier as given. The 32-byte
+    length is enforced at decode time. Existing 5.B tests use 3-byte identifiers built in memory.
+  - **`InvalidBallotException`** derives from `ArgumentException`.
+  - **Program.cs** now runs 5.B for every ballot. The old per-ballot one-element 5.A list checked nothing.
+- Carry-overs:
+  - The per-contest supplemental fields (overvote, null, undervote, write-in) are outside `BallotStructure`. S5
+    redesigns them.
+  - V6's `PassesStructuralChecks` still repeats the manifest lookups that `BallotStructure` now guarantees. They are
+    harmless and cheap, and left alone.
+  - Records (`EncryptionRecord`, `GuardianRecord`) still have no deserializer. The strict decoders are ready for S10.
+  - The 8.D/8.E tautology (G37) is S8's.
+- Spec questions: none new.
 
 ### 2026-10-05 — S2 review response (round 2)
 Three findings, all fixed. The spec and code findings are the same defect (G14/G15 attribution in step 1).

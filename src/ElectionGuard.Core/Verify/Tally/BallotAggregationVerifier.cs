@@ -17,10 +17,11 @@ namespace ElectionGuard.Core.Verify.Tally;
 /// The recomputation is this verifier's own <see cref="EncryptedTally"/>, never the claimed one:
 /// the verifier must reach its expected values independently of the record it is checking.
 ///
-/// Adding is not atomic. A ballot naming a contest or option the manifest lacks throws partway
-/// through, after some of its ciphertexts -- or, depending on chunk size and parallelism, some of
-/// its neighbours' -- have already been multiplied in, so what survives would depend on how the
-/// ballots were grouped. Rather than expose that, any exception out of <see cref="AddBallot"/> or
+/// Adding is not atomic. A ballot that does not have its ballot style's structure (see
+/// <see cref="BallotStructure"/>; reported as sub-section "9.structure") is rejected before any of
+/// its own ciphertexts are multiplied in, but depending on chunk size and parallelism some of its
+/// neighbours' already have been, so what survives would depend on how the ballots were grouped.
+/// Rather than expose that, any exception out of <see cref="AddBallot"/> or
 /// <see cref="AddBallots"/> faults the verifier: every later <see cref="Verify"/> throws
 /// <see cref="InvalidOperationException"/>, and a caller that wants to skip malformed ballots must
 /// start a new verifier.

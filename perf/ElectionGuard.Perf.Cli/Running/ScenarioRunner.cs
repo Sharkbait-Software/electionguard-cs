@@ -61,6 +61,14 @@ public sealed class ScenarioRunner
         }
     }
 
+    /// <summary>
+    /// Test seam: called with each ballot's run-wide index and its encryption, after the encrypt
+    /// phase's timing and before the ballot is verified or tallied; the ballot it returns is used in
+    /// its place. Lets a test plant a fault that only shows across chunks, such as a later chunk
+    /// repeating an earlier chunk's id_B (Verification 5.A). Null, and never set, outside tests.
+    /// </summary>
+    internal Func<int, EncryptedBallot, EncryptedBallot>? EncryptedBallotHookForTesting { get; init; }
+
     public RunOutcome Run()
     {
         var notes = new Dictionary<string, string>();
@@ -211,6 +219,11 @@ public sealed class ScenarioRunner
             ? new[] { encrypt, ballotVerify, aggregate }
             : new[] { encrypt, ballotVerify, aggregate, tallyVerify };
 
+        // Verification 5.A across the whole run, not per chunk: every identifier seen so far. An
+        // identifier is 32 bytes and no ballot is retained, so this grows by one small entry per
+        // ballot whatever the chunk size.
+        var selectionEncryptionIdentifiers = new SelectionEncryptionIdentifierSet();
+
         EncryptedBallot? representative = null;
         ConfirmationCode? previousConfirmationCode = null;
         int generated = 0;
@@ -265,13 +278,22 @@ public sealed class ScenarioRunner
                 }
 
                 encrypt.RecordBallots(chunkSize);
+
+                if (EncryptedBallotHookForTesting is { } hook)
+                {
+                    for (int i = 0; i < chunkSize; i++)
+                    {
+                        encryptedChunk[i] = hook(generated + i, encryptedChunk[i]);
+                    }
+                }
+
                 representative ??= encryptedChunk[0];
 
                 if (_scenario.Phases.BallotVerification)
                 {
                     using (ballotVerify.Enter())
                     {
-                        VerifyChunk(encryptedChunk, records.EncryptionRecord, deviceHash, parallelism, isChained, chunkStartConfirmationCode);
+                        VerifyChunk(encryptedChunk, records.EncryptionRecord, deviceHash, parallelism, isChained, chunkStartConfirmationCode, selectionEncryptionIdentifiers);
                     }
 
                     ballotVerify.RecordBallots(chunkSize);
@@ -569,13 +591,16 @@ public sealed class ScenarioRunner
         VotingDeviceInformationHash deviceHash,
         int parallelism,
         bool isChained,
-        ConfirmationCode? chunkStartConfirmationCode)
+        ConfirmationCode? chunkStartConfirmationCode,
+        SelectionEncryptionIdentifierSet selectionEncryptionIdentifiers)
     {
-        // Verification 5 checks that selection encryption identifiers are distinct. Under streaming
-        // the whole set is never in memory at once, so this checks distinctness within the chunk --
-        // recorded here rather than silently passing a one-element list, which checks nothing.
-        new SelectionEncryptionIdentifierVerification()
-            .Verify(chunk.Select(x => x.SelectionEncryptionIdentifier).ToList());
+        // Verification 5.A checks that selection encryption identifiers are distinct across every
+        // submitted ballot. Under streaming the ballots are never all in memory at once, but their
+        // identifiers are: the set carries every earlier chunk's.
+        foreach (var ballot in chunk)
+        {
+            selectionEncryptionIdentifiers.Add(ballot.SelectionEncryptionIdentifier);
+        }
 
         if (isChained)
         {
