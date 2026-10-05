@@ -13,14 +13,18 @@ public class EncryptedTally
     {
         _manifest = manifest;
 
+        // One aggregate per verifiable field of each contest: its selectable options and the
+        // supplemental fields it declares (§3.1.3 p.19, §3.3.9 "allow verifiable tallies that show
+        // the total numbers of undervotes, null votes, overvotes, or used write-in fields"), keyed by
+        // label. Option and field labels are unique within a contest (Manifest.Validate).
         Contests = _manifest.Contests
             .ToDictionary(x => x.Id, x => new EncryptedAggregateContest
             {
                 ContestId = x.Id,
-                MaximumOptionValue = MaximumOptionValue(x),
-                Choices = x.Choices.ToDictionary(ch => ch.Id, ch => new EncryptedAggregateChoice
+                Choices = x.VerifiableFields().ToDictionary(ch => ch.Id, ch => new EncryptedAggregateChoice
                 {
                     ChoiceId = ch.Id,
+                    MaximumValue = MaximumOptionValue(x, ch),
                     // ElGamal ciphertext multiplicative identity (alpha=1, beta=1), not the additive
                     // identity 0 -- so an aggregate with zero ballots added decrypts to vote count 0
                     // instead of failing TallyAdmin's discrete-log search.
@@ -93,27 +97,37 @@ public class EncryptedTally
         foreach(var contest in encryptedBallot.Contests)
         {
             var aggregateContest = Contests[contest.Id];
-            long maximumOptionContribution = (long)encryptedBallot.Weight * aggregateContest.MaximumOptionValue;
             foreach(var choice in contest.Choices)
             {
-                var aggregateChoice = aggregateContest.Choices[choice.ChoiceId];
-                aggregateChoice.MaximumCount += maximumOptionContribution;
+                Add(aggregateContest.Choices[choice.ChoiceId], choice, encryptedBallot.Weight);
+            }
 
-                if(encryptedBallot.Weight > 1)
-                {
-                    // A ballot weight is a small public integer, not a nonce, so it is raised with a
-                    // window that walks only the weight's own bits rather than the full width of Z_q.
-                    aggregateChoice.AProduct.MultiplyPower(choice.Alpha, encryptedBallot.Weight);
-                    aggregateChoice.BProduct.MultiplyPower(choice.Beta, encryptedBallot.Weight);
-                }
-                else
-                {
-                    aggregateChoice.AProduct.Multiply(choice.Alpha);
-                    aggregateChoice.BProduct.Multiply(choice.Beta);
-                }
+            // The supplemental fields are aggregated exactly as options are (G29), so their totals
+            // are decrypted and verified with the options'.
+            foreach (var field in contest.SupplementalFields)
+            {
+                Add(aggregateContest.Choices[field.FieldId], field, encryptedBallot.Weight);
             }
         }
         BallotsCast++;
+    }
+
+    private static void Add(EncryptedAggregateChoice aggregateChoice, EncryptedValueWithProofs value, int weight)
+    {
+        aggregateChoice.MaximumCount += (long)weight * aggregateChoice.MaximumValue;
+
+        if (weight > 1)
+        {
+            // A ballot weight is a small public integer, not a nonce, so it is raised with a
+            // window that walks only the weight's own bits rather than the full width of Z_q.
+            aggregateChoice.AProduct.MultiplyPower(value.Alpha, weight);
+            aggregateChoice.BProduct.MultiplyPower(value.Beta, weight);
+        }
+        else
+        {
+            aggregateChoice.AProduct.Multiply(value.Alpha);
+            aggregateChoice.BProduct.Multiply(value.Beta);
+        }
     }
 
     /// <summary>
@@ -238,38 +252,48 @@ public class EncryptedTally
     }
 
     /// <summary>
-    /// The most one cast ballot of weight 1 can add to one option's count in
-    /// <paramref name="contest"/>: an option takes at most R = <see cref="Contest.OptionSelectionLimit"/>
+    /// The most one cast ballot of weight 1 can add to the count of <paramref name="field"/>, a
+    /// verifiable field of <paramref name="contest"/>:
+    /// <list type="bullet">
+    /// <item>A selectable option takes at most R = <see cref="Contest.OptionSelectionLimit"/>
     /// (§3.3.7) and all options together at most L = <see cref="Contest.SelectionLimit"/>, so
-    /// min(R, L). (A total above L is an overvote, which the encryptor turns into all zeros; a
-    /// ballot whose option value exceeds this cannot carry valid range proofs.)
-    ///
-    /// Stage S5 adds the supplemental fields (overvote, null vote, undervote and write-in counts) as
-    /// options with bounds of their own (1 for an indicator, L for the undervote difference count,
-    /// the number of write-in fields for the write-in count); their bound belongs here, per option.
+    /// min(R, L). A sum above L, or one option above R, is an overvote, which the encryptor turns
+    /// into all zeros (§3.3.5); with L = 1 and R = 2, say, a 2 is an overvote and the bound is 1.
+    /// A ballot whose option exceeds min(R, L) cannot carry a valid selection-limit proof.</item>
+    /// <item>A supplemental field takes at most its range bound (§3.3.9): 1 for an indicator, L for
+    /// the undervote difference count, the number of write-in fields for the write-in count.</item>
+    /// </list>
     /// </summary>
-    internal static int MaximumOptionValue(Contest contest)
+    internal static int MaximumOptionValue(Contest contest, Choice field)
     {
-        return Math.Max(0, Math.Min(contest.OptionSelectionLimit, contest.SelectionLimit));
+        return field is SupplementalField
+            ? Math.Max(0, contest.RangeBound(field))
+            : Math.Max(0, Math.Min(contest.OptionSelectionLimit, contest.SelectionLimit));
     }
 
     public class EncryptedAggregateContest
     {
         public required string ContestId { get; init; }
-        public required Dictionary<string, EncryptedAggregateChoice> Choices { get; init; }
 
-        /// <summary>See <see cref="EncryptedTally.MaximumOptionValue"/>.</summary>
-        internal int MaximumOptionValue { get; init; }
+        /// <summary>
+        /// One aggregate per verifiable field, keyed by label: the selectable options and the
+        /// supplemental fields the manifest declares for the contest.
+        /// </summary>
+        public required Dictionary<string, EncryptedAggregateChoice> Choices { get; init; }
     }
 
     public class EncryptedAggregateChoice
     {
         public required string ChoiceId { get; init; }
 
+        /// <summary>The most one cast ballot of weight 1 adds to this count; see <see cref="EncryptedTally.MaximumOptionValue"/>.</summary>
+        internal int MaximumValue { get; init; }
+
         /// <summary>
         /// The largest count this choice's aggregate can encrypt: the sum, over the cast ballots added,
-        /// of the ballot's weight W (eq. 80) times the most one ballot can give the option,
-        /// min(R, L). Tally decryption searches [0, this] for the count (§3.6.2); the number of
+        /// of the ballot's weight W (eq. 80) times the most one ballot can give the option or field
+        /// (<see cref="MaximumValue"/>: min(R, L) for an option; 1, L or the number of write-in
+        /// fields for a supplemental field). Tally decryption searches [0, this] for the count (§3.6.2); the number of
         /// ballots cast, which it used to search, is too small once a weight or R exceeds 1 (G16).
         /// Public, since a decrypting administrator reads it, but not a verified value: nothing in
         /// Verifications 9 to 11 depends on it. Only <see cref="AddBallot"/> and

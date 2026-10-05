@@ -92,41 +92,74 @@ public sealed class BallotGenerator
     {
         var roll = random.Next(100);
 
-        bool isOvervote = _manifest.IncludeOvervotes && roll < OvervoteThreshold;
+        // Overvotes and undervotes are things voters do whatever the manifest records about them, so
+        // they are generated for every contest; write-ins only where the contest offers write-in
+        // fields.
+        bool isOvervote = roll < OvervoteThreshold;
         int numUndervotes = 0;
         int numWriteIns = 0;
 
-        if (!isOvervote && _manifest.IncludeUndervotes && roll < UndervoteThreshold)
+        if (!isOvervote && roll < UndervoteThreshold)
         {
             numUndervotes = random.Next(1, contest.SelectionLimit + 1);
         }
-        else if (!isOvervote && _manifest.IncludeWriteins && roll < WriteInThreshold)
+        else if (!isOvervote && contest.WriteInFieldCount > 0 && roll < WriteInThreshold)
         {
-            numWriteIns = contest.SelectionLimit;
+            numWriteIns = random.Next(1, contest.WriteInFieldCount + 1);
         }
 
-        var selected = new HashSet<string>();
+        var values = new Dictionary<string, int>();
 
         if (isOvervote)
         {
-            // Mark every choice. This is a genuine overvote only when SelectionLimit *
-            // OptionSelectionLimit < Choices.Count; otherwise marking every choice does not exceed
-            // the limit and this produces an ordinary max-selection ballot instead. Either way,
-            // BallotEncryptor and ExpectedTallyAccumulator apply the identical formula to decide
-            // whether it's an overvote, so there's nothing to special-case here.
-            foreach (var choice in contest.Choices)
+            // Half the overvoted contests that offer write-in fields use some too, so the gate sees
+            // what an overvote does to the write-in count (zeroed whether or not it counts toward
+            // the limit; open user question 1, option (a)).
+            if (contest.WriteInFieldCount > 0 && random.Next(2) == 0)
             {
-                selected.Add(choice.Id);
+                numWriteIns = random.Next(1, contest.WriteInFieldCount + 1);
+            }
+
+            if (contest.OptionSelectionLimit > 1 && random.Next(2) == 0)
+            {
+                // One option above its option selection limit R: an overvote of its own (§3.3.5),
+                // whether or not the contest's total also exceeds L.
+                values[contest.Choices[random.Next(contest.Choices.Count)].Id] = contest.OptionSelectionLimit + 1;
+            }
+            else
+            {
+                // Mark every choice. This is a genuine overvote only when the contest's choices
+                // outnumber its selection limit; otherwise it is an ordinary maximal ballot.
+                // BallotEncryptor and ExpectedTallyAccumulator each decide which, so there is nothing
+                // to special-case here.
+                foreach (var choice in contest.Choices)
+                {
+                    values[choice.Id] = 1;
+                }
             }
         }
         else
         {
+            // Spend `remaining` units of the selection limit on the options, at most R on any one.
+            // With R = 1 this marks `remaining` distinct choices.
+            int capacity = contest.Choices.Count * Math.Max(1, contest.OptionSelectionLimit);
             int remaining = Math.Max(0, contest.SelectionLimit - numUndervotes - numWriteIns);
-            remaining = Math.Min(remaining, contest.Choices.Count);
+            remaining = Math.Min(remaining, capacity);
 
-            while (selected.Count < remaining)
+            while (remaining > 0)
             {
-                selected.Add(contest.Choices[random.Next(contest.Choices.Count)].Id);
+                var choiceId = contest.Choices[random.Next(contest.Choices.Count)].Id;
+                values.TryGetValue(choiceId, out int current);
+                if (current >= contest.OptionSelectionLimit)
+                {
+                    continue;
+                }
+
+                int add = contest.OptionSelectionLimit == 1
+                    ? 1
+                    : random.Next(1, Math.Min(contest.OptionSelectionLimit - current, remaining) + 1);
+                values[choiceId] = current + add;
+                remaining -= add;
             }
         }
 
@@ -134,7 +167,7 @@ public sealed class BallotGenerator
             .Select(choice => new BallotChoice
             {
                 Id = choice.Id,
-                SelectionValue = selected.Contains(choice.Id) ? 1 : 0,
+                SelectionValue = values.TryGetValue(choice.Id, out int value) ? value : 0,
             })
             .ToList();
 

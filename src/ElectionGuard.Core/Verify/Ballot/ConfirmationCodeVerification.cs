@@ -36,11 +36,7 @@ public class ConfirmationCodeVerification
             var calculatedContestHash = new ContestHash(
                 ballot.SelectionEncryptionIdentifierHash,
                 manifestContest.Index,
-                InManifestOrder(contest.Choices, manifestContest),
-                contest.OvervoteCount,
-                contest.NullvoteCount,
-                contest.UndervoteCount,
-                contest.WriteInVoteCount,
+                VerifiableFieldsInManifestOrder(contest, manifestContest),
                 contest.ContestData);
 
             if (calculatedContestHash != contest.ContestHash)
@@ -94,24 +90,39 @@ public class ConfirmationCodeVerification
     }
 
     /// <summary>
-    /// A contest's selections in manifest option-index order (eq. 70): the stored list itself when it
-    /// is already in that order, otherwise a sorted copy. (BallotStructure has already required
-    /// exactly the manifest's options, each once; an unknown label would sort last.)
+    /// Every verifiable field of the contest in manifest option-index order (eq. 70): its selections,
+    /// then its supplemental fields, each list as stored when it is already in manifest order and
+    /// sorted otherwise. (BallotStructure has already required exactly the manifest's options and
+    /// declared fields, each once; an unknown label would sort last.)
     /// </summary>
-    private static IEnumerable<EncryptedSelection> InManifestOrder(List<EncryptedSelection> choices, Contest manifestContest)
+    private static List<EncryptedValueWithProofs> VerifiableFieldsInManifestOrder(EncryptedContest contest, Contest manifestContest)
     {
-        bool inOrder = choices.Count == manifestContest.Choices.Count;
-        for (int i = 0; inOrder && i < choices.Count; i++)
+        var choices = contest.Choices;
+        var fields = contest.SupplementalFields;
+        var ordered = new List<EncryptedValueWithProofs>(choices.Count + fields.Count);
+
+        bool choicesInOrder = choices.Count == manifestContest.Choices.Count;
+        for (int i = 0; choicesInOrder && i < choices.Count; i++)
         {
-            inOrder = choices[i].ChoiceId == manifestContest.Choices[i].Id;
+            choicesInOrder = choices[i].ChoiceId == manifestContest.Choices[i].Id;
         }
 
-        if (inOrder)
+        ordered.AddRange(choicesInOrder
+            ? choices
+            : choices.OrderBy(choice => manifestContest.Choices.FirstOrDefault(x => x.Id == choice.ChoiceId)?.Index ?? int.MaxValue));
+
+        var declared = manifestContest.SupplementalFields;
+        bool fieldsInOrder = fields.Count == declared.Count;
+        for (int i = 0; fieldsInOrder && i < fields.Count; i++)
         {
-            return choices;
+            fieldsInOrder = fields[i].FieldId == declared[i].Id;
         }
 
-        return choices.OrderBy(choice => manifestContest.Choices.FirstOrDefault(x => x.Id == choice.ChoiceId)?.Index ?? int.MaxValue);
+        ordered.AddRange(fieldsInOrder
+            ? fields
+            : fields.OrderBy(field => declared.FirstOrDefault(x => x.Id == field.FieldId)?.Index ?? int.MaxValue));
+
+        return ordered;
     }
 
     // TODO: Verify device information 8 C, F, and G.

@@ -125,10 +125,10 @@ public class JsonEncryptedBallotSerializerTests
         var originalContest = original.Contests.Single();
         var resultContest = result.Contests.Single();
 
-        AssertEncryptedValueWithProofsEqual(originalContest.OvervoteCount, resultContest.OvervoteCount);
-        AssertEncryptedValueWithProofsEqual(originalContest.NullvoteCount, resultContest.NullvoteCount);
-        AssertEncryptedValueWithProofsEqual(originalContest.UndervoteCount, resultContest.UndervoteCount);
-        AssertEncryptedValueWithProofsEqual(originalContest.WriteInVoteCount, resultContest.WriteInVoteCount);
+        AssertEncryptedValueWithProofsEqual(originalContest.Field(SupplementalFieldKind.OvervoteIndicator), resultContest.Field(SupplementalFieldKind.OvervoteIndicator));
+        AssertEncryptedValueWithProofsEqual(originalContest.Field(SupplementalFieldKind.NullVoteIndicator), resultContest.Field(SupplementalFieldKind.NullVoteIndicator));
+        AssertEncryptedValueWithProofsEqual(originalContest.Field(SupplementalFieldKind.UndervoteDifferenceCount), resultContest.Field(SupplementalFieldKind.UndervoteDifferenceCount));
+        AssertEncryptedValueWithProofsEqual(originalContest.Field(SupplementalFieldKind.WriteInCount), resultContest.Field(SupplementalFieldKind.WriteInCount));
     }
 
     [Fact]
@@ -171,16 +171,16 @@ public class JsonEncryptedBallotSerializerTests
         var original = BuildRichEncryptedBallot();
         var originalContest = original.Contests.Single();
         Assert.NotNull(originalContest.Choices.First().EncryptionNonce);
-        Assert.NotNull(originalContest.OvervoteCount.EncryptionNonce);
+        Assert.NotNull(originalContest.Field(SupplementalFieldKind.OvervoteIndicator).EncryptionNonce);
 
         var result = RoundTrip(original);
 
         var resultContest = result.Contests.Single();
         Assert.All(resultContest.Choices, s => Assert.Null(s.EncryptionNonce));
-        Assert.Null(resultContest.OvervoteCount.EncryptionNonce);
-        Assert.Null(resultContest.NullvoteCount.EncryptionNonce);
-        Assert.Null(resultContest.UndervoteCount.EncryptionNonce);
-        Assert.Null(resultContest.WriteInVoteCount.EncryptionNonce);
+        Assert.Null(resultContest.Field(SupplementalFieldKind.OvervoteIndicator).EncryptionNonce);
+        Assert.Null(resultContest.Field(SupplementalFieldKind.NullVoteIndicator).EncryptionNonce);
+        Assert.Null(resultContest.Field(SupplementalFieldKind.UndervoteDifferenceCount).EncryptionNonce);
+        Assert.Null(resultContest.Field(SupplementalFieldKind.WriteInCount).EncryptionNonce);
     }
 
     [Fact]

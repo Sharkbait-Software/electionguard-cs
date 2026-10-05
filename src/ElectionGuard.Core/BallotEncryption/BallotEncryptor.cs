@@ -142,23 +142,23 @@ public class BallotEncryptor
                 throw new InvalidBallotException($"Contest with id {contest.Id} did not provide all choice selections from the manifest.");
             }
 
-            // All options for each contest have a selectionValue within the expected limits.
+            // §3.1.3: a selection is a value in {0, 1, ..., R}. A value above R is not refused: it
+            // overvotes the contest (§3.3.5, §3.1.3 p.18 "treated analogously to a contest
+            // overvote"), which EncryptContest neutralizes. A negative value is no selection at all.
             foreach(var choice in contest.Choices)
             {
-                var manifestChoice = manifestContest.Choices.Single(x => x.Id == choice.Id);
-                if(choice.SelectionValue < 0 || choice.SelectionValue > manifestContest.OptionSelectionLimit)
+                if(choice.SelectionValue < 0)
                 {
-                    throw new InvalidBallotException($"Choice for id {choice.Id} exceeds option selection limit.");
+                    throw new InvalidBallotException($"Choice for id {choice.Id} has negative selection value {choice.SelectionValue}.");
                 }
             }
 
-            // This doesn't work with overvotes
-            // Each contest has an allowed number of selections.
-            //var numberOfSelections = contest.Choices.Where(x => x.SelectionValue > 0).Count();
-            //if(numberOfSelections > manifestContest.SelectionLimit)
-            //{
-            //    throw new Exception($"Contest with id {contest.Id} has selections that exceed the contest selection limit.");
-            //}
+            // §3.3.9 p.39: the write-in count lies between zero and the number of write-in fields
+            // the contest offers.
+            if (contest.NumWriteinsSelected < 0 || contest.NumWriteinsSelected > manifestContest.WriteInFieldCount)
+            {
+                throw new InvalidBallotException($"Contest with id {contest.Id} uses {contest.NumWriteinsSelected} write-in fields; it offers {manifestContest.WriteInFieldCount}.");
+            }
         }
 
         // All contests for the given ballot style are specified.
@@ -176,45 +176,193 @@ public class BallotEncryptor
         }
     }
 
+    /// <summary>
+    /// The value of a supplemental field of <paramref name="kind"/> (§3.3.9), from the contest's
+    /// (neutralized) sum of selections and number of write-ins:
+    /// <list type="bullet">
+    /// <item>Overvote indicator: 1 when the contest was overvoted (p.38).</item>
+    /// <item>Null-vote indicator: 1 when the sum is 0 and the contest was not overvoted (p.39 "When
+    /// all the selections are set to zero as a consequence of an overvote, the null vote indicator
+    /// should be set to zero"; user decision Q3).</item>
+    /// <item>Undervote indicator: 1 when the sum is below L (p.38).</item>
+    /// <item>Undervote difference count: L - sum (p.38: "the difference between the contest
+    /// selection limit ... and the undervote difference count exactly matches the sum").</item>
+    /// <item>Write-in count: the number of write-in fields used (p.39).</item>
+    /// </list>
+    /// On an overvote the sum is the neutralized sum, 0, so the undervote indicator is 1 and the
+    /// difference L.
+    /// <list type="bullet">
+    /// <item>The difference count has no other choice: L - sum is negative for the voter's
+    /// original sum, which no field can hold, and the implemented relation L - u = the sum the
+    /// selection-limit proof sees needs L.</item>
+    /// <item>The undervote indicator is where the spec contradicts itself. §3.1.3 p.18 and §3.3.9
+    /// p.38 define it by the voter's sum ("strictly less than the contest selection limit"), which
+    /// gives 0 on an overvote. p.38's disjunctive proof (indicator 0 and sum = L, or indicator 1 and
+    /// sum in 0..L-1) can only be satisfied with 1 on the neutralized selections. We follow the
+    /// proof, as p.39 shows happening to the null-vote indicator ("Providing such a proof forces
+    /// setting the null vote indicator to one for every overvote ballot as well") before overriding
+    /// it there ("should be set to zero"); p.38 gives no such override for the undervote indicator.
+    /// That proof is not implemented (Q2), and the indicator has only its 0..1 range proof, so 0
+    /// would verify too. The value moves published undervote totals, not bytes; it is open S5 user
+    /// question 4, and the tests that pin it are marked DECISION-DEPENDENT PIN.</item>
+    /// </list>
+    /// </summary>
+    private static int SupplementalValue(SupplementalFieldKind kind, int limit, int sum, int writeIns, bool isOvervote)
+    {
+        return kind switch
+        {
+            SupplementalFieldKind.OvervoteIndicator => isOvervote ? 1 : 0,
+            SupplementalFieldKind.NullVoteIndicator => !isOvervote && sum == 0 ? 1 : 0,
+            SupplementalFieldKind.UndervoteIndicator => sum < limit ? 1 : 0,
+            SupplementalFieldKind.UndervoteDifferenceCount => limit - sum,
+            SupplementalFieldKind.WriteInCount => writeIns,
+            _ => throw new InvalidManifestException($"Supplemental field kind {kind} is not a kind of §3.3.9."),
+        };
+    }
+
     private EncryptedContest EncryptContest(BallotContest contest, Contest manifestContest, SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, BallotNonce ballotNonce)
     {
-        var encryptedSelections = new List<EncryptedSelection>(manifestContest.Choices.Count);
-        var actualSelectionTotal = contest.Choices.Sum(x => x.SelectionValue);
-        var actualCountOfSelections = contest.Choices.Where(x => x.SelectionValue > 0).Count();
+        int limit = manifestContest.SelectionLimit;
+        int optionLimit = manifestContest.OptionSelectionLimit;
 
-        bool isOvervote = actualSelectionTotal > (manifestContest.SelectionLimit * manifestContest.OptionSelectionLimit);
-        bool isNullVote = contest.Choices.All(x => x.SelectionValue == 0);
-        int numUndervotes = Math.Max(0, manifestContest.SelectionLimit - actualCountOfSelections);
-        int numWriteins = contest.NumWriteinsSelected;
-
-
-        if (isOvervote)
-        {
-            // Overvote. Per spec, we encrypt values of 0.
-            foreach(var choice in contest.Choices)
-            {
-                choice.SelectionValue = 0;
-            }
-            actualSelectionTotal = 0;
-        }
-        
         // §3.4.1 eq. (70): the selections enter the contest hash in the order of the options in the
         // manifest, whatever order the plaintext contest lists them in, and the encrypted contest
         // lists them in that same order. Validate has already checked that the two sets are equal.
-        foreach (var manifestChoice in manifestContest.Choices)
+        var choicesInManifestOrder = new BallotChoice[manifestContest.Choices.Count];
+        for (int i = 0; i < choicesInManifestOrder.Length; i++)
         {
-            var choice = contest.Choices.Single(x => x.Id == manifestChoice.Id);
-            var encryptedSelection = EncryptSelection(manifestContest, manifestChoice, choice.SelectionValue, selectionEncryptionIdentifierHash, ballotNonce);
-            encryptedSelections.Add(encryptedSelection);
+            choicesInManifestOrder[i] = contest.Choices.Single(x => x.Id == manifestContest.Choices[i].Id);
         }
 
-        var encryptedAggregate = AggregateChoiceValues(encryptedSelections.Select(x => x.ToEncryptedValue()).ToList());
-        var proofs = GenerateProofs(actualSelectionTotal, manifestContest.SelectionLimit, encryptedAggregate, _encryptionRecord.ElectionPublicKeys, selectionEncryptionIdentifierHash, manifestContest.Index);
+        // The "sum of the selections" every rule below is about: the selectable options, plus the
+        // write-in count when the manifest says it counts toward the selection limit (§3.1.3 p.19,
+        // §3.3.9 p.39). Summed in long, so that no plaintext can wrap it below L.
+        var writeInField = manifestContest.SupplementalFieldOfKind(SupplementalFieldKind.WriteInCount);
+        bool writeInsCount = writeInField is not null && manifestContest.SelectionLimitWeight(writeInField) == 1;
+        int writeIns = contest.NumWriteinsSelected;
+        long sum = writeInsCount ? writeIns : 0;
+        bool anyOptionOverLimit = false;
+        foreach (var choice in choicesInManifestOrder)
+        {
+            sum += choice.SelectionValue;
+            anyOptionOverLimit |= choice.SelectionValue > optionLimit;
+        }
 
-        var overVoteCount = EncryptOptionalField(isOvervote ? 1 : 0, 1, manifestContest.Index, selectionEncryptionIdentifierHash, ballotNonce);
-        var nullVoteCount = EncryptOptionalField(isNullVote ? 1 : 0, 1, manifestContest.Index, selectionEncryptionIdentifierHash, ballotNonce);
-        var underVoteCount = EncryptOptionalField(numUndervotes, manifestContest.SelectionLimit, manifestContest.Index, selectionEncryptionIdentifierHash, ballotNonce);
-        var writeInVoteCount = EncryptOptionalField(numWriteins, manifestContest.SelectionLimit, manifestContest.Index, selectionEncryptionIdentifierHash, ballotNonce);
+        // §3.3.5 p.31, §3.1.3 pp.17-18, §3.3.9 p.38: the contest is overvoted when the sum exceeds the
+        // contest selection limit L, or when one option's value exceeds the option selection limit R.
+        // Then every selectable option is encrypted as 0 "to not affect the election tallies". The
+        // write-ins used go too: the contest's votes are invalid as a whole (p.31), and a counted
+        // write-in count left in place would make the selection-limit proof unprovable.
+        bool isOvervote = sum > limit || anyOptionOverLimit;
+        if (isOvervote)
+        {
+            foreach (var choice in choicesInManifestOrder)
+            {
+                choice.SelectionValue = 0;
+            }
+
+            writeIns = 0;
+            sum = 0;
+        }
+
+        int neutralizedSum = (int)sum;
+
+        // One encryption per selectable option, each with its own nonce xi_{i,j} (eq. 33) and range
+        // proof over 0..R (eqs. 57-61).
+        var encryptedSelections = new List<EncryptedSelection>(manifestContest.Choices.Count);
+        var limitAlpha = new ModPProduct(1);
+        var limitBeta = new ModPProduct(1);
+        IntegerModQ sumNonce = 0;
+        for (int i = 0; i < choicesInManifestOrder.Length; i++)
+        {
+            var manifestChoice = manifestContest.Choices[i];
+            var encryptedSelection = EncryptSelection(manifestContest, manifestChoice, choicesInManifestOrder[i].SelectionValue, selectionEncryptionIdentifierHash, ballotNonce);
+            encryptedSelections.Add(encryptedSelection);
+            limitAlpha.Multiply(encryptedSelection.Alpha);
+            limitBeta.Multiply(encryptedSelection.Beta);
+            sumNonce += encryptedSelection.EncryptionNonce!.Value;
+        }
+
+        // One encryption per declared supplemental field, in manifest order, under its own option
+        // index (§3.1.3 p.19: "treated like and listed with the option selection fields").
+        var encryptedFields = new List<EncryptedSupplementalField>(manifestContest.SupplementalFields.Count);
+        EncryptedSupplementalField? overvoteField = null;
+        EncryptedSupplementalField? undervoteDifferenceField = null;
+        foreach (var field in manifestContest.SupplementalFields)
+        {
+            int value = SupplementalValue(field.Kind, limit, neutralizedSum, writeIns, isOvervote);
+            var encryptedField = EncryptSupplementalField(manifestContest, field, value, selectionEncryptionIdentifierHash, ballotNonce);
+            encryptedFields.Add(encryptedField);
+
+            if (field.Kind == SupplementalFieldKind.OvervoteIndicator)
+            {
+                overvoteField = encryptedField;
+            }
+            else if (field.Kind == SupplementalFieldKind.UndervoteDifferenceCount)
+            {
+                undervoteDifferenceField = encryptedField;
+            }
+            else if (manifestContest.SelectionLimitWeight(field) == 1)
+            {
+                // A counted write-in count is part of the sum.
+                limitAlpha.Multiply(encryptedField.Alpha);
+                limitBeta.Multiply(encryptedField.Beta);
+                sumNonce += encryptedField.EncryptionNonce!.Value;
+            }
+        }
+
+        // The encryption of the sum, (prod alpha_i, prod beta_i) over the options and counted fields,
+        // with nonce sum xi_i. It is the aggregate of eq. (62) when no field counts.
+        var sumCiphertext = new EncryptedValue
+        {
+            Alpha = limitAlpha.Value,
+            Beta = limitBeta.Value,
+            EncryptionNonce = sumNonce,
+        };
+
+        // §3.3.8 eq. (62) and §3.3.9 p.39: the selection-limit proof shows that the sum plus L times
+        // the overvote indicator lies in 0..L (footnote 42: the indicator's ciphertext raised to L).
+        // The exponent L is a small public number, so it is raised with a window over its own bits.
+        var limitCiphertext = sumCiphertext;
+        int limitValue = neutralizedSum;
+        if (overvoteField is not null)
+        {
+            limitAlpha.MultiplyPower(overvoteField.Alpha, limit);
+            limitBeta.MultiplyPower(overvoteField.Beta, limit);
+            limitCiphertext = new EncryptedValue
+            {
+                Alpha = limitAlpha.Value,
+                Beta = limitBeta.Value,
+                EncryptionNonce = sumNonce + limit * overvoteField.EncryptionNonce!.Value,
+            };
+            limitValue += limit * (isOvervote ? 1 : 0);
+        }
+
+        var proofs = GenerateProofs(limitValue, 0, limit, limitCiphertext, _encryptionRecord.ElectionPublicKeys, selectionEncryptionIdentifierHash, manifestContest.Index, optionIndex: null);
+
+        // §3.3.9 p.38: L - u equals the sum, i.e. (sum ciphertext) * (u's ciphertext) encrypts exactly
+        // L. Proved with the range proof of eqs. (57)-(61) over the singleton set {L} (Note 3.4): one
+        // commitment (a, b) = (g^u, K^u), c = H_q(H_I; 0x24, ind_c, ind_o(u), alpha, beta, a, b) with
+        // (alpha, beta) the product ciphertext and ind_o(u) the undervote difference field's option
+        // index, c_L = c and v = u - c * xi. NOT spec-defined: §3.3.9 says such proofs "are not
+        // described in detail", so this challenge is this implementation's own and is not
+        // interoperable.
+        ChallengeResponsePair[]? undervoteDifferenceProof = null;
+        if (undervoteDifferenceField is not null)
+        {
+            var undervoteDifferenceIndex = manifestContest.SupplementalFieldOfKind(SupplementalFieldKind.UndervoteDifferenceCount)!.Index;
+            var relationAlpha = new ModPProduct(sumCiphertext.Alpha);
+            var relationBeta = new ModPProduct(sumCiphertext.Beta);
+            relationAlpha.Multiply(undervoteDifferenceField.Alpha);
+            relationBeta.Multiply(undervoteDifferenceField.Beta);
+            var relationCiphertext = new EncryptedValue
+            {
+                Alpha = relationAlpha.Value,
+                Beta = relationBeta.Value,
+                EncryptionNonce = sumNonce + undervoteDifferenceField.EncryptionNonce!.Value,
+            };
+            undervoteDifferenceProof = GenerateProofs(limit, limit, limit, relationCiphertext, _encryptionRecord.ElectionPublicKeys, selectionEncryptionIdentifierHash, manifestContest.Index, undervoteDifferenceIndex);
+        }
 
         EncryptedData? encryptedContestData = null;
         if(contest.ContestData != null)
@@ -222,24 +370,23 @@ public class BallotEncryptor
             encryptedContestData = EncryptContestData(contest.ContestData, manifestContest.Index, selectionEncryptionIdentifierHash, ballotNonce);
         }
 
-        var contestHash = new ContestHash(selectionEncryptionIdentifierHash, 
-            manifestContest.Index, 
-            encryptedSelections,
-            overVoteCount,
-            nullVoteCount,
-            underVoteCount,
-            writeInVoteCount,
+        // Eq. (70): every verifiable field in manifest order, the options and then the declared
+        // supplemental fields, and nothing else.
+        var verifiableFields = new List<EncryptedValueWithProofs>(encryptedSelections.Count + encryptedFields.Count);
+        verifiableFields.AddRange(encryptedSelections);
+        verifiableFields.AddRange(encryptedFields);
+        var contestHash = new ContestHash(selectionEncryptionIdentifierHash,
+            manifestContest.Index,
+            verifiableFields,
             encryptedContestData);
 
         var encryptedContest = new EncryptedContest
         {
             Id = contest.Id,
             Choices = encryptedSelections,
+            SupplementalFields = encryptedFields,
             Proofs = proofs,
-            OvervoteCount = overVoteCount,
-            NullvoteCount = nullVoteCount,
-            UndervoteCount = underVoteCount,
-            WriteInVoteCount = writeInVoteCount,
+            UndervoteDifferenceProof = undervoteDifferenceProof,
             ContestData = encryptedContestData,
             ContestHash = contestHash,
         };
@@ -250,7 +397,7 @@ public class BallotEncryptor
     private EncryptedSelection EncryptSelection(Contest contest, Choice choice, int selectionValue, SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, BallotNonce ballotNonce)
     {
         var encryptedValue = EncryptContestValue(selectionValue, selectionEncryptionIdentifierHash, ballotNonce, contest.Index, choice.Index);
-        var proofs = GenerateProofs(selectionValue, contest.OptionSelectionLimit, encryptedValue, _encryptionRecord.ElectionPublicKeys, selectionEncryptionIdentifierHash, contest.Index, choice.Index);
+        var proofs = GenerateProofs(selectionValue, 0, contest.OptionSelectionLimit, encryptedValue, _encryptionRecord.ElectionPublicKeys, selectionEncryptionIdentifierHash, contest.Index, choice.Index);
 
         var selection = new EncryptedSelection
         {
@@ -263,17 +410,24 @@ public class BallotEncryptor
 
         // In theory we can decrypt this value with the encryption nonce if we have encrypted it properly.
         // See 3.3.1
-        
+
         return selection;
     }
 
-    private EncryptedValueWithProofs EncryptOptionalField(int selectionValue, int maxValue, int contestIndex, SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, BallotNonce ballotNonce)
+    /// <summary>
+    /// A supplemental field is encrypted exactly as an option is: nonce xi_{i,j} with its own option
+    /// index j (eq. 33), and a range proof over 0..its bound (eqs. 57-61) whose challenge hashes j
+    /// (eq. 59). The bound is 1 for an indicator, L for the undervote difference count and the
+    /// number of write-in fields for the write-in count (§3.3.9; user decision Q2).
+    /// </summary>
+    private EncryptedSupplementalField EncryptSupplementalField(Contest contest, SupplementalField field, int value, SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, BallotNonce ballotNonce)
     {
-        var encryptedValue = EncryptContestValue(selectionValue, selectionEncryptionIdentifierHash, ballotNonce, contestIndex);
-        var proofs = GenerateProofs(selectionValue, maxValue, encryptedValue, _encryptionRecord.ElectionPublicKeys, selectionEncryptionIdentifierHash, contestIndex);
+        var encryptedValue = EncryptContestValue(value, selectionEncryptionIdentifierHash, ballotNonce, contest.Index, field.Index);
+        var proofs = GenerateProofs(value, 0, contest.RangeBound(field), encryptedValue, _encryptionRecord.ElectionPublicKeys, selectionEncryptionIdentifierHash, contest.Index, field.Index);
 
-        return new EncryptedValueWithProofs
+        return new EncryptedSupplementalField
         {
+            FieldId = field.Id,
             Alpha = encryptedValue.Alpha,
             Beta = encryptedValue.Beta,
             EncryptionNonce = encryptedValue.EncryptionNonce,
@@ -281,9 +435,9 @@ public class BallotEncryptor
         };
     }
 
-    private EncryptedValue EncryptContestValue(int valueToEncrypt, SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, BallotNonce ballotNonce, int contestIndex, int? choiceIndex = null)
+    private EncryptedValue EncryptContestValue(int valueToEncrypt, SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, BallotNonce ballotNonce, int contestIndex, int optionIndex)
     {
-        IntegerModQ encryptionNonce = new EncryptionNonce(selectionEncryptionIdentifierHash, ballotNonce, contestIndex, choiceIndex);
+        IntegerModQ encryptionNonce = new EncryptionNonce(selectionEncryptionIdentifierHash, ballotNonce, contestIndex, optionIndex);
         var alpha = MontgomeryModP.PowModP(EGParameters.G, encryptionNonce);
         var beta = MontgomeryModP.PowModP(_encryptionRecord.ElectionPublicKeys.VoteEncryptionKey, encryptionNonce + valueToEncrypt);
         return new EncryptedValue
@@ -294,32 +448,28 @@ public class BallotEncryptor
         };
     }
 
-    private EncryptedValue AggregateChoiceValues(List<EncryptedValue> encryptedSelections)
-    {
-        var alpha = encryptedSelections.Select(x => x.Alpha).Product();
-        var beta = encryptedSelections.Select(x => x.Beta).Product();
-        var aggregateEncryptionNonce = encryptedSelections.Select(x => x.EncryptionNonce!.Value).Sum();
-
-        return new EncryptedValue
-        {
-            Alpha = alpha,
-            Beta = beta,
-            EncryptionNonce = aggregateEncryptionNonce,
-        };
-    }
-
+    /// <summary>
+    /// The disjunctive Chaum-Pedersen range proof of §3.3.7 (eqs. 57-61) that
+    /// <paramref name="encryptedValue"/> encrypts <paramref name="valueToEncrypt"/>, one of the
+    /// values <paramref name="firstValue"/>..<paramref name="lastValue"/>. The challenge is
+    /// c = H_q(H_I; 0x24, ind_c, [ind_o,] alpha, beta, a_first, b_first, ..., a_last, b_last): eq. (59)
+    /// with an option index, eq. (62) without one (the contest selection-limit proof).
+    /// <paramref name="firstValue"/> is 0 except for the one-value proof of the undervote difference
+    /// relation (Note 3.4).
+    /// </summary>
     private ChallengeResponsePair[] GenerateProofs(
-        int valueToEncrypt, 
-        int selectionLimit,
+        int valueToEncrypt,
+        int firstValue,
+        int lastValue,
         EncryptedValue encryptedValue,
         ElectionPublicKeys electionPublicKeys,
-        SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, 
-        int contestIndex, 
-        int? choiceIndex = null)
+        SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash,
+        int contestIndex,
+        int? optionIndex)
     {
         List<(IntegerModQ u, IntegerModP a, IntegerModP b, IntegerModQ? cj)> commitments = new();
 
-        for (int i = 0; i <= selectionLimit; i++)
+        for (int i = firstValue; i <= lastValue; i++)
         {
             var keyPair = KeyPair.GenerateRandom();
             IntegerModQ u = keyPair.SecretKey;
@@ -344,9 +494,9 @@ public class BallotEncryptor
             [0x24],
             contestIndex.ToByteArray()];
 
-        if(choiceIndex != null)
+        if(optionIndex != null)
         {
-            bytesToHash.Add(choiceIndex.Value.ToByteArray());
+            bytesToHash.Add(optionIndex.Value.ToByteArray());
         }
 
         bytesToHash.AddRange([

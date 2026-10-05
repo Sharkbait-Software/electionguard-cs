@@ -212,6 +212,18 @@ public class StrictDecodingTests
         _ => throw new ArgumentOutOfRangeException(nameof(component)),
     };
 
+    /// <summary>The contest with its supplemental field of <paramref name="kind"/> made non-canonical at <paramref name="component"/>.</summary>
+    private static ProtobufEncryptedContest WithField(ProtobufEncryptedContest contest, SupplementalFieldKind kind, string component)
+    {
+        var id = ElectionFixtureBuilder.SupplementalFieldId(kind);
+        return contest with
+        {
+            SupplementalFields = contest.SupplementalFields!
+                .Select(field => field.FieldId == id ? (ProtobufEncryptedSupplementalField)WithComponent(field, component) : field)
+                .ToList(),
+        };
+    }
+
     private static ProtobufEncryptedBallot WithFirstContest(ProtobufEncryptedBallot dto, Func<ProtobufEncryptedContest, ProtobufEncryptedContest> change)
     {
         dto.Contests[0] = change(dto.Contests[0]);
@@ -258,16 +270,23 @@ public class StrictDecodingTests
             ["contest proof response = q"] = dto => WithFirstContest(dto, c => c with { Proofs = WithFirstProof(c.Proofs, p => p with { Response = NotBelowQ }) }),
             ["contest data challenge = q"] = dto => WithFirstContest(dto, c => c with { ContestData = WithContestData(c.ContestData!, challenge: NotBelowQ) }),
             ["contest data response = q"] = dto => WithFirstContest(dto, c => c with { ContestData = WithContestData(c.ContestData!, response: NotBelowQ) }),
+            ["undervote difference proof challenge = q"] = dto => WithFirstContest(dto, c => c with { UndervoteDifferenceProof = WithFirstProof(c.UndervoteDifferenceProof!, p => p with { Challenge = NotBelowQ }) }),
+            ["undervote difference proof response = q"] = dto => WithFirstContest(dto, c => c with { UndervoteDifferenceProof = WithFirstProof(c.UndervoteDifferenceProof!, p => p with { Response = NotBelowQ }) }),
+            ["supplemental field alpha padded to 513 bytes"] = dto => WithFirstContest(dto, c => c with
+            {
+                SupplementalFields = [c.SupplementalFields![0] with { Alpha = [0, .. c.SupplementalFields[0].Alpha] }, .. c.SupplementalFields.Skip(1)],
+            }),
         };
 
         foreach (var component in new[] { "alpha", "beta", "proof challenge", "proof response" })
         {
             string bound = component is "alpha" or "beta" ? "p" : "q";
             sites[$"selection {component} = {bound}"] = dto => WithFirstSelection(dto, s => (ProtobufEncryptedSelection)WithComponent(s, component));
-            sites[$"overvote {component} = {bound}"] = dto => WithFirstContest(dto, c => c with { OvervoteCount = WithComponent(c.OvervoteCount, component) });
-            sites[$"nullvote {component} = {bound}"] = dto => WithFirstContest(dto, c => c with { NullvoteCount = WithComponent(c.NullvoteCount, component) });
-            sites[$"undervote {component} = {bound}"] = dto => WithFirstContest(dto, c => c with { UndervoteCount = WithComponent(c.UndervoteCount, component) });
-            sites[$"write-in {component} = {bound}"] = dto => WithFirstContest(dto, c => c with { WriteInVoteCount = WithComponent(c.WriteInVoteCount, component) });
+            sites[$"overvote {component} = {bound}"] = dto => WithFirstContest(dto, c => WithField(c, SupplementalFieldKind.OvervoteIndicator, component));
+            sites[$"nullvote {component} = {bound}"] = dto => WithFirstContest(dto, c => WithField(c, SupplementalFieldKind.NullVoteIndicator, component));
+            sites[$"undervote {component} = {bound}"] = dto => WithFirstContest(dto, c => WithField(c, SupplementalFieldKind.UndervoteDifferenceCount, component));
+            sites[$"undervote indicator {component} = {bound}"] = dto => WithFirstContest(dto, c => WithField(c, SupplementalFieldKind.UndervoteIndicator, component));
+            sites[$"write-in {component} = {bound}"] = dto => WithFirstContest(dto, c => WithField(c, SupplementalFieldKind.WriteInCount, component));
         }
 
         return sites;
@@ -304,8 +323,10 @@ public class StrictDecodingTests
         Assert.NotEmpty(contest.Choices[0].Proofs);
         Assert.NotEmpty(contest.Proofs);
         Assert.All(
-            new[] { contest.OvervoteCount, contest.NullvoteCount, contest.UndervoteCount, contest.WriteInVoteCount },
+            ElectionFixtureBuilder.AllSupplementalFields
+                .Select(kind => contest.SupplementalFields!.Single(field => field.FieldId == ElectionFixtureBuilder.SupplementalFieldId(kind))),
             value => Assert.NotEmpty(value.Proofs));
+        Assert.NotEmpty(contest.UndervoteDifferenceProof!);
 
         // The untampered encoding decodes.
         original.Position = 0;

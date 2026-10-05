@@ -301,6 +301,9 @@ public class BallotPreEncryptorTests
         var oversized = template with
         {
             Choices = Enumerable.Range(0, 256).Select(i => new Choice { Id = $"choice-{i}", Name = $"Choice {i}", Index = i + 1 }).ToList(),
+            // Pre-encrypted ballots have no supplemental fields (§4.1); declaring none keeps the
+            // manifest valid with 256 options, so the short-code limit is what fails.
+            SupplementalFields = [],
         };
         var manifest = record.Manifest with { Contests = [oversized] };
 

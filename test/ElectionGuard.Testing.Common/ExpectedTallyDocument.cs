@@ -10,6 +10,7 @@ namespace ElectionGuard.Testing.Common;
 ///       "overvotes": 0,
 ///       "nullvotes": 0,
 ///       "undervotes": 0,
+///       "undervoteDifference": 0,
 ///       "writeIns": 0,
 ///       "choices": { "&lt;choiceId&gt;": 0 }
 ///     }
@@ -40,6 +41,7 @@ public sealed class ExpectedContestDocument
     public required int Overvotes { get; init; }
     public required int Nullvotes { get; init; }
     public required int Undervotes { get; init; }
+    public required int UndervoteDifference { get; init; }
     public required int WriteIns { get; init; }
     public required Dictionary<string, int> Choices { get; init; }
 
@@ -51,6 +53,7 @@ public sealed class ExpectedContestDocument
             Overvotes = counters.Overvotes,
             Nullvotes = counters.Nullvotes,
             Undervotes = counters.Undervotes,
+            UndervoteDifference = counters.UndervoteDifference,
             WriteIns = counters.WriteIns,
             Choices = tally.ChoiceIds(contestId).ToDictionary(
                 choiceId => choiceId,

@@ -137,8 +137,9 @@ public class BallotAggregationVerifier
 
         var manifest = _expected.Manifest;
 
-        // The keys first, both ways: every manifest option must be in the claimed tally, and the
-        // claimed tally may hold nothing else.
+        // The keys first, both ways: every manifest option, and every supplemental field the
+        // manifest declares (§3.1.3 p.19: they are listed with the options), must be in the claimed
+        // tally, and the claimed tally may hold nothing else.
         foreach (var contest in manifest.Contests)
         {
             if (!encryptedTally.Contests.TryGetValue(contest.Id, out var claimedContest))
@@ -146,7 +147,7 @@ public class BallotAggregationVerifier
                 throw new VerificationFailedException("9.structure", $"Ballot aggregation verification failed: the tally has no aggregate for manifest contest {contest.Id}.");
             }
 
-            foreach (var choice in contest.Choices)
+            foreach (var choice in contest.VerifiableFields())
             {
                 if (!claimedContest.Choices.ContainsKey(choice.Id))
                 {
@@ -154,9 +155,9 @@ public class BallotAggregationVerifier
                 }
             }
 
-            if (claimedContest.Choices.Count != contest.Choices.Count)
+            if (claimedContest.Choices.Count != contest.VerifiableFieldCount())
             {
-                var extra = claimedContest.Choices.Keys.First(id => !contest.Choices.Any(choice => choice.Id == id));
+                var extra = claimedContest.Choices.Keys.First(id => !contest.VerifiableFields().Any(choice => choice.Id == id));
                 throw new VerificationFailedException("9.structure", $"Ballot aggregation verification failed: the tally has an aggregate for option {extra} of contest {contest.Id}, which the manifest does not list.");
             }
         }
@@ -171,7 +172,7 @@ public class BallotAggregationVerifier
         {
             var expectedContest = _expected.Contests[contest.Id];
             var claimedContest = encryptedTally.Contests[contest.Id];
-            foreach (var choice in contest.Choices)
+            foreach (var choice in contest.VerifiableFields())
             {
                 var expectedChoice = expectedContest.Choices[choice.Id];
                 var claimedChoice = claimedContest.Choices[choice.Id];

@@ -536,12 +536,14 @@ internal sealed record TallyOption(string ContestId, string ChoiceId, int Contes
         foreach (var contest in manifest.Contests)
         {
             if (!encryptedTally.Contests.TryGetValue(contest.Id, out var aggregateContest)
-                || aggregateContest.Choices.Count != contest.Choices.Count)
+                || aggregateContest.Choices.Count != contest.VerifiableFieldCount())
             {
                 throw new ArgumentException($"The tally's options for contest {contest.Id} are not the manifest's.", nameof(encryptedTally));
             }
 
-            foreach (var choice in contest.Choices)
+            // Every verifiable field: the options, then the declared supplemental fields (§3.3.9),
+            // each decrypted with its own proof under its own option index.
+            foreach (var choice in contest.VerifiableFields())
             {
                 if (!aggregateContest.Choices.TryGetValue(choice.Id, out var aggregate))
                 {

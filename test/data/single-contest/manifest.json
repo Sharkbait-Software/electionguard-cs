@@ -1,10 +1,6 @@
 {
   "electionId": "perf-single-contest",
   "optionalContestDataMaxLength": 0,
-  "includeOvervotes": true,
-  "includeNullvotes": true,
-  "includeUndervotes": true,
-  "includeWriteins": true,
   "chainingMode": 0,
   "contests": [
     {
@@ -18,7 +14,15 @@
         { "id": "2", "name": "Choice Two", "index": 2 },
         { "id": "3", "name": "Choice Three", "index": 3 },
         { "id": "4", "name": "Choice Four", "index": 4 }
-      ]
+      ],
+      "supplementalFields": [
+        { "id": "overvotes", "name": "Overvotes", "index": 5, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
+        { "id": "null-votes", "name": "Null votes", "index": 6, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
+        { "id": "undervotes", "name": "Undervotes", "index": 7, "kind": "UndervoteIndicator", "countsTowardSelectionLimit": false },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 8, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
+        { "id": "write-ins", "name": "Write-ins", "index": 9, "kind": "WriteInCount", "countsTowardSelectionLimit": true }
+      ],
+      "writeInFieldCount": 1
     }
   ],
   "ballotStyles": [

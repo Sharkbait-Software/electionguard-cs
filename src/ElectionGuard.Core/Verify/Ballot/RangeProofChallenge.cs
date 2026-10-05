@@ -101,9 +101,27 @@ internal sealed class RangeProofChallenge
         IntegerModP beta,
         ReadOnlySpan<ChallengeResponsePair> proofs)
     {
+        return Compute(key, prefix, alpha, beta, proofs, firstValue: 0);
+    }
+
+    /// <summary>
+    /// <see cref="Compute(byte[], ReadOnlySpan{byte}, IntegerModP, IntegerModP, ReadOnlySpan{ChallengeResponsePair})"/>
+    /// for a proof over the consecutive values firstValue, firstValue + 1, ...: proof j stands for
+    /// the value firstValue + j, so w_j = v_j - (firstValue + j) * c_j. Note 3.4 allows a range proof
+    /// over any small set of values; a single proof with <paramref name="firstValue"/> = L proves
+    /// that (alpha, beta) encrypts exactly L.
+    /// </summary>
+    public IntegerModQ Compute(
+        byte[] key,
+        ReadOnlySpan<byte> prefix,
+        IntegerModP alpha,
+        IntegerModP beta,
+        ReadOnlySpan<ChallengeResponsePair> proofs,
+        int firstValue)
+    {
         return _engine is not null
-            ? Compute(new Avx512MontgomeryArithmetic(_engine), key, prefix, alpha, beta, proofs, checkMembership: false, out _)
-            : Compute(new ScalarMontgomeryArithmetic(_context), key, prefix, alpha, beta, proofs, checkMembership: false, out _);
+            ? Compute(new Avx512MontgomeryArithmetic(_engine), key, prefix, alpha, beta, proofs, firstValue, checkMembership: false, out _)
+            : Compute(new ScalarMontgomeryArithmetic(_context), key, prefix, alpha, beta, proofs, firstValue, checkMembership: false, out _);
     }
 
     /// <summary>
@@ -122,8 +140,8 @@ internal sealed class RangeProofChallenge
         out bool componentsAreMembers)
     {
         return _engine is not null
-            ? Compute(new Avx512MontgomeryArithmetic(_engine), key, prefix, alpha, beta, proofs, checkMembership: true, out componentsAreMembers)
-            : Compute(new ScalarMontgomeryArithmetic(_context), key, prefix, alpha, beta, proofs, checkMembership: true, out componentsAreMembers);
+            ? Compute(new Avx512MontgomeryArithmetic(_engine), key, prefix, alpha, beta, proofs, firstValue: 0, checkMembership: true, out componentsAreMembers)
+            : Compute(new ScalarMontgomeryArithmetic(_context), key, prefix, alpha, beta, proofs, firstValue: 0, checkMembership: true, out componentsAreMembers);
     }
 
     /// <summary>Whether the active q allows the membership-checking overload of Compute.</summary>
@@ -136,6 +154,7 @@ internal sealed class RangeProofChallenge
         IntegerModP alpha,
         IntegerModP beta,
         ReadOnlySpan<ChallengeResponsePair> proofs,
+        int firstValue,
         bool checkMembership,
         out bool componentsAreMembers)
         where TArithmetic : struct, IMontgomeryArithmetic
@@ -210,8 +229,8 @@ internal sealed class RangeProofChallenge
                 arithmetic.WriteBigEndian(product, message.Slice(offset, ModPBytes));
                 offset += ModPBytes;
 
-                // b_j = K^w_j * beta^c_j, w_j = v_j - j * c_j
-                IntegerModQ w = proof.Response - j * proof.Challenge;
+                // b_j = K^w_j * beta^c_j, w_j = v_j - j * c_j (the value of proof j is firstValue + j)
+                IntegerModQ w = proof.Response - (firstValue + j) * proof.Challenge;
                 FixedBasePow(arithmetic, _kTable, kMontgomery, w, exponentBytes, product);
                 arithmetic.Multiply(product, betaPowers.Slice(j * s, s), product);
                 arithmetic.WriteBigEndian(product, message.Slice(offset, ModPBytes));

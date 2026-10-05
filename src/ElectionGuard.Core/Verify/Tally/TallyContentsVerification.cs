@@ -48,15 +48,17 @@ public class TallyContentsVerification
             var contest = manifest.Contests.FirstOrDefault(x => x.Id == contestId)
                 ?? throw new VerificationFailedException("11.A", $"Tally contents verification failed: the tally's contest {contestId} is not a contest of the manifest.");
 
+            // "Option labels" include the supplemental fields the manifest declares for the contest
+            // (§3.1.3 p.19: they are listed with the options).
             foreach (var choiceId in decryptedContest.Choices.Keys)
             {
-                if (!contest.Choices.Any(x => x.Id == choiceId))
+                if (!contest.VerifiableFields().Any(x => x.Id == choiceId))
                 {
                     throw new VerificationFailedException("11.B", $"Tally contents verification failed: the tally's option {choiceId} is not an option of manifest contest {contestId}.");
                 }
             }
 
-            foreach (var choice in contest.Choices)
+            foreach (var choice in contest.VerifiableFields())
             {
                 if (!decryptedContest.Choices.ContainsKey(choice.Id))
                 {

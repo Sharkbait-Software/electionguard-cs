@@ -90,50 +90,22 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
                     Challenge = p.Challenge.ToByteArray(),
                     Response = p.Response.ToByteArray()
                 }).ToArray(),
-                OvervoteCount = new ProtobufEncryptedValueWithProofs
+                SupplementalFields = c.SupplementalFields.Select(f => new ProtobufEncryptedSupplementalField
                 {
-                    Alpha = c.OvervoteCount.Alpha.ToByteArray(),
-                    Beta = c.OvervoteCount.Beta.ToByteArray(),
-                    EncryptionNonce = c.OvervoteCount.EncryptionNonce,
-                    Proofs = c.OvervoteCount.Proofs.Select(p => new ProtobufChallengeResponsePair
+                    FieldId = f.FieldId,
+                    Alpha = f.Alpha.ToByteArray(),
+                    Beta = f.Beta.ToByteArray(),
+                    Proofs = f.Proofs.Select(p => new ProtobufChallengeResponsePair
                     {
                         Challenge = p.Challenge.ToByteArray(),
                         Response = p.Response.ToByteArray()
                     }).ToArray()
-                },
-                NullvoteCount = new ProtobufEncryptedValueWithProofs
+                }).ToList(),
+                UndervoteDifferenceProof = c.UndervoteDifferenceProof?.Select(p => new ProtobufChallengeResponsePair
                 {
-                    Alpha = c.NullvoteCount.Alpha.ToByteArray(),
-                    Beta = c.NullvoteCount.Beta.ToByteArray(),
-                    EncryptionNonce = c.NullvoteCount.EncryptionNonce,
-                    Proofs = c.NullvoteCount.Proofs.Select(p => new ProtobufChallengeResponsePair
-                    {
-                        Challenge = p.Challenge.ToByteArray(),
-                        Response = p.Response.ToByteArray()
-                    }).ToArray()
-                },
-                UndervoteCount = new ProtobufEncryptedValueWithProofs
-                {
-                    Alpha = c.UndervoteCount.Alpha.ToByteArray(),
-                    Beta = c.UndervoteCount.Beta.ToByteArray(),
-                    EncryptionNonce = c.UndervoteCount.EncryptionNonce,
-                    Proofs = c.UndervoteCount.Proofs.Select(p => new ProtobufChallengeResponsePair
-                    {
-                        Challenge = p.Challenge.ToByteArray(),
-                        Response = p.Response.ToByteArray()
-                    }).ToArray()
-                },
-                WriteInVoteCount = new ProtobufEncryptedValueWithProofs
-                {
-                    Alpha = c.WriteInVoteCount.Alpha.ToByteArray(),
-                    Beta = c.WriteInVoteCount.Beta.ToByteArray(),
-                    EncryptionNonce = c.WriteInVoteCount.EncryptionNonce,
-                    Proofs = c.WriteInVoteCount.Proofs.Select(p => new ProtobufChallengeResponsePair
-                    {
-                        Challenge = p.Challenge.ToByteArray(),
-                        Response = p.Response.ToByteArray()
-                    }).ToArray()
-                },
+                    Challenge = p.Challenge.ToByteArray(),
+                    Response = p.Response.ToByteArray()
+                }).ToArray(),
                 ContestData = c.ContestData != null ? new ProtobufEncryptedData
                 {
                     C0 = c.ContestData.C0,
@@ -184,46 +156,29 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
                     Challenge = IntegerModQ.FromCanonicalBytes(p.Challenge),
                     Response = IntegerModQ.FromCanonicalBytes(p.Response)
                 }).ToArray(),
-                OvervoteCount = new EncryptedValueWithProofs
+                // A contest whose document carries no supplemental fields decodes with none; protobuf
+                // writes nothing for an empty list, and BallotStructure rejects a contest that lacks
+                // a field its manifest declares.
+                SupplementalFields = (c.SupplementalFields ?? []).Select(f => new EncryptedSupplementalField
                 {
-                    Alpha = IntegerModP.FromCanonicalBytes(c.OvervoteCount.Alpha),
-                    Beta = IntegerModP.FromCanonicalBytes(c.OvervoteCount.Beta),
-                    Proofs = c.OvervoteCount.Proofs.Select(p => new ChallengeResponsePair
+                    FieldId = f.FieldId,
+                    Alpha = IntegerModP.FromCanonicalBytes(f.Alpha),
+                    Beta = IntegerModP.FromCanonicalBytes(f.Beta),
+                    Proofs = f.Proofs.Select(p => new ChallengeResponsePair
                     {
                         Challenge = IntegerModQ.FromCanonicalBytes(p.Challenge),
                         Response = IntegerModQ.FromCanonicalBytes(p.Response)
                     }).ToArray()
-                },
-                NullvoteCount = new EncryptedValueWithProofs
-                {
-                    Alpha = IntegerModP.FromCanonicalBytes(c.NullvoteCount.Alpha),
-                    Beta = IntegerModP.FromCanonicalBytes(c.NullvoteCount.Beta),
-                    Proofs = c.NullvoteCount.Proofs.Select(p => new ChallengeResponsePair
+                }).ToList(),
+                // Protobuf cannot tell an empty repeated field from an absent one, and the encryptor
+                // never writes an empty proof, so either decodes as no proof.
+                UndervoteDifferenceProof = c.UndervoteDifferenceProof is { Length: > 0 } relationProof
+                    ? relationProof.Select(p => new ChallengeResponsePair
                     {
                         Challenge = IntegerModQ.FromCanonicalBytes(p.Challenge),
                         Response = IntegerModQ.FromCanonicalBytes(p.Response)
                     }).ToArray()
-                },
-                UndervoteCount = new EncryptedValueWithProofs
-                {
-                    Alpha = IntegerModP.FromCanonicalBytes(c.UndervoteCount.Alpha),
-                    Beta = IntegerModP.FromCanonicalBytes(c.UndervoteCount.Beta),
-                    Proofs = c.UndervoteCount.Proofs.Select(p => new ChallengeResponsePair
-                    {
-                        Challenge = IntegerModQ.FromCanonicalBytes(p.Challenge),
-                        Response = IntegerModQ.FromCanonicalBytes(p.Response)
-                    }).ToArray()
-                },
-                WriteInVoteCount = new EncryptedValueWithProofs
-                {
-                    Alpha = IntegerModP.FromCanonicalBytes(c.WriteInVoteCount.Alpha),
-                    Beta = IntegerModP.FromCanonicalBytes(c.WriteInVoteCount.Beta),
-                    Proofs = c.WriteInVoteCount.Proofs.Select(p => new ChallengeResponsePair
-                    {
-                        Challenge = IntegerModQ.FromCanonicalBytes(p.Challenge),
-                        Response = IntegerModQ.FromCanonicalBytes(p.Response)
-                    }).ToArray()
-                },
+                    : null,
                 ContestData = c.ContestData != null ? new EncryptedData
                 {
                     C0 = c.ContestData.C0,
@@ -283,18 +238,28 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
         public required List<ProtobufEncryptedSelection> Choices { get; init; } = new();
         [ProtoMember(3)]
         public required ProtobufChallengeResponsePair[] Proofs { get; init; }
-        [ProtoMember(4)]
-        public required ProtobufEncryptedValueWithProofs OvervoteCount { get; init; }
-        [ProtoMember(5)]
-        public required ProtobufEncryptedValueWithProofs NullvoteCount { get; init; }
-        [ProtoMember(6)]
-        public required ProtobufEncryptedValueWithProofs UndervoteCount { get; init; }
-        [ProtoMember(7)]
-        public required ProtobufEncryptedValueWithProofs WriteInVoteCount { get; init; }
+        // Members 4-7 held the four fixed supplemental counters (overvote, null vote, undervote,
+        // write-in) before they became manifest-declared fields (S5). They are retired, not reused.
         [ProtoMember(8)]
         public required ProtobufEncryptedData? ContestData { get; init; }
         [ProtoMember(9)]
         public required byte[] ContestHash { get; init; }
+
+        /// <summary>The declared supplemental fields, in manifest order (<see cref="EncryptedContest.SupplementalFields"/>).</summary>
+        [ProtoMember(10)]
+        public List<ProtobufEncryptedSupplementalField>? SupplementalFields { get; init; }
+
+        /// <summary><see cref="EncryptedContest.UndervoteDifferenceProof"/>; absent when there is none.</summary>
+        [ProtoMember(11)]
+        public ProtobufChallengeResponsePair[]? UndervoteDifferenceProof { get; init; }
+    }
+
+    /// <summary>A supplemental field's encryption, keyed by its label, as a selection is keyed by its option's.</summary>
+    [ProtoContract]
+    public record ProtobufEncryptedSupplementalField : ProtobufEncryptedValueWithProofs
+    {
+        [ProtoMember(4)]
+        public required string FieldId { get; init; }
     }
 
     [ProtoContract]
@@ -315,6 +280,7 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
 
     [ProtoContract]
     [ProtoInclude(10, typeof(ProtobufEncryptedSelection))]
+    [ProtoInclude(11, typeof(ProtobufEncryptedSupplementalField))]
     public record ProtobufEncryptedValueWithProofs
     {
         [ProtoMember(1)]

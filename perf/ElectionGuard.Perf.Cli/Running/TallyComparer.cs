@@ -7,7 +7,10 @@ namespace ElectionGuard.Perf.Cli.Running;
 public static class TallyComparer
 {
     /// <summary>
-    /// Compares a decrypted tally against the expected per-choice vote counts.
+    /// Compares a decrypted tally against the expected per-choice vote counts, and against the
+    /// expected total of every supplemental field (§3.3.9) the manifest declares, which is
+    /// aggregated and decrypted under the field's label like an option. A field mismatch is
+    /// recorded with the field's label as its ChoiceId.
     ///
     /// An expected contest or choice missing entirely from the decrypted tally is recorded as a
     /// mismatch with Actual = -1, which cannot collide with a real count.
@@ -28,10 +31,14 @@ public static class TallyComparer
         {
             actual.Contests.TryGetValue(contestId, out var actualContest);
 
-            foreach (var choiceId in expected.ChoiceIds(contestId))
-            {
-                var expectedVotes = expected.GetVotes(contestId, choiceId);
+            var expectedCounters = expected.GetCounters(contestId);
+            var expectedCounts = expected.ChoiceIds(contestId)
+                .Select(choiceId => (Id: choiceId, Count: expected.GetVotes(contestId, choiceId)))
+                .Concat(expected.SupplementalFieldIds(contestId)
+                    .Select(field => (Id: field.FieldId, Count: expectedCounters.Get(field.Kind))));
 
+            foreach (var (choiceId, expectedVotes) in expectedCounts)
+            {
                 int actualVotes = -1;
                 if (actualContest is not null
                     && actualContest.Choices.TryGetValue(choiceId, out var actualChoice))

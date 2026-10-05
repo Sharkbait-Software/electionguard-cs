@@ -81,12 +81,35 @@ public enum BallotStatus
 public record EncryptedContest
 {
     public required string Id { get; init; }
+
+    /// <summary>One encryption, with its range proof, per selectable option.</summary>
     public required List<EncryptedSelection> Choices { get; init; }
+
+    /// <summary>
+    /// One encryption, with its range proof, per supplemental field the manifest declares for the
+    /// contest (§3.3.9), in manifest order; empty when it declares none. Each is keyed by its label
+    /// and treated like an option (§3.1.3 p.19): its nonce is xi_{i,j} with its own option index j
+    /// (eq. 33), and its proof challenge hashes that index (eq. 59).
+    /// </summary>
+    public required List<EncryptedSupplementalField> SupplementalFields { get; init; }
+
+    /// <summary>
+    /// The contest selection-limit range proof (§3.3.8, eq. 62), over 0..L, of the combined
+    /// ciphertext: the product of the selections, of every supplemental field that counts toward
+    /// the limit, and of the overvote indicator raised to L (§3.3.9 p.39 and footnote 42). With no
+    /// supplemental field that counts, that is the plain aggregate of eq. (62).
+    /// </summary>
     public required ChallengeResponsePair[] Proofs { get; init; }
-    public required EncryptedValueWithProofs OvervoteCount { get; init; }
-    public required EncryptedValueWithProofs NullvoteCount { get; init; }
-    public required EncryptedValueWithProofs UndervoteCount { get; init; }
-    public required EncryptedValueWithProofs WriteInVoteCount { get; init; }
+
+    /// <summary>
+    /// Present exactly when the contest declares an undervote difference count u: a one-value
+    /// range proof (Note 3.4, the singleton set {L}) that the product of the counted selections and
+    /// of u encrypts L, i.e. L - u is the sum of the selections (§3.3.9 p.38). The spec gives no
+    /// challenge format for it; see <see cref="BallotEncryptor"/>. Null otherwise.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public ChallengeResponsePair[]? UndervoteDifferenceProof { get; init; }
+
     public required EncryptedData? ContestData { get; init; }
     public required ContestHash ContestHash { get; init; }
 }

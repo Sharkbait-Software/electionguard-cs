@@ -51,6 +51,33 @@ public class ScenarioRunnerTests
         Assert.Empty(outcome.Correctness.Mismatches);
     }
 
+    /// <summary>
+    /// S5 (G10, G29): option selection limits above 1, every supplemental field declared and
+    /// write-ins that count toward the limit, verified, tallied and decrypted. The expected tally,
+    /// supplemental totals included, is accumulated by ExpectedTallyAccumulator's own reading of the
+    /// spec, and the generator emits values up to R and options above R, so a disagreement on the
+    /// overvote rule fails the run.
+    /// </summary>
+    [Theory]
+    [InlineData(1, 2, true)]
+    [InlineData(3, 3, true)]
+    [InlineData(3, 3, false)]
+    [InlineData(2, 1, true)]
+    public void Run_WithEverySupplementalFieldAndOptionLimitsAboveOne_ProducesTheExpectedTally(int selectionLimit, int optionSelectionLimit, bool writeInsCount)
+    {
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest(
+            selectionLimit: selectionLimit,
+            optionSelectionLimit: optionSelectionLimit,
+            supplementalFields: ElectionFixtureBuilder.AllSupplementalFields,
+            writeInFieldCount: 2,
+            writeInsCountTowardLimit: writeInsCount);
+
+        var outcome = new ScenarioRunner(Scenario(ballotCount: 600, chunkSize: 300, ballotVerification: true, tallyVerification: true), manifest).Run();
+
+        Assert.Equal(CorrectnessStatus.Passed, outcome.Correctness.Status);
+        Assert.Empty(outcome.Correctness.Mismatches);
+    }
+
     [Fact]
     public void Run_RecordsEncryptAndAggregatePhases()
     {

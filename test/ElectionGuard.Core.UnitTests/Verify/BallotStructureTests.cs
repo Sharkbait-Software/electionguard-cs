@@ -79,10 +79,6 @@ public class BallotStructureTests
                 new BallotStyle { Id = "style-abc", Name = "All", ContestIds = ["contest-a", "contest-b", "contest-c"] },
             ],
             OptionalContestDataMaxLength = 0,
-            IncludeOvervotes = true,
-            IncludeNullvotes = true,
-            IncludeUndervotes = true,
-            IncludeWriteins = true,
             ChainingMode = ChainingMode.None,
         };
         var manifestFile = new ManifestFile { Bytes = JsonSerializer.SerializeToUtf8Bytes(manifest) };
@@ -160,6 +156,10 @@ public class BallotStructureTests
         ["contest not in the manifest"] = b => With(b, [A(b), B(b) with { Id = "contest-not-in-manifest" }]),
         ["unknown ballot style"] = b => With(b, ballotStyleId: "style-not-in-manifest"),
         ["another ballot style"] = b => With(b, ballotStyleId: "style-abc"),
+        // S5 review: the manifest declares no supplemental fields for A, but a null list is still
+        // malformed (the consumers after the structure check walk it unguarded); so is a null entry.
+        ["null supplemental field list"] = b => With(b, [A(b) with { SupplementalFields = null! }, B(b)]),
+        ["null supplemental field entry"] = b => With(b, [A(b) with { SupplementalFields = [null!] }, B(b)]),
     };
 
     public static TheoryData<string, int> ShapesByVerification()
@@ -347,6 +347,36 @@ public class BallotStructureTests
         Assert.Contains(malformed.Contests[0].Choices, s => s.Alpha == NonMember);
 
         var exception = Assert.Throws<VerificationFailedException>(() => Run(verification, malformed, fixture));
+
+        Assert.Equal($"{verification}.structure", exception.SubSection);
+    }
+
+    /// <summary>
+    /// S5 review: the JSON decoder (unlike protobuf, which decodes an absent list as empty) accepts
+    /// <c>"supplementalFields": null</c> for the required list. For a contest whose manifest declares
+    /// no fields, that once passed the structure check and then crashed Verifications 6-8 and the
+    /// tally with a NullReferenceException; it is now a structural failure.
+    /// </summary>
+    [Theory]
+    [InlineData(6)]
+    [InlineData(7)]
+    [InlineData(8)]
+    [InlineData(9)]
+    public void JsonBallotWithANullSupplementalFieldList_IsRejected_AsStructure(int verification)
+    {
+        var fixture = Shared.Value;
+        var serializer = new Core.Serialization.JsonEncryptedBallotSerializer();
+        using var encoded = new MemoryStream();
+        serializer.Serialize(encoded, fixture.Ballot);
+        var document = System.Text.Json.Nodes.JsonNode.Parse(encoded.ToArray())!;
+        Assert.NotNull(document["contests"]![0]!["supplementalFields"]);
+        document["contests"]![0]!["supplementalFields"] = null;
+
+        var decoded = serializer.Deserialize(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(document.ToJsonString())))!;
+        Assert.Null(decoded.Contests[0].SupplementalFields);
+        Assert.Empty(fixture.Record.Manifest.Contests[0].SupplementalFields);
+
+        var exception = Assert.Throws<VerificationFailedException>(() => Run(verification, decoded, fixture));
 
         Assert.Equal($"{verification}.structure", exception.SubSection);
     }

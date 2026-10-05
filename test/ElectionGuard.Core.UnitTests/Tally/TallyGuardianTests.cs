@@ -103,9 +103,12 @@ public class TallyGuardianTests
         Assert.Equal(guardian.Index, partial.GuardianIndex);
         var contest = Assert.Single(partial.Contests);
         Assert.Equal("contest-1", contest.Key);
-        Assert.Equal(2, contest.Value.Choices.Count);
+        // G29: a partial decryption per verifiable field, the two options and the four declared
+        // supplemental fields.
+        Assert.Equal(2 + ElectionFixtureBuilder.DefaultSupplementalFields.Count, contest.Value.Choices.Count);
         Assert.Contains("choice-1", contest.Value.Choices.Keys);
         Assert.Contains("choice-2", contest.Value.Choices.Keys);
+        Assert.All(ElectionFixtureBuilder.DefaultSupplementalFields, kind => Assert.Contains(ElectionFixtureBuilder.SupplementalFieldId(kind), contest.Value.Choices.Keys));
 
         // Secondary observable, beyond structure: Mi must be the *exact* A^share value (TallyGuardian.Commit),
         // not merely present -- pins the exponent base (A, not B) and the exponent itself (this guardian's
@@ -333,10 +336,9 @@ public class TallyAdminSearchRangeTests
                         .Select(choiceId => new EncryptedSelection { ChoiceId = choiceId, Alpha = 1, Beta = 1, Proofs = placeholderProofs })
                         .ToList(),
                     Proofs = placeholderProofs,
-                    OvervoteCount = placeholderCounter,
-                    NullvoteCount = placeholderCounter,
-                    UndervoteCount = placeholderCounter,
-                    WriteInVoteCount = placeholderCounter,
+                    // The manifest below declares no supplemental fields: these tests are about the
+                    // search over option counts, and the tamper hook indexes the counts by option index.
+                    SupplementalFields = [],
                     ContestData = null,
                     ContestHash = new ContestHash(new byte[] { 0x01 }),
                 },
@@ -362,7 +364,7 @@ public class TallyAdminSearchRangeTests
     {
         EGParameters.Init(new CryptographicParameters(), new GuardianParameters());
         var guardianSet = ElectionFixtureBuilder.CreateGuardianSet();
-        var (manifest, manifestFile) = ElectionFixtureBuilder.CreateMinimalManifest();
+        var (manifest, manifestFile) = ElectionFixtureBuilder.CreateMinimalManifest(supplementalFields: []);
         var choices = manifest.Contests[0].Choices;
         for (int i = choices.Count; i < counts.Length; i++)
         {

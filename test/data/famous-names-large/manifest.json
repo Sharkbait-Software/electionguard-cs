@@ -1,10 +1,6 @@
 {
   "electionId": "famous-names-large",
   "optionalContestDataMaxLength": 50,
-  "includeOvervotes": true,
-  "includeNullvotes": true,
-  "includeUndervotes": true,
-  "includeWriteins": true,
   "chainingMode": 0,
   "contests": [
     {
@@ -18,7 +14,14 @@
         { "id": "2", "name": "Abraham Lincoln", "index": 2 },
         { "id": "3", "name": "Franklin D. Roosevelt", "index": 3 },
         { "id": "4", "name": "Theodore Roosevelt", "index": 4 }
-      ]
+      ],
+      "supplementalFields": [
+        { "id": "overvotes", "name": "Overvotes", "index": 5, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
+        { "id": "null-votes", "name": "Null votes", "index": 6, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 7, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
+        { "id": "write-ins", "name": "Write-ins", "index": 8, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+      ],
+      "writeInFieldCount": 1
     },
     {
       "id": "2",
@@ -33,7 +36,14 @@
         { "id": "8", "name": "Pluto", "index": 4 },
         { "id": "9", "name": "Brian Griffin", "index": 5 },
         { "id": "10", "name": "Odie", "index": 6 }
-      ]
+      ],
+      "supplementalFields": [
+        { "id": "overvotes", "name": "Overvotes", "index": 7, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
+        { "id": "null-votes", "name": "Null votes", "index": 8, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 9, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
+        { "id": "write-ins", "name": "Write-ins", "index": 10, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+      ],
+      "writeInFieldCount": 1
     },
     {
       "id": "3",
@@ -45,7 +55,14 @@
         { "id": "11", "name": "Albert Einstein", "index": 1 },
         { "id": "12", "name": "Isaac Newton", "index": 2 },
         { "id": "13", "name": "Marie Curie", "index": 3 }
-      ]
+      ],
+      "supplementalFields": [
+        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
+        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
+        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+      ],
+      "writeInFieldCount": 1
     },
     {
       "id": "4",
@@ -57,7 +74,14 @@
         { "id": "14", "name": "Leonardo da Vinci", "index": 1 },
         { "id": "15", "name": "Vincent van Gogh", "index": 2 },
         { "id": "16", "name": "Pablo Picasso", "index": 3 }
-      ]
+      ],
+      "supplementalFields": [
+        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
+        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
+        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+      ],
+      "writeInFieldCount": 1
     },
     {
       "id": "5",
@@ -70,7 +94,14 @@
         { "id": "18", "name": "Wolfgang Amadeus Mozart", "index": 2 },
         { "id": "19", "name": "Johann Sebastian Bach", "index": 3 },
         { "id": "20", "name": "Frederic Chopin", "index": 4 }
-      ]
+      ],
+      "supplementalFields": [
+        { "id": "overvotes", "name": "Overvotes", "index": 5, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
+        { "id": "null-votes", "name": "Null votes", "index": 6, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 7, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
+        { "id": "write-ins", "name": "Write-ins", "index": 8, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+      ],
+      "writeInFieldCount": 1
     },
     {
       "id": "6",
@@ -81,7 +112,14 @@
       "choices": [
         { "id": "21", "name": "William Shakespeare", "index": 1 },
         { "id": "22", "name": "Arthur Miller", "index": 2 }
-      ]
+      ],
+      "supplementalFields": [
+        { "id": "overvotes", "name": "Overvotes", "index": 3, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
+        { "id": "null-votes", "name": "Null votes", "index": 4, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 5, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
+        { "id": "write-ins", "name": "Write-ins", "index": 6, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+      ],
+      "writeInFieldCount": 1
     },
     {
       "id": "7",
@@ -93,7 +131,14 @@
         { "id": "23", "name": "Ernest Shackleton", "index": 1 },
         { "id": "24", "name": "Marco Polo", "index": 2 },
         { "id": "25", "name": "Ferdinand Magellan", "index": 3 }
-      ]
+      ],
+      "supplementalFields": [
+        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
+        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
+        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+      ],
+      "writeInFieldCount": 1
     },
     {
       "id": "8",
@@ -105,7 +150,14 @@
         { "id": "26", "name": "Neil Armstrong", "index": 1 },
         { "id": "27", "name": "Sally Ride", "index": 2 },
         { "id": "28", "name": "Yuri Gagarin", "index": 3 }
-      ]
+      ],
+      "supplementalFields": [
+        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
+        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
+        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+      ],
+      "writeInFieldCount": 1
     },
     {
       "id": "9",
@@ -118,7 +170,14 @@
         { "id": "30", "name": "Nikola Tesla", "index": 2 },
         { "id": "31", "name": "Alexander Graham Bell", "index": 3 },
         { "id": "32", "name": "Benjamin Franklin", "index": 4 }
-      ]
+      ],
+      "supplementalFields": [
+        { "id": "overvotes", "name": "Overvotes", "index": 5, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
+        { "id": "null-votes", "name": "Null votes", "index": 6, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 7, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
+        { "id": "write-ins", "name": "Write-ins", "index": 8, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+      ],
+      "writeInFieldCount": 1
     },
     {
       "id": "10",
@@ -129,7 +188,14 @@
       "choices": [
         { "id": "33", "name": "Garfield", "index": 1 },
         { "id": "34", "name": "Sylvester", "index": 2 }
-      ]
+      ],
+      "supplementalFields": [
+        { "id": "overvotes", "name": "Overvotes", "index": 3, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
+        { "id": "null-votes", "name": "Null votes", "index": 4, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 5, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
+        { "id": "write-ins", "name": "Write-ins", "index": 6, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+      ],
+      "writeInFieldCount": 1
     },
     {
       "id": "11",
@@ -141,7 +207,14 @@
         { "id": "35", "name": "Sherlock Holmes", "index": 1 },
         { "id": "36", "name": "Hercule Poirot", "index": 2 },
         { "id": "37", "name": "Miss Marple", "index": 3 }
-      ]
+      ],
+      "supplementalFields": [
+        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
+        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
+        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+      ],
+      "writeInFieldCount": 1
     },
     {
       "id": "12",
@@ -153,7 +226,14 @@
         { "id": "38", "name": "Queen Elizabeth I", "index": 1 },
         { "id": "39", "name": "Queen Victoria", "index": 2 },
         { "id": "40", "name": "Cleopatra", "index": 3 }
-      ]
+      ],
+      "supplementalFields": [
+        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
+        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
+        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+      ],
+      "writeInFieldCount": 1
     },
     {
       "id": "13",
@@ -166,7 +246,14 @@
         { "id": "42", "name": "Plato", "index": 2 },
         { "id": "43", "name": "Aristotle", "index": 3 },
         { "id": "44", "name": "Confucius", "index": 4 }
-      ]
+      ],
+      "supplementalFields": [
+        { "id": "overvotes", "name": "Overvotes", "index": 5, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
+        { "id": "null-votes", "name": "Null votes", "index": 6, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 7, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
+        { "id": "write-ins", "name": "Write-ins", "index": 8, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+      ],
+      "writeInFieldCount": 1
     },
     {
       "id": "14",
@@ -177,7 +264,14 @@
       "choices": [
         { "id": "45", "name": "Carl Friedrich Gauss", "index": 1 },
         { "id": "46", "name": "Leonhard Euler", "index": 2 }
-      ]
+      ],
+      "supplementalFields": [
+        { "id": "overvotes", "name": "Overvotes", "index": 3, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
+        { "id": "null-votes", "name": "Null votes", "index": 4, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 5, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
+        { "id": "write-ins", "name": "Write-ins", "index": 6, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+      ],
+      "writeInFieldCount": 1
     },
     {
       "id": "15",
@@ -189,7 +283,14 @@
         { "id": "47", "name": "Michael Jordan", "index": 1 },
         { "id": "48", "name": "LeBron James", "index": 2 },
         { "id": "49", "name": "Kareem Abdul-Jabbar", "index": 3 }
-      ]
+      ],
+      "supplementalFields": [
+        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
+        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
+        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+      ],
+      "writeInFieldCount": 1
     },
     {
       "id": "16",
@@ -200,7 +301,14 @@
       "choices": [
         { "id": "50", "name": "Muhammad Ali", "index": 1 },
         { "id": "51", "name": "Joe Louis", "index": 2 }
-      ]
+      ],
+      "supplementalFields": [
+        { "id": "overvotes", "name": "Overvotes", "index": 3, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
+        { "id": "null-votes", "name": "Null votes", "index": 4, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 5, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
+        { "id": "write-ins", "name": "Write-ins", "index": 6, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+      ],
+      "writeInFieldCount": 1
     },
     {
       "id": "17",
@@ -214,7 +322,14 @@
         { "id": "54", "name": "Mark Twain", "index": 3 },
         { "id": "55", "name": "Leo Tolstoy", "index": 4 },
         { "id": "56", "name": "Toni Morrison", "index": 5 }
-      ]
+      ],
+      "supplementalFields": [
+        { "id": "overvotes", "name": "Overvotes", "index": 6, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
+        { "id": "null-votes", "name": "Null votes", "index": 7, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 8, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
+        { "id": "write-ins", "name": "Write-ins", "index": 9, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+      ],
+      "writeInFieldCount": 1
     },
     {
       "id": "18",
@@ -226,7 +341,14 @@
         { "id": "57", "name": "Martin Luther King Jr.", "index": 1 },
         { "id": "58", "name": "Rosa Parks", "index": 2 },
         { "id": "59", "name": "Frederick Douglass", "index": 3 }
-      ]
+      ],
+      "supplementalFields": [
+        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
+        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
+        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+      ],
+      "writeInFieldCount": 1
     },
     {
       "id": "19",
@@ -238,7 +360,14 @@
         { "id": "60", "name": "Jimi Hendrix", "index": 1 },
         { "id": "61", "name": "Eric Clapton", "index": 2 },
         { "id": "62", "name": "Jimmy Page", "index": 3 }
-      ]
+      ],
+      "supplementalFields": [
+        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
+        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
+        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+      ],
+      "writeInFieldCount": 1
     },
     {
       "id": "20",
@@ -249,7 +378,14 @@
       "choices": [
         { "id": "63", "name": "Emily Dickinson", "index": 1 },
         { "id": "64", "name": "Robert Frost", "index": 2 }
-      ]
+      ],
+      "supplementalFields": [
+        { "id": "overvotes", "name": "Overvotes", "index": 3, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
+        { "id": "null-votes", "name": "Null votes", "index": 4, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 5, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
+        { "id": "write-ins", "name": "Write-ins", "index": 6, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+      ],
+      "writeInFieldCount": 1
     },
     {
       "id": "21",
@@ -261,7 +397,14 @@
         { "id": "65", "name": "Amelia Earhart", "index": 1 },
         { "id": "66", "name": "Charles Lindbergh", "index": 2 },
         { "id": "67", "name": "Orville Wright", "index": 3 }
-      ]
+      ],
+      "supplementalFields": [
+        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
+        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
+        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+      ],
+      "writeInFieldCount": 1
     },
     {
       "id": "22",
@@ -272,7 +415,14 @@
       "choices": [
         { "id": "68", "name": "Mickey Mouse", "index": 1 },
         { "id": "69", "name": "Mighty Mouse", "index": 2 }
-      ]
+      ],
+      "supplementalFields": [
+        { "id": "overvotes", "name": "Overvotes", "index": 3, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
+        { "id": "null-votes", "name": "Null votes", "index": 4, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 5, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
+        { "id": "write-ins", "name": "Write-ins", "index": 6, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+      ],
+      "writeInFieldCount": 1
     },
     {
       "id": "23",
@@ -284,7 +434,14 @@
         { "id": "70", "name": "Johnny Carson", "index": 1 },
         { "id": "71", "name": "Oprah Winfrey", "index": 2 },
         { "id": "72", "name": "David Letterman", "index": 3 }
-      ]
+      ],
+      "supplementalFields": [
+        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
+        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
+        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+      ],
+      "writeInFieldCount": 1
     },
     {
       "id": "24",
@@ -297,7 +454,14 @@
         { "id": "74", "name": "Steven Spielberg", "index": 2 },
         { "id": "75", "name": "Akira Kurosawa", "index": 3 },
         { "id": "76", "name": "Stanley Kubrick", "index": 4 }
-      ]
+      ],
+      "supplementalFields": [
+        { "id": "overvotes", "name": "Overvotes", "index": 5, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
+        { "id": "null-votes", "name": "Null votes", "index": 6, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 7, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
+        { "id": "write-ins", "name": "Write-ins", "index": 8, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+      ],
+      "writeInFieldCount": 1
     },
     {
       "id": "25",
@@ -308,7 +472,14 @@
       "choices": [
         { "id": "77", "name": "Julia Child", "index": 1 },
         { "id": "78", "name": "Gordon Ramsay", "index": 2 }
-      ]
+      ],
+      "supplementalFields": [
+        { "id": "overvotes", "name": "Overvotes", "index": 3, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
+        { "id": "null-votes", "name": "Null votes", "index": 4, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 5, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
+        { "id": "write-ins", "name": "Write-ins", "index": 6, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+      ],
+      "writeInFieldCount": 1
     },
     {
       "id": "26",
@@ -320,7 +491,14 @@
         { "id": "79", "name": "Merlin", "index": 1 },
         { "id": "80", "name": "Gandalf", "index": 2 },
         { "id": "81", "name": "Albus Dumbledore", "index": 3 }
-      ]
+      ],
+      "supplementalFields": [
+        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
+        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
+        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+      ],
+      "writeInFieldCount": 1
     },
     {
       "id": "27",
@@ -332,7 +510,14 @@
         { "id": "82", "name": "Clark Kent", "index": 1 },
         { "id": "83", "name": "Bruce Wayne", "index": 2 },
         { "id": "84", "name": "Peter Parker", "index": 3 }
-      ]
+      ],
+      "supplementalFields": [
+        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
+        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
+        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+      ],
+      "writeInFieldCount": 1
     },
     {
       "id": "28",
@@ -344,7 +529,14 @@
         { "id": "85", "name": "Alexander the Great", "index": 1 },
         { "id": "86", "name": "Julius Caesar", "index": 2 },
         { "id": "87", "name": "Hannibal Barca", "index": 3 }
-      ]
+      ],
+      "supplementalFields": [
+        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
+        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
+        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+      ],
+      "writeInFieldCount": 1
     },
     {
       "id": "29",
@@ -355,7 +547,14 @@
       "choices": [
         { "id": "88", "name": "Charles Darwin", "index": 1 },
         { "id": "89", "name": "Gregor Mendel", "index": 2 }
-      ]
+      ],
+      "supplementalFields": [
+        { "id": "overvotes", "name": "Overvotes", "index": 3, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
+        { "id": "null-votes", "name": "Null votes", "index": 4, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 5, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
+        { "id": "write-ins", "name": "Write-ins", "index": 6, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+      ],
+      "writeInFieldCount": 1
     },
     {
       "id": "30",
@@ -367,7 +566,14 @@
         { "id": "90", "name": "Donald Duck", "index": 1 },
         { "id": "91", "name": "Daffy Duck", "index": 2 },
         { "id": "92", "name": "Scrooge McDuck", "index": 3 }
-      ]
+      ],
+      "supplementalFields": [
+        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
+        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
+        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+      ],
+      "writeInFieldCount": 1
     }
   ],
   "ballotStyles": [

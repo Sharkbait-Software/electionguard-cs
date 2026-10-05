@@ -13,6 +13,12 @@ namespace ElectionGuard.Core.PreEncryption;
 /// idB and the ballot nonce ξB (§4.2.1), so the recording tool can regenerate the encryptions once
 /// the ballot nonce has been decrypted. The only randomness beyond those two seeds is in the
 /// encryption of ξB itself (§3.3.4).
+///
+/// Supplemental verifiable fields (§3.3.9) play no part here: §4.1's selection vectors have one
+/// entry per selectable option (eqs. 112-114) and a contest has L null vectors, with no slot for a
+/// supplemental field, so the pre-encryptor reads only <see cref="Contest.Choices"/>. What a
+/// recorded pre-encrypted ballot (§4.3, stage S9) carries for a contest that declares supplemental
+/// fields is not settled yet.
 /// </summary>
 public class BallotPreEncryptor
 {

@@ -51,6 +51,11 @@ public class ProtobufEncryptedBallotSerializerTests
         }
     }
 
+    private static ProtobufEncryptedBallotSerializer.ProtobufEncryptedSupplementalField DtoField(
+        ProtobufEncryptedBallotSerializer.ProtobufEncryptedContest contest,
+        SupplementalFieldKind kind) =>
+        contest.SupplementalFields!.Single(field => field.FieldId == ElectionFixtureBuilder.SupplementalFieldId(kind));
+
     private static void AssertDtoValueWithProofsMatchesDomain(
         EncryptedValueWithProofs domainValue,
         ProtobufEncryptedBallotSerializer.ProtobufEncryptedValueWithProofs dtoValue)
@@ -191,10 +196,10 @@ public class ProtobufEncryptedBallotSerializerTests
 
         // The four optional counters are all typed as the BASE ProtobufEncryptedValueWithProofs
         // directly (no derived-type indirection), so -- unlike Choices -- they round-trip correctly.
-        AssertDtoValueWithProofsMatchesDomain(originalContest.OvervoteCount, dtoContest.OvervoteCount);
-        AssertDtoValueWithProofsMatchesDomain(originalContest.NullvoteCount, dtoContest.NullvoteCount);
-        AssertDtoValueWithProofsMatchesDomain(originalContest.UndervoteCount, dtoContest.UndervoteCount);
-        AssertDtoValueWithProofsMatchesDomain(originalContest.WriteInVoteCount, dtoContest.WriteInVoteCount);
+        AssertDtoValueWithProofsMatchesDomain(originalContest.Field(SupplementalFieldKind.OvervoteIndicator), DtoField(dtoContest, SupplementalFieldKind.OvervoteIndicator));
+        AssertDtoValueWithProofsMatchesDomain(originalContest.Field(SupplementalFieldKind.NullVoteIndicator), DtoField(dtoContest, SupplementalFieldKind.NullVoteIndicator));
+        AssertDtoValueWithProofsMatchesDomain(originalContest.Field(SupplementalFieldKind.UndervoteDifferenceCount), DtoField(dtoContest, SupplementalFieldKind.UndervoteDifferenceCount));
+        AssertDtoValueWithProofsMatchesDomain(originalContest.Field(SupplementalFieldKind.WriteInCount), DtoField(dtoContest, SupplementalFieldKind.WriteInCount));
 
         Assert.NotNull(originalContest.ContestData);
         Assert.NotNull(dtoContest.ContestData);
@@ -235,8 +240,8 @@ public class ProtobufEncryptedBallotSerializerTests
         // four counters checked here are unaffected by those bugs.
         var original = BuildRichEncryptedBallot();
         var originalContest = original.Contests.Single();
-        Assert.NotNull(originalContest.OvervoteCount.EncryptionNonce);
-        Assert.NotNull(originalContest.WriteInVoteCount.EncryptionNonce);
+        Assert.NotNull(originalContest.Field(SupplementalFieldKind.OvervoteIndicator).EncryptionNonce);
+        Assert.NotNull(originalContest.Field(SupplementalFieldKind.WriteInCount).EncryptionNonce);
 
         var serializer = new ProtobufEncryptedBallotSerializer();
         using var stream = new MemoryStream();
@@ -245,10 +250,10 @@ public class ProtobufEncryptedBallotSerializerTests
         var dto = Serializer.Deserialize<ProtobufEncryptedBallotSerializer.ProtobufEncryptedBallot>(stream);
         var dtoContest = dto.Contests.Single();
 
-        Assert.Null(dtoContest.OvervoteCount.EncryptionNonce);
-        Assert.Null(dtoContest.NullvoteCount.EncryptionNonce);
-        Assert.Null(dtoContest.UndervoteCount.EncryptionNonce);
-        Assert.Null(dtoContest.WriteInVoteCount.EncryptionNonce);
+        Assert.Null(DtoField(dtoContest, SupplementalFieldKind.OvervoteIndicator).EncryptionNonce);
+        Assert.Null(DtoField(dtoContest, SupplementalFieldKind.NullVoteIndicator).EncryptionNonce);
+        Assert.Null(DtoField(dtoContest, SupplementalFieldKind.UndervoteDifferenceCount).EncryptionNonce);
+        Assert.Null(DtoField(dtoContest, SupplementalFieldKind.WriteInCount).EncryptionNonce);
     }
 
     [Fact]

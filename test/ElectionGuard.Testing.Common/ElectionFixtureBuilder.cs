@@ -125,17 +125,83 @@ public static class ElectionFixtureBuilder
     }
 
     /// <summary>
+    /// The supplemental fields <see cref="CreateMinimalManifest"/> declares by default: the overvote,
+    /// null-vote and undervote indicators and the undervote difference count (§3.3.9).
+    /// </summary>
+    public static readonly IReadOnlyList<SupplementalFieldKind> DefaultSupplementalFields =
+    [
+        SupplementalFieldKind.OvervoteIndicator,
+        SupplementalFieldKind.NullVoteIndicator,
+        SupplementalFieldKind.UndervoteIndicator,
+        SupplementalFieldKind.UndervoteDifferenceCount,
+    ];
+
+    /// <summary>Every supplemental field kind of §3.3.9, in declaration order.</summary>
+    public static readonly IReadOnlyList<SupplementalFieldKind> AllSupplementalFields =
+    [
+        SupplementalFieldKind.OvervoteIndicator,
+        SupplementalFieldKind.NullVoteIndicator,
+        SupplementalFieldKind.UndervoteIndicator,
+        SupplementalFieldKind.UndervoteDifferenceCount,
+        SupplementalFieldKind.WriteInCount,
+    ];
+
+    /// <summary>
+    /// Supplemental field declarations for a contest with <paramref name="optionCount"/> options, in
+    /// the order given, with option indices continuing after the options (§3.1.3 p.19). The overvote
+    /// indicator counts toward the selection limit (it must); the write-in count does when
+    /// <paramref name="writeInsCountTowardLimit"/>.
+    /// </summary>
+    public static List<SupplementalField> SupplementalFields(int optionCount, IEnumerable<SupplementalFieldKind> kinds, bool writeInsCountTowardLimit = false)
+    {
+        return kinds.Select((kind, position) => new SupplementalField
+        {
+            Id = SupplementalFieldId(kind),
+            Name = kind.ToString(),
+            Index = optionCount + position + 1,
+            Kind = kind,
+            CountsTowardSelectionLimit = kind == SupplementalFieldKind.OvervoteIndicator
+                || (kind == SupplementalFieldKind.WriteInCount && writeInsCountTowardLimit),
+        }).ToList();
+    }
+
+    /// <summary>The label the fixtures give a supplemental field of <paramref name="kind"/>.</summary>
+    public static string SupplementalFieldId(SupplementalFieldKind kind) => kind switch
+    {
+        SupplementalFieldKind.OvervoteIndicator => "overvotes",
+        SupplementalFieldKind.NullVoteIndicator => "null-votes",
+        SupplementalFieldKind.UndervoteIndicator => "undervotes",
+        SupplementalFieldKind.UndervoteDifferenceCount => "undervote-difference",
+        SupplementalFieldKind.WriteInCount => "write-ins",
+        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
+    };
+
+    /// <summary>
     /// Builds a small deterministic (non-Bogus) 1-contest, 2-choice manifest plus its serialized
-    /// ManifestFile bytes. Pass includeWriteIns: true and a non-null ContestData string on the
-    /// ballot (see CreateBallot) to exercise the write-in / contest-data path.
+    /// ManifestFile bytes. The contest declares <paramref name="supplementalFields"/>, by default
+    /// <see cref="DefaultSupplementalFields"/>, plus the write-in count when
+    /// <paramref name="includeWriteIns"/>. Pass includeWriteIns: true and a non-null ContestData
+    /// string on the ballot (see CreateBallot) to exercise the write-in / contest-data path; the
+    /// contest then offers <paramref name="writeInFieldCount"/> write-in fields (1 by default).
     /// </summary>
     public static (Manifest Manifest, ManifestFile ManifestFile) CreateMinimalManifest(
         bool includeWriteIns = false,
         ChainingMode chainingMode = ChainingMode.None,
         int optionSelectionLimit = 1,
         int selectionLimit = 1,
-        HashTrimmingFunction? hashTrimmingFunction = null)
+        HashTrimmingFunction? hashTrimmingFunction = null,
+        IReadOnlyList<SupplementalFieldKind>? supplementalFields = null,
+        int? writeInFieldCount = null,
+        bool writeInsCountTowardLimit = false)
     {
+        var kinds = (supplementalFields ?? DefaultSupplementalFields).ToList();
+        if (includeWriteIns && !kinds.Contains(SupplementalFieldKind.WriteInCount))
+        {
+            kinds.Add(SupplementalFieldKind.WriteInCount);
+        }
+
+        int writeInFields = writeInFieldCount ?? (kinds.Contains(SupplementalFieldKind.WriteInCount) || includeWriteIns ? 1 : 0);
+
         var manifest = new Manifest
         {
             ElectionId = "test-election-1",
@@ -154,6 +220,8 @@ public static class ElectionFixtureBuilder
                         new Choice { Id = "choice-1", Name = "Choice 1", Index = 1 },
                         new Choice { Id = "choice-2", Name = "Choice 2", Index = 2 },
                     },
+                    SupplementalFields = SupplementalFields(2, kinds, writeInsCountTowardLimit),
+                    WriteInFieldCount = writeInFields,
                 },
             },
             BallotStyles = new List<BallotStyle>
@@ -166,10 +234,6 @@ public static class ElectionFixtureBuilder
                 },
             },
             OptionalContestDataMaxLength = 256,
-            IncludeOvervotes = true,
-            IncludeNullvotes = true,
-            IncludeUndervotes = true,
-            IncludeWriteins = includeWriteIns,
             ChainingMode = chainingMode,
             HashTrimmingFunction = hashTrimmingFunction,
         };

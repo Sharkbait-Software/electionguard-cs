@@ -27,10 +27,10 @@ public class BallotEncryptorTests
     }
 
     // Mirrors SelectionEncryptionsWellFormedVerification's disjunctive Chaum-Pedersen
-    // recomputation (Verification 6, see Verify/Ballot/SelectionEncryptionsWellFormedVerification.cs
-    // lines 33-70), exercised here at the BallotEncryptor level as a self-check that Encrypt()
-    // always produces spec-valid proofs -- for selections (choiceIndex != null) and for the four
-    // per-contest optional counters (choiceIndex == null) alike.
+    // recomputation (Verification 6), exercised here at the BallotEncryptor level as a self-check
+    // that Encrypt() always produces spec-valid proofs: for selections and for the supplemental
+    // fields alike, each under its own option index (eq. 59), and for the contest proof (eq. 62,
+    // optionIndex null).
     private static void AssertProofIsWellFormed(
         EncryptedValueWithProofs value,
         int selectionOrOptionLimit,
@@ -70,6 +70,20 @@ public class BallotEncryptorTests
         var sumC = value.Proofs.Select(x => x.Challenge).Sum();
 
         Assert.Equal(c, sumC);
+    }
+
+    /// <summary>
+    /// §3.1.3 p.19: a supplemental field's option index continues after the options, in declaration
+    /// order. Derived from positions here rather than read back from the manifest's Index fields.
+    /// </summary>
+    private static int FieldIndex(Contest manifestContest, SupplementalFieldKind kind) =>
+        manifestContest.Choices.Count + 1 + manifestContest.SupplementalFields.FindIndex(field => field.Kind == kind);
+
+    /// <summary>The field's ciphertext is (g^xi, K^(value + xi)) for its nonce xi.</summary>
+    private static void AssertEncrypts(EncryptedValueWithProofs field, int value, IntegerModP voteEncryptionKey)
+    {
+        var nonce = field.EncryptionNonce!.Value;
+        Assert.Equal(IntegerModP.PowModP(voteEncryptionKey, nonce + value), field.Beta);
     }
 
     [Fact]
@@ -133,6 +147,7 @@ public class BallotEncryptorTests
     {
         var (guardianSet, manifest, encryptionRecordResult) = BuildEncryptionRecord();
         var deviceHash = new VotingDeviceInformationHash(encryptionRecordResult.ExtendedBaseHash, "device-2");
+        var k = guardianSet.ElectionPublicKeys.VoteEncryptionKey;
 
         // SelectionLimit=1/OptionSelectionLimit=1 (defaults) but both choices selected -> overvote.
         var ballot = ElectionFixtureBuilder.CreateBallot(
@@ -144,35 +159,33 @@ public class BallotEncryptorTests
         var contest = encryptedBallot.Contests.Single();
         var manifestContest = manifest.Contests.Single();
 
+        // G3: the overvote indicator's proof challenge hashes its own option index (here 3, after
+        // the two options), as every option's does.
+        var overvote = contest.Field(SupplementalFieldKind.OvervoteIndicator);
         AssertProofIsWellFormed(
-            contest.OvervoteCount, 1, manifestContest.Index, null, encryptedBallot, encryptionRecordResult.EncryptionRecord);
+            overvote, 1, manifestContest.Index, FieldIndex(manifestContest, SupplementalFieldKind.OvervoteIndicator), encryptedBallot, encryptionRecordResult.EncryptionRecord);
 
         // Secondary observable: the overvote counter's plaintext value must actually be 1 (true).
-        var nonce = contest.OvervoteCount.EncryptionNonce!.Value;
-        Assert.Equal(
-            IntegerModP.PowModP(guardianSet.ElectionPublicKeys.VoteEncryptionKey, nonce + 1),
-            contest.OvervoteCount.Beta);
+        AssertEncrypts(overvote, 1, k);
 
         // Per spec, selections themselves are re-encrypted as zero once an overvote is detected.
-        Assert.All(contest.Choices, c => Assert.Equal(
-            IntegerModP.PowModP(guardianSet.ElectionPublicKeys.VoteEncryptionKey, c.EncryptionNonce!.Value),
-            c.Beta));
+        Assert.All(contest.Choices, c => AssertEncrypts(c, 0, k));
 
-        // MUTATION-GAP REGRESSION: BallotEncryptor.EncryptContest computes numUndervotes as
-        // Math.Max(0, SelectionLimit - actualCountOfSelections) using the *original* (pre-overvote)
-        // actualCountOfSelections (2 selections here vs. SelectionLimit=1), so without the
-        // Math.Max clamp this would be -1. No other test exercises "overvote AND would-be-negative
-        // undervote count" together. Empirically verified: removing Math.Max here left all
-        // existing BallotEncryptor tests green, because passing a negative valueToEncrypt into
-        // GenerateProofs breaks disjunctive-proof well-formedness (every branch takes the
-        // "not-the-real-value" path, since no i in [0, SelectionLimit] equals -1) -- AssertProofIsWellFormed
-        // below is what actually catches that.
+        // §3.3.9 p.39 and user decision Q3: the null-vote indicator is 0 on an overvote. The
+        // undervote fields are computed on the neutralized sum, 0 (see
+        // BallotEncryptor.SupplementalValue): the difference is L = 1, so that L - u equals the sum
+        // the selection-limit proof sees, and the indicator is 1, following p.38's disjunctive proof
+        // (p.18/p.38's definition by the voter's sum would give 0). (Before S5 the undervote counter
+        // was L minus the number of nonzero options before neutralization, clamped at 0, so 0 here.)
+        // DECISION-DEPENDENT PIN (open user question 4, option (a)): re-pin the undervote indicator
+        // to 0 if the user picks (b); the difference stays L either way.
+        AssertEncrypts(contest.Field(SupplementalFieldKind.NullVoteIndicator), 0, k);
+        AssertEncrypts(contest.Field(SupplementalFieldKind.UndervoteIndicator), 1, k);
+        var difference = contest.Field(SupplementalFieldKind.UndervoteDifferenceCount);
         AssertProofIsWellFormed(
-            contest.UndervoteCount, manifestContest.SelectionLimit, manifestContest.Index, null, encryptedBallot, encryptionRecordResult.EncryptionRecord);
-        var undervoteNonce = contest.UndervoteCount.EncryptionNonce!.Value;
-        Assert.Equal(
-            IntegerModP.PowModP(guardianSet.ElectionPublicKeys.VoteEncryptionKey, undervoteNonce + 0),
-            contest.UndervoteCount.Beta);
+            difference, manifestContest.SelectionLimit, manifestContest.Index, FieldIndex(manifestContest, SupplementalFieldKind.UndervoteDifferenceCount),
+            encryptedBallot, encryptionRecordResult.EncryptionRecord);
+        AssertEncrypts(difference, manifestContest.SelectionLimit, k);
     }
 
     [Fact]
@@ -180,9 +193,10 @@ public class BallotEncryptorTests
     {
         var (guardianSet, manifest, encryptionRecordResult) = BuildEncryptionRecord(selectionLimit: 2);
         var deviceHash = new VotingDeviceInformationHash(encryptionRecordResult.ExtendedBaseHash, "device-3");
+        var k = guardianSet.ElectionPublicKeys.VoteEncryptionKey;
 
-        // SelectionLimit=2 but only 1 of 2 choices selected -> exactly 1 undervote, and (since a
-        // choice was actually selected) not also a null vote.
+        // SelectionLimit=2 but only 1 of 2 choices selected -> an undervote by exactly 1, and (since
+        // a choice was actually selected) not also a null vote.
         var ballot = ElectionFixtureBuilder.CreateBallot(
             manifest, selectionValuesByChoiceId: new Dictionary<string, int> { ["choice-1"] = 1 });
 
@@ -192,20 +206,21 @@ public class BallotEncryptorTests
         var contest = encryptedBallot.Contests.Single();
         var manifestContest = manifest.Contests.Single();
 
+        // The undervote difference count ranges over 0..L (user decision Q2).
+        var difference = contest.Field(SupplementalFieldKind.UndervoteDifferenceCount);
         AssertProofIsWellFormed(
-            contest.UndervoteCount, manifestContest.SelectionLimit, manifestContest.Index, null,
+            difference, manifestContest.SelectionLimit, manifestContest.Index, FieldIndex(manifestContest, SupplementalFieldKind.UndervoteDifferenceCount),
             encryptedBallot, encryptionRecordResult.EncryptionRecord);
+        AssertEncrypts(difference, 1, k);
 
-        var undervoteNonce = contest.UndervoteCount.EncryptionNonce!.Value;
-        Assert.Equal(
-            IntegerModP.PowModP(guardianSet.ElectionPublicKeys.VoteEncryptionKey, undervoteNonce + 1),
-            contest.UndervoteCount.Beta);
+        var indicator = contest.Field(SupplementalFieldKind.UndervoteIndicator);
+        AssertProofIsWellFormed(
+            indicator, 1, manifestContest.Index, FieldIndex(manifestContest, SupplementalFieldKind.UndervoteIndicator),
+            encryptedBallot, encryptionRecordResult.EncryptionRecord);
+        AssertEncrypts(indicator, 1, k);
 
         // Secondary observable: this scenario is exclusively an undervote, not also a null vote.
-        var nullNonce = contest.NullvoteCount.EncryptionNonce!.Value;
-        Assert.Equal(
-            IntegerModP.PowModP(guardianSet.ElectionPublicKeys.VoteEncryptionKey, nullNonce + 0),
-            contest.NullvoteCount.Beta);
+        AssertEncrypts(contest.Field(SupplementalFieldKind.NullVoteIndicator), 0, k);
     }
 
     [Fact]
@@ -223,13 +238,11 @@ public class BallotEncryptorTests
         var contest = encryptedBallot.Contests.Single();
         var manifestContest = manifest.Contests.Single();
 
+        var nullVote = contest.Field(SupplementalFieldKind.NullVoteIndicator);
         AssertProofIsWellFormed(
-            contest.NullvoteCount, 1, manifestContest.Index, null, encryptedBallot, encryptionRecordResult.EncryptionRecord);
+            nullVote, 1, manifestContest.Index, FieldIndex(manifestContest, SupplementalFieldKind.NullVoteIndicator), encryptedBallot, encryptionRecordResult.EncryptionRecord);
 
-        var nonce = contest.NullvoteCount.EncryptionNonce!.Value;
-        Assert.Equal(
-            IntegerModP.PowModP(guardianSet.ElectionPublicKeys.VoteEncryptionKey, nonce + 1),
-            contest.NullvoteCount.Beta);
+        AssertEncrypts(nullVote, 1, guardianSet.ElectionPublicKeys.VoteEncryptionKey);
     }
 
     [Fact]
@@ -246,14 +259,14 @@ public class BallotEncryptorTests
         var contest = encryptedBallot.Contests.Single();
         var manifestContest = manifest.Contests.Single();
 
+        // G22: the write-in count ranges over 0..the number of write-in fields (§3.3.9 p.39), not
+        // 0..L; the fixture offers one write-in field.
+        var writeIns = contest.Field(SupplementalFieldKind.WriteInCount);
         AssertProofIsWellFormed(
-            contest.WriteInVoteCount, manifestContest.SelectionLimit, manifestContest.Index, null,
+            writeIns, manifestContest.WriteInFieldCount, manifestContest.Index, FieldIndex(manifestContest, SupplementalFieldKind.WriteInCount),
             encryptedBallot, encryptionRecordResult.EncryptionRecord);
 
-        var nonce = contest.WriteInVoteCount.EncryptionNonce!.Value;
-        Assert.Equal(
-            IntegerModP.PowModP(guardianSet.ElectionPublicKeys.VoteEncryptionKey, nonce + 1),
-            contest.WriteInVoteCount.Beta);
+        AssertEncrypts(writeIns, 1, guardianSet.ElectionPublicKeys.VoteEncryptionKey);
 
         Assert.NotNull(contest.ContestData);
         Assert.NotEmpty(contest.ContestData!.C0);
@@ -430,21 +443,24 @@ public class BallotEncryptorTests
     }
 
     [Fact]
-    public void Encrypt_SelectionValueExceedsOptionSelectionLimit_ThrowsException()
+    public void Encrypt_SelectionValueExceedsOptionSelectionLimit_IsNeutralizedAsAnOvervote()
     {
-        // NO-COVERAGE GAP: Validate's per-choice range check
-        // (`choice.SelectionValue < 0 || choice.SelectionValue > manifestContest.OptionSelectionLimit`)
-        // had no test at all. OptionSelectionLimit defaults to 1; a raw SelectionValue of 2 must
-        // trip this guard directly (independent of the contest-level overvote logic, which operates
-        // on the *sum* across choices, not a single choice's raw value).
-        var (_, manifest, encryptionRecordResult) = BuildEncryptionRecord();
+        // G10 (§3.3.5 p.31, §3.1.3 p.18): a value above the option selection limit R overvotes the
+        // contest; it is neutralized, not refused. (Before S5 the encryptor threw
+        // InvalidBallotException here.) OptionSelectionLimit defaults to 1, so a raw SelectionValue
+        // of 2 overvotes even though nothing else is selected.
+        var (guardianSet, manifest, encryptionRecordResult) = BuildEncryptionRecord();
         var deviceHash = new VotingDeviceInformationHash(encryptionRecordResult.ExtendedBaseHash, "device-12");
+        var k = guardianSet.ElectionPublicKeys.VoteEncryptionKey;
 
         var ballot = ElectionFixtureBuilder.CreateBallot(manifest, selectionValuesByChoiceId: new Dictionary<string, int> { ["choice-1"] = 2 });
 
         var encryptor = new BallotEncryptor(encryptionRecordResult.EncryptionRecord, "device-12", deviceHash);
+        var contest = encryptor.Encrypt(ballot, null).Contests.Single();
 
-        Assert.Throws<InvalidBallotException>(() => encryptor.Encrypt(ballot, null));
+        Assert.All(contest.Choices, choice => AssertEncrypts(choice, 0, k));
+        AssertEncrypts(contest.Field(SupplementalFieldKind.OvervoteIndicator), 1, k);
+        AssertEncrypts(contest.Field(SupplementalFieldKind.NullVoteIndicator), 0, k);
     }
 
     [Fact]

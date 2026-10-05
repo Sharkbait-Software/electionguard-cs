@@ -7,7 +7,8 @@ namespace ElectionGuard.Core.Verify;
 /// <summary>
 /// The shape a ballot must have before any per-selection verification means anything: its ballot
 /// style is in the manifest, it lists exactly that style's contests, each once, and each contest
-/// lists exactly the manifest's options for that contest, each once.
+/// lists exactly the manifest's options for that contest, each once, and exactly the supplemental
+/// fields the manifest declares for it (§3.3.9), each once.
 ///
 /// The spec has no lettered sub-check for this. It is implicit in its index-keyed model: one
 /// ciphertext per (contest index, option index) (§3.1.3 p.17; §3.4 "unique contest index"), and
@@ -86,6 +87,7 @@ public static class BallotStructure
 
         Span<bool> onBallot = Flags(manifestContests.Count, stackalloc bool[MaxStackAllocCount]);
         Span<bool> optionBuffer = stackalloc bool[MaxStackAllocCount];
+        Span<bool> fieldBuffer = stackalloc bool[SupplementalField.KindCount];
         int contestHint = 0;
         foreach (var contest in ballot.Contests)
         {
@@ -121,9 +123,68 @@ public static class BallotStructure
             {
                 return $"Contest {contest.Id} on ballot {ballot.Id} has no selection for option {options[missing].Id}.";
             }
+
+            if (SupplementalFieldViolation(ballot.Id, contest, manifestContest, fieldBuffer) is string fieldViolation)
+            {
+                return fieldViolation;
+            }
         }
 
         return MissingStyleContest(ballot.Id, style, manifestContests, inStyle, onBallot);
+    }
+
+    /// <summary>
+    /// The contest lists exactly the supplemental fields its manifest contest declares, each once
+    /// (§3.1.3 p.19: they are listed with the options, so the same one-ciphertext-per-index rule
+    /// applies). An undeclared field would be hashed and tallied as nothing the manifest defines; a
+    /// missing one would leave its count unverifiable.
+    ///
+    /// A null list (or a null entry) is a violation even where the manifest declares no fields: the
+    /// list is required, every encoder writes it (empty when there are none), and the protobuf
+    /// decoder yields an empty list, so null only comes from a malformed JSON document. Every
+    /// consumer after <see cref="Require(EncryptedBallot, Manifest, int)"/> walks the list unguarded.
+    /// </summary>
+    private static string? SupplementalFieldViolation(string ballotId, EncryptedContest contest, Contest manifestContest, Span<bool> buffer)
+    {
+        var declared = manifestContest.SupplementalFields;
+        var encrypted = contest.SupplementalFields;
+        if (encrypted is null)
+        {
+            return $"Contest {contest.Id} on ballot {ballotId} has a null supplemental field list; a contest with no supplemental fields lists none (the manifest declares {declared.Count}).";
+        }
+
+        Span<bool> seen = Flags(declared.Count, buffer);
+        int hint = 0;
+        for (int i = 0; i < encrypted.Count; i++)
+        {
+            if (encrypted[i] is null)
+            {
+                return $"Contest {contest.Id} on ballot {ballotId} has a null entry in its supplemental field list.";
+            }
+
+            string fieldId = encrypted[i].FieldId;
+            int position = i < declared.Count && string.Equals(declared[i].Id, fieldId, StringComparison.Ordinal)
+                ? i
+                : PositionOf(declared, fieldId, static x => x.Id, ref hint);
+            if (position < 0)
+            {
+                return $"Contest {contest.Id} on ballot {ballotId} has supplemental field {fieldId}, which the manifest does not declare for that contest.";
+            }
+
+            if (seen[position])
+            {
+                return $"Contest {contest.Id} on ballot {ballotId} lists supplemental field {fieldId} more than once.";
+            }
+
+            seen[position] = true;
+        }
+
+        if (FirstUnset(seen) is int missing and >= 0)
+        {
+            return $"Contest {contest.Id} on ballot {ballotId} has no encryption of supplemental field {declared[missing].Id}, which the manifest declares.";
+        }
+
+        return null;
     }
 
     /// <summary>A description of the first structural violation, or null when there is none.</summary>

@@ -85,10 +85,6 @@ public class CanonicalOrderTests
             Contests = contests,
             BallotStyles = [new BallotStyle { Id = "style-1", Name = "Style 1", ContestIds = styleContestIds }],
             OptionalContestDataMaxLength = 0,
-            IncludeOvervotes = true,
-            IncludeNullvotes = true,
-            IncludeUndervotes = true,
-            IncludeWriteins = true,
             ChainingMode = ChainingMode.None,
         };
         var manifestFile = new ManifestFile { Bytes = JsonSerializer.SerializeToUtf8Bytes(manifest) };
@@ -167,11 +163,7 @@ public class CanonicalOrderTests
     private static ContestHash HashInStoredOrder(EncryptedBallot ballot, EncryptedContest contest, int contestIndex) => new(
         ballot.SelectionEncryptionIdentifierHash,
         contestIndex,
-        contest.Choices,
-        contest.OvervoteCount,
-        contest.NullvoteCount,
-        contest.UndervoteCount,
-        contest.WriteInVoteCount,
+        contest.Choices.Concat<EncryptedValueWithProofs>(contest.SupplementalFields),
         contest.ContestData);
 
     [Fact]

@@ -155,6 +155,31 @@ pooled), and `compare` exits 1 with `DecryptTally allocBytesPerBallot ... REGRES
 phase's allocation stays within 2%. Rebaseline on a post-S4 record. `compare` also warns that
 `VerifyDecryption` ran only in the candidate, which is expected for the same reason.
 
+Since stage S5, supplemental fields (overvote, null-vote and undervote indicators, undervote
+difference count, write-in count) are declared per contest in the manifest and are encrypted, proved,
+verified, tallied and decrypted like options. The committed manifests changed with it, so `compare`
+reports every pre-S5 record as incomparable (its manifest hash differs); rebaseline. `smoke`'s
+manifest declares all five kinds, with write-ins that count toward the limit, so each ballot carries
+nine range proofs instead of four options' plus four unverified counters, and an undervote difference
+proof: on this machine `VerifyBallots` went from 0.46 to 0.90 ms/ballot and `EncryptBallots` from
+0.20 to 0.21 ms/ballot (135 to 152 MB). On the same corpus with no supplemental fields declared,
+`VerifyBallots` is 0.46 ms/ballot, as at S4: the per-proof cost did not move. `famous-names-large`
+declares the four kinds the old election-wide flags produced (overvote, null vote, undervote difference
+count, write-in count). The correctness check now compares every declared field's decrypted total
+too, against `ExpectedTallyAccumulator`, which applies the spec's overvote rule (sum above L or one
+option above R) on its own; `BallotGenerator` emits values up to R, options above R, and write-ins only
+where a contest offers write-in fields (on half of the overvoted contests that do, too, so the gate sees
+an overvote zero the write-in count).
+
+`smoke`'s contest has L = 1 and R = 1, where "sum above L or an option above R" and the old "sum above
+L x R" rule agree, so `smoke` cannot tell them apart. The `limits` scenario (`test/data/option-limits`,
+2,000 ballots) can: its four contests (L/R = 1/2, 3/3, 3/3 with write-ins not counted, 2/1) declare every
+supplemental field and offer two write-in fields each. Encrypting with the old threshold fails its
+ballot verification (`Sum of challenge values did not equal c.`), and keeping an uncounted write-in
+count on an overvote fails its correctness check, while `smoke` passes both. Run it after touching the
+overvote rule or the supplemental fields; the unit-level coverage is `ScenarioRunnerTests`' R > 1
+theory in `ElectionGuard.Perf.UnitTests`.
+
 ## Why the harness streams
 
 An encrypted ballot is roughly 50 KB for a four-contest manifest, so a million of them would be
@@ -237,12 +262,17 @@ today can publish to GitHub Pages from CI later.
       "overvotes": 0,
       "nullvotes": 0,
       "undervotes": 0,
+      "undervoteDifference": 0,
       "writeIns": 0,
       "choices": { "<choiceId>": 0 }
     }
   }
 }
 ```
+
+The counters are the totals of §3.3.9's supplemental fields, computed whether or not the manifest
+declares them: ballots overvoted, null votes, ballots with an undervote, the sum of the undervote
+differences (L minus the sum of selections), and write-ins used outside overvoted contests.
 
 `test/ElectionGuard.Testing.Cli` is a thin CLI over the same `ElectionGuard.Testing.Common` library
 this harness uses for ballot generation and expected-tally accounting -- its only unique job is

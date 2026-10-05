@@ -170,8 +170,8 @@ public class TallyDecryptionProtocolTests
         var commitmentsB = reveals.SelectMany(r => r.Contests.Values.SelectMany(c => c.Choices.Values)).Select(x => x.CommitmentB).ToList();
         var responseValues = responses.SelectMany(r => r.Contests.Values.SelectMany(c => c.Choices.Values)).Select(x => x.Response).ToList();
 
-        // 3 guardians x 2 options.
-        Assert.Equal(6, commitmentsA.Count);
+        // 3 guardians x 6 verifiable fields (2 options and the 4 declared supplemental fields, G29).
+        Assert.Equal(3 * (2 + ElectionFixtureBuilder.DefaultSupplementalFields.Count), commitmentsA.Count);
         Assert.Equal(commitmentsA.Count, commitmentsA.Distinct().Count());
         Assert.Equal(commitmentsB.Count, commitmentsB.Distinct().Count());
         Assert.Equal(responseValues.Count, responseValues.Distinct().Count());
@@ -334,10 +334,7 @@ public class TallyDecryptionProtocolTests
                         new EncryptedSelection { ChoiceId = "choice-2", Alpha = 1, Beta = 1, Proofs = proofs },
                     ],
                     Proofs = proofs,
-                    OvervoteCount = counter,
-                    NullvoteCount = counter,
-                    UndervoteCount = counter,
-                    WriteInVoteCount = counter,
+                    SupplementalFields = counter.AsFields([.. ElectionFixtureBuilder.DefaultSupplementalFields]),
                     ContestData = null,
                     ContestHash = new ContestHash(new byte[] { 0x01 }),
                 },

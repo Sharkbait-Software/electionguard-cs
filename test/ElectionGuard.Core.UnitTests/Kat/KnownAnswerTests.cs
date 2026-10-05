@@ -5,6 +5,8 @@ using ElectionGuard.Core.Tally;
 using System.Numerics;
 using System.Text;
 using System.Text.Json;
+using ElectionGuard.Core.BallotEncryption;
+using ElectionGuard.Testing.Common;
 using Version = ElectionGuard.Core.Models.Version;
 
 namespace ElectionGuard.Core.UnitTests.Kat;
@@ -34,10 +36,6 @@ public class KnownAnswerTests
     /// </summary>
     private static readonly Dictionary<string, string> UnsupportedFamilies = new()
     {
-        // ContestHash always appends the four supplemental counters (overvote, null vote,
-        // undervote, write-in); the vectors hash the options alone. Supplemental fields are
-        // redesigned in stage S5 (G3/G8).
-        ["contest_hash"] = "G8: ContestHash cannot omit the supplemental counters",
         // Chain closing (eqs. 77/78, 0x2B) has no API yet; stage S8 (G19).
         ["chain_close_inner"] = "G19: no chain-closing API",
         ["chain_close"] = "G19: no chain-closing API",
@@ -172,6 +170,7 @@ public class KnownAnswerTests
             "encryption_nonce",
             "device_info_hash",
             "preencrypted_device_info_hash",
+            "contest_hash",
             "confirmation_code",
             "chain_init",
             "tally_decryption_commitment_hash",
@@ -424,6 +423,138 @@ public class KnownAnswerTests
         Assert.Equal("00000001", ToHex(chainingField[..4]));
         Assert.Equal(vector.GetProperty("expected_hex").GetString(), ToHex(chainingField[4..]));
         Assert.Equal(inputs.GetProperty("B_C0_hex").GetString(), "00000001" + inputs.GetProperty("H_DI_hex").GetString());
+    }
+
+    /// <summary>
+    /// Eq. (70) with no contest data: chi_l = H(H_I; 0x28, l, alpha_1, beta_1, ..., alpha_m, beta_m)
+    /// over exactly the verifiable fields given, here the options alone (G8: before S5 the library
+    /// always appended four supplemental counters), through the constructor the encryptor and
+    /// Verification 8 use. <see cref="Encryption_ReproducesTheContestHashAndConfirmationCodeVectors"/>
+    /// checks it through an encryption.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(VectorNames), "contest_hash")]
+    public void ContestHash_Eq70(string name)
+    {
+        var vector = Vector(name);
+        var inputs = Inputs(vector);
+        var selectionEncryptionIdentifierHash = SelectionEncryptionIdentifierHashFor(inputs.GetProperty("H_I_hex").GetString()!);
+        var ciphertexts = inputs.GetProperty("ciphertexts").EnumerateArray()
+            .Select((x, i) => new EncryptedSelection
+            {
+                ChoiceId = $"option-{i + 1}",
+                Alpha = P(x, "alpha_hex"),
+                Beta = P(x, "beta_hex"),
+                Proofs = [],
+            })
+            .ToList();
+
+        var contestHash = new ContestHash(selectionEncryptionIdentifierHash, inputs.GetProperty("l").GetInt32(), ciphertexts, encryptedContestData: null);
+
+        AssertExpected(vector, contestHash);
+    }
+
+    /// <summary>
+    /// The oracle's main-chain ballot, encrypted by the library: K = g^5, K-hat = g^7, H_E and H_I
+    /// from the main chain, xi_B = A0A1..BF, contest 1 with two options voted (1, 0) and contest 2
+    /// with three voted (0, 0, 1), neither declaring a supplemental field. Every ciphertext comes from
+    /// eq. (33)'s nonces, so the contest hashes must be the contest_hash vectors chi_1 and chi_2, and
+    /// with no chaining the confirmation code must be the confirmation_code vector over them. A
+    /// declared supplemental field must then change chi (eq. 70 hashes every declared field), while
+    /// leaving the options' ciphertexts alone (each field has its own nonce xi_{i,j}).
+    /// </summary>
+    [Fact]
+    public void Encryption_ReproducesTheContestHashAndConfirmationCodeVectors()
+    {
+        var chain = Root.GetProperty("main_chain");
+        var g = EGParameters.G;
+        var parameterBaseHash = new ParameterBaseHash(new CryptographicParameters(), new GuardianParameters(Int(chain, "n"), Int(chain, "k")));
+        var manifestFile = new ManifestFile { Bytes = Hex(chain, "manifest_hex") };
+        var electionBaseHash = new ElectionBaseHash(parameterBaseHash, manifestFile);
+        var keys = new ElectionPublicKeys(
+            [IntegerModP.PowModP(g, new BigInteger(5))],
+            [IntegerModP.PowModP(g, new BigInteger(7))]);
+        var extendedBaseHash = new ExtendedBaseHash(electionBaseHash, keys);
+        Assert.Equal(chain.GetProperty("H_E_hex").GetString(), ToHex(extendedBaseHash));
+
+        static Contest Contest(int index, int options, List<SupplementalField>? fields = null) => new()
+        {
+            Id = $"contest-{index}",
+            Name = $"Contest {index}",
+            Index = index,
+            SelectionLimit = 1,
+            OptionSelectionLimit = 1,
+            Choices = Enumerable.Range(1, options).Select(j => new Choice { Id = $"option-{index}-{j}", Name = $"Option {j}", Index = j }).ToList(),
+            SupplementalFields = fields ?? [],
+        };
+
+        EncryptedBallot Encrypt(List<Contest> contests)
+        {
+            var manifest = new Manifest
+            {
+                ElectionId = "kat",
+                Contests = contests,
+                BallotStyles = [new BallotStyle { Id = "style", Name = "Style", ContestIds = contests.Select(x => x.Id).ToList() }],
+                OptionalContestDataMaxLength = 0,
+                ChainingMode = ChainingMode.None,
+            };
+            var record = new EncryptionRecord
+            {
+                CryptographicParameters = new CryptographicParameters(),
+                GuardianParameters = new GuardianParameters(Int(chain, "n"), Int(chain, "k")),
+                ParameterBaseHash = parameterBaseHash,
+                ManifestFile = manifestFile,
+                ElectionBaseHash = electionBaseHash,
+                Guardians = [],
+                ElectionPublicKeys = keys,
+                ExtendedBaseHash = extendedBaseHash,
+                Manifest = manifest,
+            };
+            int[][] votes = [[1, 0], [0, 0, 1]];
+            var ballot = new Core.BallotEncryption.Ballot
+            {
+                Id = "kat-ballot",
+                BallotStyleId = "style",
+                Contests = contests.Select((contest, c) => new BallotContest
+                {
+                    Id = contest.Id,
+                    Choices = contest.Choices.Select((choice, j) => new BallotChoice { Id = choice.Id, SelectionValue = votes[c][j] }).ToList(),
+                }).ToList(),
+            };
+            var deviceHash = new VotingDeviceInformationHash(extendedBaseHash, chain.GetProperty("S_device").GetString()!);
+            return new BallotEncryptor(record, "kat-device", deviceHash).Encrypt(
+                ballot,
+                previousConfirmationCode: null,
+                new SelectionEncryptionIdentifier(Hex(chain, "id_B_hex")),
+                new BallotNonce(Hex(chain, "xi_B_hex")));
+        }
+
+        var encrypted = Encrypt([Contest(1, 2), Contest(2, 3)]);
+        Assert.Equal(chain.GetProperty("H_I_hex").GetString(), ToHex(encrypted.SelectionEncryptionIdentifierHash));
+
+        var chi = AllVectors.Where(x => x.GetProperty("family").GetString() == "contest_hash")
+            .ToDictionary(x => Inputs(x).GetProperty("l").GetInt32(), x => x.GetProperty("expected_hex").GetString());
+        Assert.Equal(chi[1], ToHex(encrypted.Contests[0].ContestHash));
+        Assert.Equal(chi[2], ToHex(encrypted.Contests[1].ContestHash));
+
+        var confirmationCode = AllVectors.Single(x =>
+            x.GetProperty("family").GetString() == "confirmation_code"
+            && Inputs(x).TryGetProperty("H_DI_hex", out var deviceHex) && deviceHex.GetString() == chain.GetProperty("H_DI_hex").GetString()
+            && Inputs(x).GetProperty("contest_hashes_hex").EnumerateArray().Select(h => h.GetString()).SequenceEqual([chi[1], chi[2]]));
+        AssertExpected(confirmationCode, encrypted.ConfirmationCode);
+
+        // Contest 2 declaring an overvote indicator (option index 4): its ciphertext enters chi_2,
+        // under its own nonce, and the options' ciphertexts do not move.
+        var withField = Encrypt([Contest(1, 2), Contest(2, 3, ElectionFixtureBuilder.SupplementalFields(3, [SupplementalFieldKind.OvervoteIndicator]))]);
+        Assert.Equal(chi[1], ToHex(withField.Contests[0].ContestHash));
+        Assert.NotEqual(chi[2], ToHex(withField.Contests[1].ContestHash));
+        Assert.Equal(encrypted.Contests[1].Choices.Select(x => x.Beta), withField.Contests[1].Choices.Select(x => x.Beta));
+        var overvote = Assert.Single(withField.Contests[1].SupplementalFields);
+        IntegerModQ xi = new EncryptionNonce(encrypted.SelectionEncryptionIdentifierHash, new BallotNonce(Hex(chain, "xi_B_hex")), 2, 4);
+        Assert.Equal(IntegerModP.PowModP(g, xi), overvote.Alpha);
+        var expectedChi2 = new ContestHash(encrypted.SelectionEncryptionIdentifierHash, 2,
+            withField.Contests[1].Choices.Concat<EncryptedValueWithProofs>([overvote]), encryptedContestData: null);
+        Assert.Equal(expectedChi2, withField.Contests[1].ContestHash);
     }
 
     [Theory]

@@ -48,10 +48,7 @@ public class EncryptedTallyTests
             Id = "contest-1",
             Choices = selections,
             Proofs = placeholderProofs,
-            OvervoteCount = placeholderCounter,
-            NullvoteCount = placeholderCounter,
-            UndervoteCount = placeholderCounter,
-            WriteInVoteCount = placeholderCounter,
+            SupplementalFields = placeholderCounter.AsFields([.. ElectionFixtureBuilder.DefaultSupplementalFields]),
             ContestData = null,
             ContestHash = new ContestHash(new byte[] { 0x01 }),
         };
@@ -79,10 +76,13 @@ public class EncryptedTallyTests
 
         var contest = Assert.Single(tally.Contests);
         Assert.Equal("contest-1", contest.Key);
-        Assert.Equal(2, contest.Value.Choices.Count);
+        // G29: one aggregate per verifiable field, the two options and the four supplemental fields
+        // the minimal manifest declares.
+        Assert.Equal(2 + ElectionFixtureBuilder.DefaultSupplementalFields.Count, contest.Value.Choices.Count);
         Assert.Contains("choice-1", contest.Value.Choices.Keys);
         Assert.Contains("choice-2", contest.Value.Choices.Keys);
-        // Both choices should start at the (0,0) sentinel "not yet initialized" identity.
+        Assert.All(ElectionFixtureBuilder.DefaultSupplementalFields, kind => Assert.Contains(ElectionFixtureBuilder.SupplementalFieldId(kind), contest.Value.Choices.Keys));
+        // Every aggregate should start at the (1, 1) "nothing added yet" identity.
         foreach (var choice in contest.Value.Choices.Values)
         {
             Assert.True(choice.IsZero());

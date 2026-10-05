@@ -85,10 +85,6 @@ public class RunCommandTests : IDisposable
         {
           "electionId": "broken-manifest-election",
           "optionalContestDataMaxLength": 0,
-          "includeOvervotes": true,
-          "includeNullvotes": true,
-          "includeUndervotes": true,
-          "includeWriteins": true,
           "chainingMode": 0,
           "contests": [
             {
@@ -155,10 +151,6 @@ public class RunCommandTests : IDisposable
         {
           "electionId": "broken-manifest-election",
           "optionalContestDataMaxLength": 0,
-          "includeOvervotes": true,
-          "includeNullvotes": true,
-          "includeUndervotes": true,
-          "includeWriteins": true,
           "chainingMode": 0,
           "contests": [
             {

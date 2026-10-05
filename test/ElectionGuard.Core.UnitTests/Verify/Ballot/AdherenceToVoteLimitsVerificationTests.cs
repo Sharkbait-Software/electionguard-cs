@@ -15,10 +15,16 @@ public class AdherenceToVoteLimitsVerificationTests
         EGParameters.Init(new CryptographicParameters(), new GuardianParameters());
     }
 
+    /// <summary>
+    /// A valid ballot whose contest declares no supplemental fields, so that its selection-limit
+    /// proof is over the plain aggregate of eq. (62), which these tests recompute. The supplemental
+    /// fields' combined proof and relation proof are covered by
+    /// <see cref="SupplementalFieldVerificationTests"/>.
+    /// </summary>
     private static (EncryptedBallot Ballot, EncryptionRecord EncryptionRecord) BuildValidBallot()
     {
         var guardianSet = ElectionFixtureBuilder.CreateGuardianSet();
-        var (manifest, manifestFile) = ElectionFixtureBuilder.CreateMinimalManifest();
+        var (manifest, manifestFile) = ElectionFixtureBuilder.CreateMinimalManifest(supplementalFields: []);
         var encryptionRecordResult = ElectionFixtureBuilder.CreateEncryptionRecord(guardianSet, manifest, manifestFile);
         var deviceHash = new VotingDeviceInformationHash(encryptionRecordResult.ExtendedBaseHash, "device-1");
         var ballot = ElectionFixtureBuilder.CreateBallot(manifest, selectionValuesByChoiceId: new Dictionary<string, int> { ["choice-1"] = 1 });

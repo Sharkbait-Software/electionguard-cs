@@ -127,7 +127,8 @@ public class TallyDecryptionVerification
 
             foreach (var (choiceId, decryptedChoice) in decryptedContest.Choices)
             {
-                var choice = contest.Choices.FirstOrDefault(x => x.Id == choiceId)
+                // An option or a declared supplemental field (§3.3.9), each under its own index.
+                var choice = contest.VerifiableFields().FirstOrDefault(x => x.Id == choiceId)
                     ?? throw new VerificationFailedException("10.structure", $"Tally decryption verification failed: option {choiceId} is not in manifest contest {contestId}, so ind_o is undefined.");
                 if (decryptedChoice.ChoiceIndex != choice.Index)
                 {

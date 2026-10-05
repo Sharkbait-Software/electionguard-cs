@@ -11,6 +11,16 @@ public record EncryptedSelection : EncryptedValueWithProofs
     public required string ChoiceId { get; init; }
 }
 
+/// <summary>
+/// The encryption of a supplemental verifiable field (§3.3.9), with its range proof, keyed by the
+/// field's label in the manifest (<see cref="Models.SupplementalField"/>).
+/// </summary>
+public record EncryptedSupplementalField : EncryptedValueWithProofs
+{
+    [JsonPropertyName("field_id")]
+    public required string FieldId { get; init; }
+}
+
 public record ChallengeResponsePair
 {
     [JsonPropertyName("c")]

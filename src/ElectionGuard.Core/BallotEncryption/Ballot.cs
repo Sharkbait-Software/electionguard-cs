@@ -10,8 +10,16 @@ public record Ballot
 public record BallotContest
 {
     public required string Id { get; init; }
+    /// <summary>The voter's selection for each selectable option of the contest.</summary>
     public required List<BallotChoice> Choices { get; init; }
-    public required int NumWriteinsSelected { get; init; }
+
+    /// <summary>
+    /// The number of the contest's write-in fields the voter used: 0 (the default) up to the
+    /// manifest's <see cref="Models.Contest.WriteInFieldCount"/>. The supplemental fields
+    /// (§3.3.9) are not given here: the encryptor derives every one the contest declares from the
+    /// selections and this number.
+    /// </summary>
+    public int NumWriteinsSelected { get; init; }
     public string? ContestData { get; init; }
 }
 
@@ -23,8 +31,10 @@ public record BallotChoice
 
 /// <summary>
 /// A plaintext ballot the encryptor refuses: a contest listed twice or not in the manifest, a
-/// contest that does not list exactly the manifest's options, a selection value outside
-/// [0, option selection limit], or a ballot that does not list exactly its ballot style's contests.
+/// contest that does not list exactly the manifest's options, a negative selection value, a number
+/// of write-ins outside [0, the contest's write-in field count], or a ballot that does not list
+/// exactly its ballot style's contests. (A selection above the option selection limit is not
+/// refused: it overvotes the contest, §3.3.5.)
 /// </summary>
 public class InvalidBallotException : ArgumentException
 {

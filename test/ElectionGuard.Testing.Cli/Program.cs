@@ -70,6 +70,10 @@ Manifest GenerateManifest(Options options)
             OptionSelectionLimit = 1,
             Index = i + 1,
             Choices = choices,
+            // Every supplemental field kind of §3.3.9, indexed after the options; one write-in
+            // field, whose use counts toward the selection limit.
+            SupplementalFields = ElectionFixtureBuilder.SupplementalFields(numChoices, ElectionFixtureBuilder.AllSupplementalFields, writeInsCountTowardLimit: true),
+            WriteInFieldCount = 1,
         });
     }
 
@@ -99,10 +103,6 @@ Manifest GenerateManifest(Options options)
         Contests = contests,
         BallotStyles = ballotStyles,
         OptionalContestDataMaxLength = 0,
-        IncludeOvervotes = true,
-        IncludeNullvotes = true,
-        IncludeUndervotes = true,
-        IncludeWriteins = true,
         ChainingMode = ChainingMode.None,
     };
 }

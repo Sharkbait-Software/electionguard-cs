@@ -217,6 +217,37 @@ public class BallotGeneratorTests
     }
 
     [Fact]
+    public void Generate_WithOptionLimitAboveOne_UsesValuesUpToR_AndSometimesOvervotesAnOption()
+    {
+        // S5 (G10): with R > 1 the corpus exercises values in 2..R, and an option above R, which is
+        // an overvote of its own; otherwise the egperf gate never sees the R > 1 overvote rule.
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest(selectionLimit: 3, optionSelectionLimit: 3);
+        var generator = new BallotGenerator(manifest, seed: 55);
+
+        var values = Enumerable.Range(0, 2000)
+            .SelectMany(i => generator.Generate(i).Contests.SelectMany(c => c.Choices).Select(x => x.SelectionValue))
+            .ToList();
+
+        Assert.Contains(values, value => value is 2 or 3);
+        Assert.Contains(values, value => value == 4);
+        Assert.DoesNotContain(values, value => value > 4 || value < 0);
+    }
+
+    [Fact]
+    public void Generate_UsesWriteInsOnlyInContestsThatOfferThem_WithinTheWriteInFieldCount()
+    {
+        var (without, _) = ElectionFixtureBuilder.CreateMinimalManifest();
+        var (with, _) = ElectionFixtureBuilder.CreateMinimalManifest(includeWriteIns: true, writeInFieldCount: 3);
+
+        var noWriteIns = Enumerable.Range(0, 500).Select(i => new BallotGenerator(without, seed: 9).Generate(i).Contests[0].NumWriteinsSelected);
+        var writeIns = Enumerable.Range(0, 500).Select(i => new BallotGenerator(with, seed: 9).Generate(i).Contests[0].NumWriteinsSelected).ToList();
+
+        Assert.All(noWriteIns, n => Assert.Equal(0, n));
+        Assert.Contains(writeIns, n => n > 0);
+        Assert.All(writeIns, n => Assert.InRange(n, 0, 3));
+    }
+
+    [Fact]
     public void Generate_AssignsTheIndexAsTheBallotId()
     {
         var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest();

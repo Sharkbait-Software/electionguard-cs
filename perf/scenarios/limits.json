@@ -1,0 +1,16 @@
+{
+  "id": "limits",
+  "manifest": "test/data/option-limits/manifest.json",
+  "ballotCount": 2000,
+  "seed": 20261005,
+  "guardians": { "n": 3, "k": 2 },
+  "parallelism": 0,
+  "chunkSize": 500,
+  "warmupBallots": 200,
+  "phases": {
+    "ballotVerification": true,
+    "tallyVerification": true,
+    "decrypt": true,
+    "serialization": false
+  }
+}
