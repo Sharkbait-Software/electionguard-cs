@@ -12,6 +12,10 @@ public class AdherenceToVoteLimitsVerification
 {
     public void Verify(EncryptedBallot encryptedBallot, EncryptionRecord encryptionRecord)
     {
+        // The proof challenges recomputed below hash the manifest's contest indices. They are
+        // trusted here because EncryptionRecord validated the manifest (§3.1.3) when it was built;
+        // re-validating the whole manifest per ballot would cost O(manifest) each time.
+
         // Looks up the g and K tables once for the whole ballot rather than once per exponentiation.
         var challenge = new RangeProofChallenge(encryptionRecord.ElectionPublicKeys.VoteEncryptionKey);
 

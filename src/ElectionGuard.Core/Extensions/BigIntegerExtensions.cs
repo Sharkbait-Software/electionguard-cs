@@ -204,6 +204,30 @@ public static class BigIntegerExtensions
     /// </summary>
     internal static void WriteBigEndianPadded(this BigInteger value, Span<byte> destination)
     {
+        WriteBigEndianPaddedCore(value, destination);
+    }
+
+    /// <summary>
+    /// §5.1.1/§5.1.2 b(a, m): a non-negative value as exactly <paramref name="length"/> unsigned
+    /// big-endian bytes, zero-padded on the left. Unlike IntegerModP/IntegerModQ.ToByteArray this
+    /// does not reduce the value first, which is what the parameter base hash needs: it encodes p and
+    /// q themselves (eq. 4), and reducing p mod p or q mod q would encode zero. Throws when the value
+    /// is negative or wider than <paramref name="length"/>.
+    /// </summary>
+    public static byte[] ToBigEndianPadded(this BigInteger value, int length)
+    {
+        if (value.Sign < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(value), "Only non-negative values have a b(a, m) encoding.");
+        }
+
+        var bytes = new byte[length];
+        WriteBigEndianPaddedCore(value, bytes);
+        return bytes;
+    }
+
+    private static void WriteBigEndianPaddedCore(BigInteger value, Span<byte> destination)
+    {
         int count = value.GetByteCount(isUnsigned: true);
         if (count > destination.Length)
         {

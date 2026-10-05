@@ -43,9 +43,22 @@ public class ElectionBaseHashTests
     {
         var manifestFile = CreateManifestFile();
 
+        // §3.1.4 eq. (5) with the §5.1.5 file-length prefix: 0x01 || b(len(manifest), 4) || manifest.
+        // test/kat pins the digests themselves (Kat/KnownAnswerTests).
         var hash = new ElectionBaseHash(EGParameters.ParameterBaseHash, manifestFile);
-        var expected = EGHash.Hash(EGParameters.ParameterBaseHash, new byte[] { 0x01 }, manifestFile.Bytes);
+        var expected = EGHash.Hash(EGParameters.ParameterBaseHash, new byte[] { 0x01 }, new byte[] { 0x00, 0x00, 0x00, 0x03 }, manifestFile.Bytes);
 
         Assert.Equal(expected, (byte[])hash);
+        Assert.NotEqual(EGHash.Hash(EGParameters.ParameterBaseHash, new byte[] { 0x01 }, manifestFile.Bytes), (byte[])hash);
+    }
+
+    [Fact]
+    public void Compute_MatchesTheConstructor()
+    {
+        var manifestFile = CreateManifestFile();
+
+        var hash = new ElectionBaseHash(EGParameters.ParameterBaseHash, manifestFile);
+
+        Assert.Equal((byte[])hash, ElectionBaseHash.Compute(EGParameters.ParameterBaseHash, manifestFile.Bytes));
     }
 }

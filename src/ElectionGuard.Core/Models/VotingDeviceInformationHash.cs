@@ -13,8 +13,11 @@ public struct VotingDeviceInformationHash : IEquatable<VotingDeviceInformationHa
 
     public VotingDeviceInformationHash(ExtendedBaseHash extendedBaseHash, string deviceIdentifier)
     {
+        // §3.4.3 eq. (72): HDI = H(HE; 0x2A, S_device), with S_device length-prefixed per §5.1.4,
+        // 5 + len(S_device) bytes (§5.5.3).
         var deviceIdentifierBytes = Encoding.UTF8.GetBytes(deviceIdentifier);
         _value = EGHash.Hash(extendedBaseHash,
+            [0x2A],
             deviceIdentifierBytes.Length.ToByteArray(),
             deviceIdentifierBytes);
     }

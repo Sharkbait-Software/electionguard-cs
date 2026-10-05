@@ -45,14 +45,9 @@ public class ParameterVerification
             throw new VerificationFailedException("1.D", $"G does not match expected value. Expected: {EGParameters.G} Actual: {cryptographicParameters.G}");
         }
 
-        // 1.E
-        var expectedParameterHash = EGHash.Hash(new Version(cryptographicParameters.Version),
-            [0x00],
-            cryptographicParameters.P.ToByteArray(),
-            cryptographicParameters.Q.ToByteArray(),
-            cryptographicParameters.G.ToByteArray(),
-            guardianParameters.N.ToByteArray(),
-            guardianParameters.K.ToByteArray());
+        // 1.E: recomputed through the same constructor that produces H_P everywhere else, so the
+        // check and the value it checks cannot disagree about the encoding of eq. (4).
+        byte[] expectedParameterHash = new ParameterBaseHash(cryptographicParameters, guardianParameters);
 
         if (!expectedParameterHash.SequenceEqual(parameterBaseHash))
         {
@@ -73,12 +68,11 @@ public class ParameterVerification
     {
         Verify(cryptographicParameters, guardianParameters, parameterBaseHash);
 
-        // 1.F
-        var expectedElectionBaseHash = EGHash.Hash(parameterBaseHash,
-            [0x01],
-            manifest);
+        // 1.F: eq. (5), through the helper ElectionBaseHash itself uses. Compared by content: these
+        // are byte arrays, and != would compare references.
+        var expectedElectionBaseHash = ElectionBaseHash.Compute(parameterBaseHash, manifest);
 
-        if (expectedElectionBaseHash != electionBaseHash)
+        if (!expectedElectionBaseHash.SequenceEqual(electionBaseHash))
         {
             throw new VerificationFailedException("1.F", $"Election Base Hash does not match expected value. Expected: {Convert.ToHexString(expectedElectionBaseHash)} Actual: {Convert.ToHexString(electionBaseHash)}");
         }

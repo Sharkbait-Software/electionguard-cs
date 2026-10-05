@@ -82,14 +82,7 @@ public class Guardian
             IntegerModP alpha = keyPair.PublicKey;
 
             IntegerModP beta = MontgomeryModP.PowModP(guardian.CommunicationPublicKey, epsilon);
-            var symmetricKey = EGHash.Hash(EGParameters.ParameterBaseHash,
-                [0x11],
-                Index,
-                guardian.Index,
-                guardian.CommunicationPublicKey,
-                alpha,
-                beta
-                );
+            var symmetricKey = ComputeShareSecretKey(EGParameters.ParameterBaseHash, Index, guardian.Index, guardian.CommunicationPublicKey, alpha, beta);
 
             (byte[] k1, byte[] k2) = ComputeShareEncryptionKeys(symmetricKey, Index, guardian.Index);
 
@@ -158,14 +151,7 @@ public class Guardian
             var alpha = new IntegerModP(encryptedShare.C0);
             var beta = MontgomeryModP.PowModP(alpha, _keys.CommunicationKeyPair.SecretKey);
 
-            var k = EGHash.HashModQ(EGParameters.ParameterBaseHash,
-                [0x11],
-                encryptedShare.SourceIndex,
-                encryptedShare.DestinationIndex,
-                _keys.CommunicationKeyPair.PublicKey,
-                alpha,
-                beta
-                ).ToByteArray();
+            var k = ComputeShareSecretKey(EGParameters.ParameterBaseHash, encryptedShare.SourceIndex, encryptedShare.DestinationIndex, _keys.CommunicationKeyPair.PublicKey, alpha, beta);
 
             (byte[] k1, byte[] k2) = ComputeShareEncryptionKeys(k, encryptedShare.SourceIndex, encryptedShare.DestinationIndex);
             byte[] pphPolynomials = encryptedShare.C1.XOR(k1.Concat(k2).ToArray());
@@ -278,6 +264,24 @@ public class Guardian
         }
         return result;
         //return keyPairs.Select((x, j) => new IntegerModQ(x.SecretKey * BigInteger.Pow(destinationGuardianIndex, j))).Sum();
+    }
+
+    /// <summary>
+    /// §3.2.2 eq. (16): the secret key k_{i,l} = H(H_P; 0x11, b(i, 4), b(l, 4), kappa_l, alpha, beta)
+    /// from which guardian i's share encryption keys for guardian l are derived, 1545 bytes hashed
+    /// (§5.5.2). It is a full 32-byte H, not H_q: both the encrypting and the decrypting guardian
+    /// come through here so that they cannot derive it differently.
+    /// </summary>
+    internal static byte[] ComputeShareSecretKey(byte[] parameterBaseHash, int sourceIndex, int destinationIndex, IntegerModP destinationCommunicationKey, IntegerModP alpha, IntegerModP beta)
+    {
+        return EGHash.Hash(parameterBaseHash,
+            [0x11],
+            sourceIndex.ToByteArray(),
+            destinationIndex.ToByteArray(),
+            destinationCommunicationKey,
+            alpha,
+            beta
+            );
     }
 
     private (byte[] k1, byte[] k2) ComputeShareEncryptionKeys(byte[] symmetricKey, GuardianIndex sourceIndex, GuardianIndex destinationIndex)

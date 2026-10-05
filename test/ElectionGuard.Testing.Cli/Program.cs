@@ -50,6 +50,7 @@ Manifest GenerateManifest(Options options)
         // Choice ids are "{contestIndex}-{choiceIndex}", unique within a contest because j runs
         // 0..numChoices-1 without repetition -- BallotGenerator throws if a manifest carries a
         // duplicated choice id within one contest, so this scheme must (and does) stay unique.
+        // Indices, unlike ids, are the 1-based list positions §3.1.3 requires: j + 1 and i + 1.
         var choices = new List<Choice>();
         for (int j = 0; j < numChoices; j++)
         {
@@ -57,7 +58,7 @@ Manifest GenerateManifest(Options options)
             {
                 Id = $"{i}-{j}",
                 Name = $"{faker.Person.FirstName} {faker.Person.LastName}",
-                Index = j,
+                Index = j + 1,
             });
         }
 
@@ -67,7 +68,7 @@ Manifest GenerateManifest(Options options)
             Name = faker.Name.JobTitle(),
             SelectionLimit = selectionLimit,
             OptionSelectionLimit = 1,
-            Index = i,
+            Index = i + 1,
             Choices = choices,
         });
     }
@@ -75,8 +76,10 @@ Manifest GenerateManifest(Options options)
     var ballotStyles = new List<BallotStyle>();
     for (int i = 0; i < options.NumBallotStyles; i++)
     {
-        var randomContestIds = contests
-            .OrderBy(_ => Guid.NewGuid())
+        // Shuffled with the seeded faker, not Guid.NewGuid(), so the same --seed always produces
+        // the same ballot styles. The ballot style's contest list is unordered (§3.1.3); the
+        // encryptor puts contests into manifest order itself.
+        var randomContestIds = faker.Random.Shuffle(contests)
             .Take(options.ContestsPerBallotStyle)
             .Select(x => x.Id)
             .ToList();
@@ -91,7 +94,8 @@ Manifest GenerateManifest(Options options)
 
     return new Manifest
     {
-        ElectionId = Guid.NewGuid().ToString(),
+        // From the seeded faker too: the manifest bytes feed H_B, so the same --seed should give the same election.
+        ElectionId = faker.Random.Guid().ToString(),
         Contests = contests,
         BallotStyles = ballotStyles,
         OptionalContestDataMaxLength = 0,

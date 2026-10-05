@@ -22,6 +22,10 @@ public class BallotPreEncryptor
         ArgumentNullException.ThrowIfNull(deviceId);
 
         var manifest = encryptionRecord.Manifest;
+
+        // §3.1.3: every nonce and selection hash below hashes the manifest's contest and option indices.
+        manifest.Validate();
+
         _hashTrimmingFunction = manifest.HashTrimmingFunction
             ?? throw new ArgumentException("The manifest does not specify a hash-trimming function, so it does not support pre-encrypted ballots (§4.1.5).", nameof(encryptionRecord));
 

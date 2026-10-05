@@ -19,6 +19,10 @@ public class PreEncryptedConfirmationCodeVerification
     /// previous ballot generated on the device, or null for its first ballot.</param>
     public void Verify(PreEncryptedBallot ballot, VotingDeviceInformationHash deviceInformationHash, EncryptionRecord encryptionRecord, ConfirmationCode? previousConfirmationCode)
     {
+        // The contest hashes recomputed below hash the manifest's contest indices. They are trusted
+        // here because EncryptionRecord validated the manifest (§3.1.3) when it was built;
+        // re-validating the whole manifest per ballot would cost O(manifest) each time.
+
         var selectionEncryptionIdentifierHash = ballot.SelectionEncryptionIdentifierHash;
         var contestHashes = new List<(int ContestIndex, ContestHash ContestHash)>();
 

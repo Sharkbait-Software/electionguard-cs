@@ -116,4 +116,67 @@ public class VerificationTests
         VerificationFailedException exception = Assert.Throws<VerificationFailedException>(() => validation.Verify(cryptographicParameters, guardianParameters, baseHash));
         Assert.Equal("1.E", exception.SubSection);
     }
+
+    private static readonly byte[] ManifestBytes = System.Text.Encoding.UTF8.GetBytes("{\"election\":\"verification-1f\"}");
+
+    [Fact]
+    public void Verification1F_PassesForTheElectionBaseHashOfTheManifest()
+    {
+        var cryptographicParameters = new CryptographicParameters();
+        var guardianParameters = new GuardianParameters();
+        EGParameters.Init(cryptographicParameters, guardianParameters);
+        byte[] electionBaseHash = new ElectionBaseHash(EGParameters.ParameterBaseHash, new ManifestFile { Bytes = ManifestBytes });
+
+        // A fresh array with the same content: 1.F must compare contents, not references.
+        var exception = Record.Exception(() => new ParameterVerification().Verify(
+            cryptographicParameters, guardianParameters, EGParameters.ParameterBaseHash, ManifestBytes, electionBaseHash.ToArray()));
+
+        Assert.Null(exception);
+    }
+
+    [Fact]
+    public void Verification1F_FailsWhenElectionBaseHashIsDifferent()
+    {
+        var cryptographicParameters = new CryptographicParameters();
+        var guardianParameters = new GuardianParameters();
+        EGParameters.Init(cryptographicParameters, guardianParameters);
+        byte[] electionBaseHash = ((byte[])new ElectionBaseHash(EGParameters.ParameterBaseHash, new ManifestFile { Bytes = ManifestBytes })).ToArray();
+        electionBaseHash[^1] ^= 0x01;
+
+        var exception = Assert.Throws<VerificationFailedException>(() => new ParameterVerification().Verify(
+            cryptographicParameters, guardianParameters, EGParameters.ParameterBaseHash, ManifestBytes, electionBaseHash));
+
+        Assert.Equal("1.F", exception.SubSection);
+    }
+
+    [Fact]
+    public void Verification1F_FailsWhenManifestIsDifferent()
+    {
+        var cryptographicParameters = new CryptographicParameters();
+        var guardianParameters = new GuardianParameters();
+        EGParameters.Init(cryptographicParameters, guardianParameters);
+        byte[] electionBaseHash = new ElectionBaseHash(EGParameters.ParameterBaseHash, new ManifestFile { Bytes = ManifestBytes });
+        var otherManifest = ManifestBytes.Append((byte)' ').ToArray();
+
+        var exception = Assert.Throws<VerificationFailedException>(() => new ParameterVerification().Verify(
+            cryptographicParameters, guardianParameters, EGParameters.ParameterBaseHash, otherManifest, electionBaseHash));
+
+        Assert.Equal("1.F", exception.SubSection);
+    }
+
+    [Fact]
+    public void Verification1F_IsReportedOnlyAfter1EPasses()
+    {
+        var cryptographicParameters = new CryptographicParameters();
+        var guardianParameters = new GuardianParameters();
+        EGParameters.Init(cryptographicParameters, guardianParameters);
+        byte[] electionBaseHash = new ElectionBaseHash(EGParameters.ParameterBaseHash, new ManifestFile { Bytes = ManifestBytes });
+        byte[] parameterBaseHash = ((byte[])EGParameters.ParameterBaseHash).ToArray();
+        parameterBaseHash[0] ^= 0x01;
+
+        var exception = Assert.Throws<VerificationFailedException>(() => new ParameterVerification().Verify(
+            cryptographicParameters, guardianParameters, parameterBaseHash, ManifestBytes, electionBaseHash));
+
+        Assert.Equal("1.E", exception.SubSection);
+    }
 }

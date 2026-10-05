@@ -94,11 +94,11 @@ public class RunCommandTests : IDisposable
             {
               "id": "1",
               "name": "Single Contest",
-              "index": 0,
+              "index": 1,
               "selectionLimit": 1,
               "optionSelectionLimit": 1,
               "choices": [
-                { "id": "1", "name": "Choice One", "index": 0 }
+                { "id": "1", "name": "Choice One", "index": 1 }
               ]
             }
           ],
@@ -164,11 +164,11 @@ public class RunCommandTests : IDisposable
             {
               "id": "1",
               "name": "Single Contest",
-              "index": 0,
+              "index": 1,
               "selectionLimit": 1,
               "optionSelectionLimit": 1,
               "choices": [
-                { "id": "1", "name": "Choice One", "index": 0 }
+                { "id": "1", "name": "Choice One", "index": 1 }
               ]
             }
           ],

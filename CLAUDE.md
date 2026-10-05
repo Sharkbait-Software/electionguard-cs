@@ -111,6 +111,23 @@ The library models the ElectionGuard protocol as a straight-line pipeline, and t
   either on a secret. The bound is
   `BallotsCast`, so a ballot weight above 1 or an `OptionSelectionLimit` above 1 can push a true
   count out of range, and decryption then throws.
+- Manifest contest and option `Index` values are the 1-based list positions (§3.1.3): the first contest is 1,
+  and the first option of each contest is 1. `Manifest.Validate()` enforces this, along with unique contest ids,
+  unique option ids within a contest, and unique ballot style ids. It throws `InvalidManifestException`. It runs
+  when an `EncryptionRecord` is built (including deserialization) and in the `BallotEncryptor` and
+  `BallotPreEncryptor` constructors. Verifications 6, 7, 8 and 16 deliberately do not call it per ballot (it is
+  O(manifest)); they trust the record's construction-time check. Every hand-built test manifest must follow it. It does not check that a
+  ballot style's contest ids exist; perf tests rely on that failing later.
+- Contest hashes and confirmation codes are taken in manifest order (eqs. 70/71): options in option-index order,
+  contests in contest-index order. The order the plaintext ballot lists them in does not matter.
+  `BallotEncryptor.Encrypt` emits `EncryptedBallot.Contests` and each contest's `Choices` in that canonical order.
+  Verification 8 sorts by manifest index before recomputing, so a stored ballot's list order is irrelevant there
+  too.
+- `test/kat/vectors.json` holds known-answer vectors generated from the spec text alone by `test/kat/eg_kat.py`.
+  `Kat/KnownAnswerTests` runs the library's own hash constructors against them. A hash encoding bug passes every
+  self-referential test and the egperf correctness check, so this test is the only one that catches it. Never edit
+  the vectors to make a test pass. Families the library cannot express yet are listed in
+  `KnownAnswerTests.UnsupportedFamilies`.
 - Non-shipping fixture code lives in `test/ElectionGuard.Testing.Common` (`ElectionFixtureBuilder`,
   `BallotGenerator`, `ExpectedTallyAccumulator`), shared by the unit tests, the perf harness and the
   benchmarks.

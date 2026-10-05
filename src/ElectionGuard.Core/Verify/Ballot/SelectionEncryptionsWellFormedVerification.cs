@@ -12,6 +12,10 @@ public class SelectionEncryptionsWellFormedVerification
 {
     public void Verify(EncryptedBallot encryptedBallot, EncryptionRecord encryptionRecord)
     {
+        // The proof challenges recomputed below hash the manifest's contest and option indices. They
+        // are trusted here because EncryptionRecord validated the manifest (§3.1.3) when it was
+        // built; re-validating the whole manifest per ballot would cost O(manifest) each time.
+
         // 6.A is read off the squaring chains the proof checks walk anyway, when the active q allows
         // it (see RangeProofChallenge). That reorders the work but must not reorder the failures:
         // 6.A for any selection is reported before any other failure. So the fused path runs only

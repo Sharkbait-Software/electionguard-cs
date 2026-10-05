@@ -118,9 +118,12 @@ public class BallotEncryptorTests
         var manifestContest = manifest.Contests.Single();
         foreach (var selection in contest.Choices)
         {
-            var choiceIndex = manifestContest.Choices.Single(c => c.Id == selection.ChoiceId).Index;
+            // §3.1.3: the indices hashed are the 1-based list positions, derived here from the
+            // position rather than read back from the manifest's own Index fields.
+            var choiceIndex = manifestContest.Choices.FindIndex(c => c.Id == selection.ChoiceId) + 1;
+            var contestIndex = manifest.Contests.IndexOf(manifestContest) + 1;
             AssertProofIsWellFormed(
-                selection, manifestContest.OptionSelectionLimit, manifestContest.Index, choiceIndex,
+                selection, manifestContest.OptionSelectionLimit, contestIndex, choiceIndex,
                 encryptedBallot, encryptionRecordResult.EncryptionRecord);
         }
     }

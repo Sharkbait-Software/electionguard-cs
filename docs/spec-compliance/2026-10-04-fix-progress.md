@@ -83,7 +83,7 @@ User answers (2026-10-04):
 
 | Stage | G-IDs | Blocked on | Status | Commit |
 |---|---|---|---|---|
-| S1 Hash encodings, indices, canonical order | G1, G6, G7, G35, G26 (1.F compare and constructor reuse), G12, G9 | — | in progress | |
+| S1 Hash encodings, indices, canonical order | G1, G6, G7, G35, G26 (1.F compare and constructor reuse), G12, G9 | — | done | see log (S1 commit) |
 | S2 Key-generation hardening | G5, G14, G15, G25, G34, G26 (H_B in record and guardian check) | S1 | todo | |
 | S3 Ballot verification strictness | G4, G13, G33, G23, G24, G36 | — | todo | |
 | S4 Tally soundness | G2, G27, G28, G20, G21, G30, G38, G16 | — | todo | |
@@ -99,7 +99,114 @@ User answers (2026-10-04):
 Filled in by S1: every test literal or fixture that pins a hash, nonce, ciphertext or confirmation code, and whether
 it is now loaded from KAT or regenerated after the gate.
 
+The digests themselves are pinned in exactly one place: `test/kat/vectors.json`, checked by
+`test/ElectionGuard.Core.UnitTests/Kat/KnownAnswerTests.cs`. No other test holds a hash literal. Everything else
+restates a layout, or compares the library against itself, so it moves with the code:
+
+| Location | What it pinned | S1 action |
+|---|---|---|
+| `CryptographicParameterTests.cs` `CryptographicParameters_Version_IsCorrect` | left-padded ver | Now asserts `76322E312E30` followed by 26 zero bytes (eq. 4). |
+| `Models/ElectionBaseHashTests.cs` `Constructor_HandComputed_MatchesDirectEGHashCall` | H_B with no length prefix | Now asserts `0x01 ‖ b(len,4) ‖ manifest`, and that the unprefixed form differs. Added `Compute_MatchesTheConstructor`. |
+| `Models/VotingDeviceInformationHashTests.cs` `Constructor_HandComputed_MatchesDirectEGHashCall` | H_DI without 0x2A | Now asserts `0x2A ‖ b(len,4) ‖ S_device`, and that it differs from the 0x43 form. |
+| `VerificationTests.cs` V1 positive and 1.E | compares H_P with itself | Unchanged. It is self-referential; the KAT pins H_P. Added 1.F positive and negative cases. |
+| `PreEncryption/BallotPreEncryptorTests.cs` `PreEncrypt_OrdersContestsByContestIndex` | indices 5 and 2 | Redesigned. The manifest now has [1, 2] and the ballot style lists them reversed. |
+| `PreEncryption/BallotPreEncryptorTests.cs:250`, `Tally/TallyGuardianTests.cs:382` | 0-based `Index = i` | Changed to `i + 1`. |
+| `ElectionFixtureBuilder.CreateMinimalManifest`, `Testing.Cli`, `test/data/single-contest/manifest.json`, Perf `BallotGeneratorTests`/`RunCommandTests` | 0-based fixture indices | Made 1-based. |
+| All other layout tests (ExtendedBaseHash, H_I, nonce, ContestHash, ConfirmationCode, ChainingField, pre-encryption, range-proof prefix) | layouts with literal or manifest-derived indices | Unchanged. They pass, and their layouts did not change in S1. |
+| `perf/results/*.jsonl` smoke `manifestHash` | SHA-256 of the smoke manifest | Changes because `single-contest/manifest.json` changed. Pre-S1 smoke baselines compare as incomparable. These files are untracked. |
+
 ## Log
+
+### 2026-10-04 — S1 orchestrator verification and commit
+- I ran the gate again myself on the final tree:
+  - Build: 0 warnings, 0 errors.
+  - Tests: 811/811 Core, 199/199 Perf.
+  - Smoke: `correctness passed` (Encrypt 0.204 ms/ballot, Verify 0.369 ms/ballot).
+  - Console: `Done.`, tally `0-0: 3, 0-1: 0`.
+- Independent confirmation from outside this repo: Microsoft electionguard-rust (commit e0378a95cf6d,
+  `src/eg/src/hashes.rs:275-279`) pins H_P(n=5,k=3) = `944286970EAFDB6F…FB05DDCE`. This repo's spec-only Python
+  oracle (`test/kat/eg_kat.py`) and the fixed C# code both reproduce it. No other published v2.1 vectors were found.
+- Decided without asking, because the spec answers it: §3.1.3 requires unique **labels** (contest label within the
+  election, option label within a contest, ballot style label). In this model the label is `Id`, which
+  `Manifest.Validate` enforces. `Name` is display text and does not need to be unique.
+- Carry-overs:
+  - S3: `BallotEncryptor.Validate(ballot)` throws a bare `Exception`; switch to a typed exception.
+  - S3: canonical-order fixtures sort the same way by id and by index; add one where they differ.
+  - G35 has no regression test that can fail: an HMAC ≥ q has probability about 2^-248, so H and H_q agree on any
+    real vector.
+
+### 2026-10-04 — S1 (hash encodings, indices, canonical order)
+- Code changes made (uncommitted at the time of writing; the orchestrator commits):
+  - G1: `BigIntegerExtensions.ToBigEndianPadded` (the one fixed-width b(a,m) encoder for unreduced values);
+    `ParameterBaseHash` encodes p/q/g as 512/32/512 bytes; `Version`'s byte[] right-pads ("v2.1.0" then 26 zeros);
+    1.E calls the `ParameterBaseHash` constructor.
+  - G6/G26: `ElectionBaseHash.Compute(H_P, manifest)` = H(H_P; 0x01, b(len,4), manifest), used by the constructor
+    and 1.F; 1.F compares with `SequenceEqual`. H_B in records is still S2.
+  - G7: regular H_DI hashes 0x2A before the length prefix.
+  - G35: `Guardian.ComputeShareSecretKey` (H, not H_q) shared by `EncryptShares` and `DecryptShares`.
+  - G12: `Manifest.Validate()` (1-based positional contest/option indices; unique contest ids, option ids within a
+    contest, ballot style ids; throws `InvalidManifestException`). Called by `EncryptionRecord.Manifest` init and the
+    `BallotEncryptor`/`BallotPreEncryptor` constructors. (V6, V7, V8 and V16 called it per ballot at first; the S1
+    review removed that, see "S1 review response" below.) It does **not** check that ballot-style
+    contest ids resolve (perf tests rely on that failing later, in `BallotGenerator`).
+  - G9: the encryptor walks manifest contests and options in index order, emits them in that order, and so hashes
+    them in that order. V8 sorts by manifest index before recomputing chi_l and H_C.
+  - Fixtures made 1-based: `ElectionFixtureBuilder`, `Testing.Cli` (and its ballot-style shuffle now uses the seeded
+    faker), `test/data/single-contest/manifest.json`, Perf `BallotGeneratorTests`/`RunCommandTests`,
+    `TallyGuardianTests:382`, `BallotPreEncryptorTests:250`. `BallotPreEncryptorTests.PreEncrypt_OrdersContestsByContestIndex`
+    redesigned (manifest [1,2], ballot style lists them reversed) because indices 5 and 2 are no longer valid.
+  - External: `C:\temp\eg\data\1\manifest.json` (console input) indices changed 0/0,1 -> 1/1,2; ids untouched; the
+    original is kept next to it as `manifest.json.pre-s1-zero-based.bak`.
+  - New tests: `Kat/KnownAnswerTests` (loads `test/kat/vectors.json`), `BallotEncryption/CanonicalOrderTests`,
+    `Models/ManifestValidationTests`, 1.F cases in `VerificationTests`.
+- Gate before re-pinning: build 0 errors; smoke `correctness passed`; console `Done.` with tally.json
+  `0-0: 3, 0-1: 0` (the 3 ballots there each select 0-0; the `expected-tally.json` beside them is stale);
+  tests 805/808 Core + 199/199 Perf. The only failures were the three pinned old-layout tests:
+  `CryptographicParameterTests.CryptographicParameters_Version_IsCorrect`,
+  `ElectionBaseHashTests.Constructor_HandComputed_MatchesDirectEGHashCall`,
+  `VotingDeviceInformationHashTests.Constructor_HandComputed_MatchesDirectEGHashCall`. All KAT tests passed.
+- Re-pinned those three to the spec layout (see the pinned-value inventory above). Gate after:
+  - Build: 0 errors, 0 warnings.
+  - Smoke: `correctness passed`.
+  - Console: `Done.`, and tally.json is `0-0: 3, 0-1: 0`.
+  - Tests: 809/809 Core and 199/199 Perf pass.
+- Allocation: the first post-change smoke showed VerifyBallots allocating 9.1 MB, against 5.7 MB before S1.
+  The extra came from `Validate`'s HashSets in V6, V7 and V8, plus V8's `OrderBy`.
+  - Fixes: duplicate ids are now checked pairwise up to 64 items, with no allocation. V8 sorts only when the
+    stored order is not already canonical.
+  - Final smoke: VerifyBallots 5.8 MB (pre-S1 5.7 MB), EncryptBallots 134.7 MB (pre-S1 134.5 MB). Wall time
+    is unchanged.
+- Expected indices in `BallotEncryptorTests` (proof well-formedness) and in `BallotPreEncryptorTests`
+  (vector layout, eq. 121 nonces) are now derived from list position, not from `Index`.
+- `Testing.Cli`'s `ElectionId` now comes from the seeded faker as well. Two runs with the same `--seed` produce
+  byte-identical manifests and ballots. Checked by hand; the generated indices start at 1.
+- CLAUDE.md now documents the index rule, canonical order and the KAT.
+- S1 is complete once the orchestrator commits it.
+- KAT families the library cannot express yet: `contest_hash` (ContestHash always appends the four supplemental
+  counters; S5/G8) and `chain_close*` (no API; S8/G19). `KnownAnswerTests` lists them explicitly.
+
+### 2026-10-04 — S1 review response
+- Finding: V6, V7 and V8 re-validated the whole manifest on every ballot. That is O(manifest) per ballot, and it
+  allocates a HashSet once a list exceeds 64 items, which happens with real ballot-style counts. **Applied.**
+  - Removed the per-ballot `Manifest.Validate()` from V6, V7, V8, and also V16
+    (`PreEncryptedConfirmationCodeVerification`), which the reviewer did not list but which had the same pattern.
+  - The verifiers now trust the validation `EncryptionRecord.Manifest` init does, which also covers
+    deserialization.
+  - `Validate` still runs in the `BallotEncryptor`/`BallotPreEncryptor` constructors. That is the write path, where
+    wrong indices would be baked into ballots.
+  - The pairwise duplicate check up to 64 items stays: the perf harness and the console build a `BallotEncryptor`
+    per ballot. The comment now says so.
+  - Behavior change: if a record's manifest lists are mutated in place after the record is built, verification no
+    longer notices. `ManifestValidationTests.Consumers_...` was renamed to
+    `Encryptors_ManifestReorderedAfterRecordCreation_Throw` and keeps only the two encryptor assertions. It failed
+    as expected (1 of 809) before it was edited.
+- Finding: two new encryptor branches had no tests. **Applied.** Two tests added to `CanonicalOrderTests`:
+  - `Encrypt_BallotStyleWithSubsetOfContests_EmitsThemInManifestOrderAndVerifies`: manifest A, B, C; style [C, A].
+    The output order is [A, C], C is hashed with index 3, the confirmation code is over [H_A, H_C], and V6, V7 and
+    V8 pass.
+  - `Encrypt_BallotListingAContestTwice_IsRejected`.
+- No pinned value moved. Gate: build 0 errors, 0 warnings. Smoke: `correctness passed` (VerifyBallots 5.8 MB,
+  EncryptBallots 134.7 MB). Console: `Done.`, tally `0-0: 3, 0-1: 0`. Tests: 811/811 Core, 199/199 Perf.
 
 ### 2026-10-04 — setup
 - Audit done; tracker created. The baseline gate passes on `846897e`.

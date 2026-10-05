@@ -23,4 +23,9 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Known-answer vectors generated from the spec by test/kat/eg_kat.py; read by Kat/KnownAnswerTests. -->
+    <None Include="../kat/vectors.json" Link="kat/vectors.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

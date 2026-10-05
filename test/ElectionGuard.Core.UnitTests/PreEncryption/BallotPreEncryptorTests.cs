@@ -88,12 +88,14 @@ public class BallotPreEncryptorTests
 
         var contest = PreEncrypt(encryptor, seed: 1).Contests.Single();
 
-        int maxOptionIndex = manifestContest.Choices.Max(c => c.Index);
-        Assert.Equal(manifestContest.Index, contest.ContestIndex);
+        // §3.1.3: indices are 1-based list positions, so they are derived here from the positions,
+        // not read back from the manifest's own Index fields. The null vectors extend them past m.
+        int optionCount = manifestContest.Choices.Count;
+        Assert.Equal(1, contest.ContestIndex);
         Assert.Equal(manifestContest.Id, contest.ContestId);
         Assert.Equal(
-            manifestContest.Choices.OrderBy(c => c.Index).Select(c => ((string?)c.Id, c.Index, false))
-                .Concat([(null, maxOptionIndex + 1, true), (null, maxOptionIndex + 2, true)]),
+            manifestContest.Choices.Select((c, position) => ((string?)c.Id, position + 1, false))
+                .Concat([(null, optionCount + 1, true), (null, optionCount + 2, true)]),
             contest.Selections.Select(s => (s.ChoiceId, s.SelectionIndex, s.IsNullVote)));
         Assert.All(contest.Selections, s => Assert.Equal(manifestContest.Choices.Count, s.Vector.Count));
     }
@@ -105,7 +107,7 @@ public class BallotPreEncryptorTests
         var encryptor = new BallotPreEncryptor(record, DeviceId);
         var (id, ballotNonce) = Seed(1);
         var manifestContest = record.Manifest.Contests[0];
-        var positions = manifestContest.Choices.OrderBy(c => c.Index).Select(c => c.Index).ToList();
+        var positions = Enumerable.Range(1, manifestContest.Choices.Count).ToList();
         var K = record.ElectionPublicKeys.VoteEncryptionKey;
 
         var ballot = encryptor.PreEncrypt("ballot-1", BallotStyleId, id, ballotNonce, null);
@@ -115,7 +117,7 @@ public class BallotPreEncryptorTests
             for (int k = 0; k < positions.Count; k++)
             {
                 IntegerModQ xi = new PreEncryptionNonce(ballot.SelectionEncryptionIdentifierHash, ballotNonce,
-                    manifestContest.Index, selection.SelectionIndex, positions[k]);
+                    contestIndex: 1, selection.SelectionIndex, positions[k]);
                 int expectedValue = selection.SelectionIndex == positions[k] ? 1 : 0;
 
                 Assert.Equal(IntegerModP.PowModP(EGParameters.G, xi), selection.Vector[k].Alpha);
@@ -206,13 +208,17 @@ public class BallotPreEncryptorTests
     [Fact]
     public void PreEncrypt_OrdersContestsByContestIndex()
     {
+        // §3.1.3 makes a contest index the contest's 1-based position in the manifest, so the
+        // manifest lists the contests in index order; the ballot style lists them the other way
+        // round, which is allowed since its contest list is unordered. The output must follow the
+        // indices, not the ballot style.
         var record = CreateEncryptionRecord();
         var template = record.Manifest.Contests[0];
-        var later = template with { Id = "contest-later", Index = 5 };
-        var earlier = template with { Id = "contest-earlier", Index = 2 };
+        var earlier = template with { Id = "contest-earlier", Index = 1 };
+        var later = template with { Id = "contest-later", Index = 2 };
         var manifest = record.Manifest with
         {
-            Contests = [later, earlier],
+            Contests = [earlier, later],
             BallotStyles = [new BallotStyle { Id = BallotStyleId, Name = "style", ContestIds = ["contest-later", "contest-earlier"] }],
         };
         var encryptor = new BallotPreEncryptor(WithManifest(record, manifest), DeviceId);
@@ -247,7 +253,7 @@ public class BallotPreEncryptorTests
         // 256 options plus one null vector need 257 distinct codes; Ω1 has 256.
         var oversized = template with
         {
-            Choices = Enumerable.Range(0, 256).Select(i => new Choice { Id = $"choice-{i}", Name = $"Choice {i}", Index = i }).ToList(),
+            Choices = Enumerable.Range(0, 256).Select(i => new Choice { Id = $"choice-{i}", Name = $"Choice {i}", Index = i + 1 }).ToList(),
         };
         var manifest = record.Manifest with { Contests = [oversized] };
 

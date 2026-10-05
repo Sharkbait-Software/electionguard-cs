@@ -10,6 +10,11 @@ public class BallotEncryptor
 {
     public BallotEncryptor(EncryptionRecord encryptionRecord, string deviceId, VotingDeviceInformationHash deviceHash)
     {
+        ArgumentNullException.ThrowIfNull(encryptionRecord);
+
+        // §3.1.3: every nonce and challenge below hashes the manifest's contest and option indices.
+        encryptionRecord.Manifest.Validate();
+
         _encryptionRecord = encryptionRecord;
         _deviceId = deviceId;
         _deviceHash = deviceHash;
@@ -54,19 +59,41 @@ public class BallotEncryptor
 
     public EncryptedBallot Encrypt(Ballot ballot, ConfirmationCode? previousConfirmationCode)
     {
+        return Encrypt(
+            ballot,
+            previousConfirmationCode,
+            new SelectionEncryptionIdentifier(ElectionGuardRandom.GetBytes(32)),
+            new BallotNonce(ElectionGuardRandom.GetBytes(32)));
+    }
+
+    /// <summary>
+    /// <see cref="Encrypt(Ballot, ConfirmationCode?)"/> with the selection encryption identifier
+    /// id_B and ballot nonce xi_B given rather than drawn. They determine every ciphertext, contest
+    /// hash and the confirmation code; only the proofs' commitments are still random.
+    /// </summary>
+    internal EncryptedBallot Encrypt(Ballot ballot, ConfirmationCode? previousConfirmationCode, SelectionEncryptionIdentifier selectionEncryptionIdentifier, BallotNonce ballotNonce)
+    {
         Validate(ballot);
 
-        var selectionEncryptionIdentifier = new SelectionEncryptionIdentifier(ElectionGuardRandom.GetBytes(32));
         var selectionEncryptionIdentifierHash = new SelectionEncryptionIdentifierHash(_encryptionRecord.ExtendedBaseHash, selectionEncryptionIdentifier);
 
-        var ballotNonce = new BallotNonce(ElectionGuardRandom.GetBytes(32));
         var encryptedBallotNonce = BallotNonceEncryption.Encrypt(ballotNonce, selectionEncryptionIdentifierHash, _encryptionRecord.ElectionPublicKeys.OtherBallotDataEncryptionKey);
 
-        var encryptedContests = new List<EncryptedContest>();
-        List<ContestHash> contestHashes = new List<ContestHash>();
-        foreach(var contest in ballot.Contests)
+        // §3.4.2 eq. (71): the contest hashes enter the confirmation code in the order of the
+        // contests in the manifest, whatever order the plaintext ballot lists them in. The encrypted
+        // ballot lists its contests in that same order. Validate has already checked that the
+        // ballot's contests are distinct and all in the manifest.
+        var encryptedContests = new List<EncryptedContest>(ballot.Contests.Count);
+        List<ContestHash> contestHashes = new List<ContestHash>(ballot.Contests.Count);
+        foreach (var manifestContest in _encryptionRecord.Manifest.Contests)
         {
-            var encryptedContest = EncryptContest(contest, selectionEncryptionIdentifierHash, ballotNonce);
+            var contest = ballot.Contests.SingleOrDefault(x => x.Id == manifestContest.Id);
+            if (contest == null)
+            {
+                continue;
+            }
+
+            var encryptedContest = EncryptContest(contest, manifestContest, selectionEncryptionIdentifierHash, ballotNonce);
             encryptedContests.Add(encryptedContest);
             contestHashes.Add(encryptedContest.ContestHash);
         }
@@ -89,6 +116,12 @@ public class BallotEncryptor
 
     private void Validate(Ballot ballot)
     {
+        // Each contest appears once
+        if (ballot.Contests.Select(x => x.Id).Distinct().Count() != ballot.Contests.Count)
+        {
+            throw new Exception($"Ballot {ballot.Id} lists a contest more than once.");
+        }
+
         // All contests exist in the manifest
         foreach(var contest in ballot.Contests)
         {
@@ -143,10 +176,9 @@ public class BallotEncryptor
         }
     }
 
-    private EncryptedContest EncryptContest(BallotContest contest, SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, BallotNonce ballotNonce)
+    private EncryptedContest EncryptContest(BallotContest contest, Contest manifestContest, SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, BallotNonce ballotNonce)
     {
-        var encryptedSelections = new List<EncryptedSelection>();
-        var manifestContest = _encryptionRecord.Manifest.Contests.Single(x => x.Id == contest.Id);
+        var encryptedSelections = new List<EncryptedSelection>(manifestContest.Choices.Count);
         var actualSelectionTotal = contest.Choices.Sum(x => x.SelectionValue);
         var actualCountOfSelections = contest.Choices.Where(x => x.SelectionValue > 0).Count();
 
@@ -166,9 +198,12 @@ public class BallotEncryptor
             actualSelectionTotal = 0;
         }
         
-        foreach (var choice in contest.Choices)
+        // §3.4.1 eq. (70): the selections enter the contest hash in the order of the options in the
+        // manifest, whatever order the plaintext contest lists them in, and the encrypted contest
+        // lists them in that same order. Validate has already checked that the two sets are equal.
+        foreach (var manifestChoice in manifestContest.Choices)
         {
-            var manifestChoice = manifestContest.Choices.Single(x => x.Id == choice.Id);
+            var choice = contest.Choices.Single(x => x.Id == manifestChoice.Id);
             var encryptedSelection = EncryptSelection(manifestContest, manifestChoice, choice.SelectionValue, selectionEncryptionIdentifierHash, ballotNonce);
             encryptedSelections.Add(encryptedSelection);
         }

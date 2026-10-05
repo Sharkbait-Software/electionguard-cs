@@ -379,7 +379,7 @@ public class TallyAdminSearchRangeTests
         var choices = manifest.Contests[0].Choices;
         for (int i = choices.Count; i < counts.Length; i++)
         {
-            choices.Add(new Choice { Id = $"choice-{i + 1}", Name = $"Choice {i + 1}", Index = i });
+            choices.Add(new Choice { Id = $"choice-{i + 1}", Name = $"Choice {i + 1}", Index = i + 1 });
         }
 
         var choiceIds = choices.Select(x => x.Id).ToList();

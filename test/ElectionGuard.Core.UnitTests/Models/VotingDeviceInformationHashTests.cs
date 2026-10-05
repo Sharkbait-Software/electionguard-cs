@@ -51,10 +51,13 @@ public class VotingDeviceInformationHashTests
         var deviceId = "Device 1";
         var deviceIdBytes = Encoding.UTF8.GetBytes(deviceId);
 
+        // §3.4.3 eq. (72): 0x2A || b(len(S_device), 4) || S_device. test/kat pins the digests
+        // themselves (Kat/KnownAnswerTests).
         var hash = new VotingDeviceInformationHash(extendedBaseHash, deviceId);
-        var expected = EGHash.Hash(extendedBaseHash, deviceIdBytes.Length.ToByteArray(), deviceIdBytes);
+        var expected = EGHash.Hash(extendedBaseHash, [0x2A], deviceIdBytes.Length.ToByteArray(), deviceIdBytes);
 
         Assert.Equal(expected, (byte[])hash);
+        Assert.NotEqual((byte[])VotingDeviceInformationHash.ForPreEncryptedBallots(extendedBaseHash, deviceId), (byte[])hash);
     }
 
     [Fact]

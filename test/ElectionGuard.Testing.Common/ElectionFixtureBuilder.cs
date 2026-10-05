@@ -137,11 +137,12 @@ public static class ElectionFixtureBuilder
                     Name = "Test Contest",
                     SelectionLimit = selectionLimit,
                     OptionSelectionLimit = optionSelectionLimit,
-                    Index = 0,
+                    // §3.1.3: indices are 1-based list positions.
+                    Index = 1,
                     Choices = new List<Choice>
                     {
-                        new Choice { Id = "choice-1", Name = "Choice 1", Index = 0 },
-                        new Choice { Id = "choice-2", Name = "Choice 2", Index = 1 },
+                        new Choice { Id = "choice-1", Name = "Choice 1", Index = 1 },
+                        new Choice { Id = "choice-2", Name = "Choice 2", Index = 2 },
                     },
                 },
             },
