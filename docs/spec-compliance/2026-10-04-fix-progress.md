@@ -48,7 +48,36 @@ Settled from the spec without needing to ask:
 - Progress tracking lives in this file on the branch, not in the gitignored `docs/superpowers/`, so it survives
   losing the worktree and travels with the PR.
 
-Pending questions for the user (Q1–Q9): see the log entry dated 2026-10-04.
+User answers (2026-10-04):
+- **Q1 Supplemental field model (S5):** "Per-contest manifest". Each `Contest` declares its supplemental fields:
+  the kind, its own option index after the selectable options, and a counts-toward-limit flag. Each field is
+  encrypted, proved, hashed, aggregated and decrypted as an ordinary option, in manifest order. The election-wide
+  `Include*` flags are removed.
+- **Q2 Supplemental proofs (S5):** "Range + spec relations".
+  - Range proofs: 0..1 for indicators, 0..L for the undervote difference count, 0..(number of write-in fields)
+    for the write-in count.
+  - The linear relations the spec spells out: the L·overvote term goes into the selection-limit proof
+    (sum + L·overvote ≤ L); undervote difference count = L − sum; write-ins count toward the limit where the
+    manifest says so.
+  - The disjunctive indicator-consistency proofs (undervote indicator ⇔ sum < L, null ⇔ sum = 0) are documented
+    as not implemented. The spec says these "are not described in detail".
+- **Q3 Null indicator on an overvote (S5):** "0". This follows p.39's explicit "should be set to zero".
+- **Q4 Eq (120) (S8):** "Body, no LOCK". B_C = 0x00000001 ∥ H(H_E; 0x44, H_ℓ, B_C,0), so len(B1) = 69. The §5.5.5
+  table's `0x4C4F434B` is treated as an erratum.
+- **Q5 Eq (99) key (S6):** "H_I", following the body and eq (101). The table row's B0 = H_E is treated as an
+  erratum.
+- **Q6 KDF counter (S6):** "1-based", following eqs (66) and (104) and Verification 12.4. Verification 13.7's
+  0 ≤ l < b_Λ is treated as an erratum.
+- **Q7 b_Λ (S6):** "Per-contest + length prefix".
+  - Add a per-contest `ContestDataBlocks` (b_Λ) to the manifest and remove the election-wide
+    `OptionalContestDataMaxLength`.
+  - The library takes exactly 32·b_Λ raw bytes.
+  - A helper encodes a string as a 4-byte big-endian length followed by the UTF-8 bytes, zero-padded to 32·b_Λ.
+    Data that is too long is rejected.
+- **Q8 7.A (S3):** "Per-selection as written". 7.A checks each α_i and β_i. Measure the verify cost and report it.
+- **Q9 G39 (S10):** "Skip G39". No constant-time work. G39 is closed as won't-fix by user decision.
+- **Cadence:** "Keep going". After each stage: commit, update this tracker, push, start the next stage. Stop only
+  for a new spec contradiction or question.
 
 ## Stages
 
@@ -56,14 +85,14 @@ Pending questions for the user (Q1–Q9): see the log entry dated 2026-10-04.
 |---|---|---|---|---|
 | S1 Hash encodings, indices, canonical order | G1, G6, G7, G35, G26 (1.F compare and constructor reuse), G12, G9 | — | in progress | |
 | S2 Key-generation hardening | G5, G14, G15, G25, G34, G26 (H_B in record and guardian check) | S1 | todo | |
-| S3 Ballot verification strictness | G4, G13, G33, G23, G24, G36 | Q8 (G36 only) | todo | |
+| S3 Ballot verification strictness | G4, G13, G33, G23, G24, G36 | — | todo | |
 | S4 Tally soundness | G2, G27, G28, G20, G21, G30, G38, G16 | — | todo | |
-| S5 Supplemental fields redesign | G3, G8, G22, G29, G10 | Q1, Q2, Q3 | todo | |
-| S6 Contest data | G11, G32 | Q5, Q6, Q7; after S4 | todo | |
+| S5 Supplemental fields redesign | G3, G8, G22, G29, G10 | — | todo | |
+| S6 Contest data | G11, G32 | after S4 | todo | |
 | S7 Ballot nonce and challenged ballots | G17, G18 | after S4 | todo | |
-| S8 Chain closing | G19, G37 | Q4 | todo | |
+| S8 Chain closing | G19, G37 | — | todo | |
 | S9 Pre-encrypted recording tool | G31 | after S5, S7 | todo | |
-| S10 Record metadata and hardening | G40, G39 | Q9 | todo | |
+| S10 Record metadata | G40 (G39 won't fix, per Q9) | — | todo | |
 
 ## Pinned-value inventory
 
