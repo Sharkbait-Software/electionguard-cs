@@ -204,6 +204,33 @@ def guardian_share_key(h_p, i, l, kappa_l, alpha, beta):
     return b1, H(h_p, b1)
 
 
+def guardian_record_hash(h_b, K, K_hat, Ks, K_hats, kappas):
+    """Eq. (27): H_G = H(H_B; 0x13, K, K-hat, K_1,0, ..., K_n,k-1, K-hat_1,0, ..., K-hat_n,k-1, kappa_1, ..., kappa_n).
+
+    Ks[i-1][j] = K_{i,j} and K_hats[i-1][j] = K-hat_{i,j} for 1 <= i <= n, 0 <= j < k; kappas[i-1] = kappa_i.
+    Order per the p.27 page image and the §5.5.2 table: guardian-major (i outer, j inner), all K before all
+    K-hat, then the communication keys. Returns (B1, H_G, layout) with layout = [(offset, len, label), ...].
+    """
+    n, k = len(Ks), len(Ks[0])
+    assert len(K_hats) == n and len(kappas) == n
+    assert all(len(r) == k for r in Ks) and all(len(r) == k for r in K_hats)
+    parts = [(b"\x13", "0x13"), (b_p(K), "K"), (b_p(K_hat), "K_hat")]
+    for i in range(1, n + 1):
+        for j in range(k):
+            parts.append((b_p(Ks[i - 1][j]), f"K_{i},{j}"))
+    for i in range(1, n + 1):
+        for j in range(k):
+            parts.append((b_p(K_hats[i - 1][j]), f"K_hat_{i},{j}"))
+    for i in range(1, n + 1):
+        parts.append((b_p(kappas[i - 1]), f"kappa_{i}"))
+    b1, layout = b"", []
+    for data, label in parts:
+        layout.append([len(b1), len(data), label])
+        b1 += data
+    assert len(b1) == 1 + (2 + 2 * n * k + n) * 512  # §5.5.2 table
+    return b1, H(h_b, b1), layout
+
+
 def extended_base_hash(h_b, K, K_hat):
     """Eq. (30): H_E = H(H_B; 0x14, K, K-hat)."""
     b1 = b"\x14" + b_p(K) + b_p(K_hat)
@@ -535,6 +562,71 @@ def build():
                        "H_C no chaining one contest empty device", "H_I", H_I, b1, hc_e,
                        {"H_I_hex": hx(H_I), "contest_hashes_hex": [hx(chis[1])],
                         "H_DI_hex": hx(h_dis[("", 0x2A)]), "B_C_hex": hx(bc_empty)}, 37 + 32))
+
+    # --- Eq. (27) guardian record comparison hash ---------------------------------------------
+    # Appended after every earlier family so existing vectors keep their positions.
+    # K_{i,j} = g^a_{i,j}, K-hat_{i,j} = g^ahat_{i,j}, kappa_i = g^zeta_i (eqs. 8, 9 and §3.2.2), with
+    # a_{i,j} = 100i + 10j + 1, ahat_{i,j} = 100i + 10j + 5, zeta_i = 1000 + i, so every 512-byte slot is a
+    # distinct group element and any reordering changes the digest. K_i = K_{i,0} (p.23), so the joint keys
+    # are K = prod K_{i,0}, K-hat = prod K-hat_{i,0} (eqs. 25, 26). For n=3, k=2 the j=0 exponents are
+    # overridden to (10, 20, -25) and (30, 40, -63) mod q, which sum to 5 and 7: K = g^5, K-hat = g^7 is the
+    # key pair main_chain's H_E uses, so that H_G sits on the same election as the rest of the chain.
+    hg_cases = [
+        ((3, 2), "kat manifest", {1: 10, 2: 20, 3: Q - 25}, {1: 30, 2: 40, 3: Q - 63}),
+        ((5, 3), "kat manifest", {}, {}),
+        ((1, 1), "kat manifest", {}, {}),
+    ]
+    h_gs = {}
+    for (n, k), mname, a0, ahat0 in hg_cases:
+        if (n, k, mname) in hbs:
+            h_b = hbs[(n, k, mname)]
+        else:  # H_B for (1, 1) is not an emitted vector; compute it here by eq. (5).
+            h_b = election_base_hash(hps[(n, k)], dict(manifests)[mname])[1]
+        a = [[a0.get(i, 100 * i + 1) if j == 0 else 100 * i + 10 * j + 1 for j in range(k)]
+             for i in range(1, n + 1)]
+        ahat = [[ahat0.get(i, 100 * i + 5) if j == 0 else 100 * i + 10 * j + 5 for j in range(k)]
+                for i in range(1, n + 1)]
+        zeta = [1000 + i for i in range(1, n + 1)]
+        Ks = [[pow(G, e, P) for e in row] for row in a]
+        K_hats = [[pow(G, e, P) for e in row] for row in ahat]
+        kappas = [pow(G, z, P) for z in zeta]
+        K_j = 1
+        K_hat_j = 1
+        for i in range(n):
+            K_j = K_j * Ks[i][0] % P
+            K_hat_j = K_hat_j * K_hats[i][0] % P
+        assert K_j == pow(G, sum(r[0] for r in a) % Q, P)
+        elems = [x for r in Ks for x in r] + [x for r in K_hats for x in r] + kappas
+        if n > 1:  # with n = 1, K = K_{1,0} and K-hat = K-hat_{1,0} by eqs. (25), (26)
+            elems = [K_j, K_hat_j] + elems
+        assert len(set(elems)) == len(elems), "every slot must be a distinct group element"
+        if (n, k) == (3, 2):
+            assert (K_j, K_hat_j) == (K, K_hat), "n=3,k=2 H_G must use main_chain's K = g^5, K-hat = g^7"
+        b1, h_g, layout = guardian_record_hash(h_b, K_j, K_hat_j, Ks, K_hats, kappas)
+        h_gs[(n, k)] = h_g
+        v = vec("guardian_record_hash",
+                "(27) H_G = H(H_B; 0x13, K, K-hat, K_1,0, ..., K_1,k-1, K_2,0, ..., K_n,k-1, "
+                "K-hat_1,0, ..., K-hat_n,k-1, kappa_1, ..., kappa_n)",
+                f"H_G n={n} k={k} {mname}", "H_B", h_b, b1, h_g,
+                {"H_B_hex": hx(h_b), "n": n, "k": k, "manifest": mname,
+                 "K_hex": hp(K_j), "K_hat_hex": hp(K_hat_j),
+                 "K_i_j": [[{"i": i + 1, "j": j, "exponent_hex": hq(a[i][j]), "hex": hp(Ks[i][j])}
+                            for j in range(k)] for i in range(n)],
+                 "K_hat_i_j": [[{"i": i + 1, "j": j, "exponent_hex": hq(ahat[i][j]), "hex": hp(K_hats[i][j])}
+                                for j in range(k)] for i in range(n)],
+                 "kappa_i": [{"i": i + 1, "exponent_hex": hq(zeta[i]), "hex": hp(kappas[i])} for i in range(n)],
+                 "derivation": "K_{i,j} = g^a_{i,j}, K_hat_{i,j} = g^ahat_{i,j}, kappa_i = g^zeta_i mod p; "
+                               "a_{i,j} = 100i + 10j + 1, ahat_{i,j} = 100i + 10j + 5, zeta_i = 1000 + i"
+                               + ("; j=0 overridden to a = (10, 20, q-25), ahat = (30, 40, q-63) so that "
+                                  "K = g^5 and K_hat = g^7 (main_chain)" if (n, k) == (3, 2) else "")
+                               + "; K = prod_i K_{i,0}, K_hat = prod_i K_hat_{i,0} mod p (eqs. 25, 26)"},
+                1 + (2 + 2 * n * k + n) * 512,
+                notes="B0 = H_B (p.27 image and §5.5.2 table). B1 is guardian-major: all K_{i,j} (i outer, "
+                      "j inner), then all K_hat_{i,j} in the same order, then kappa_1..kappa_n. "
+                      "len(B1) = 1 + (2 + 2nk + n) * 512 per the §5.5.2 table. b1_layout gives "
+                      "[offset, length, label] for every field.")
+        v["b1_layout"] = layout
+        vectors.append(v)
 
     doc = {
         "description": "ElectionGuard v2.1.0 hash-chain KAT vectors, generated by test/kat/eg_kat.py "

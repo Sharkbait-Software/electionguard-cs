@@ -27,6 +27,7 @@ This rewrites `test/kat/vectors.json` and prints H_P for n = 3, k = 2.
 | `parameter_base_hash` | (4) H_P = H(ver; 0x00, p, q, g, n, k) |
 | `election_base_hash` | (5) H_B = H(H_P; 0x01, manifest), manifest length-prefixed |
 | `guardian_share_kdf_key` | (16) k_{i,l} = H(H_P; 0x11, i, l, kappa_l, alpha, beta) |
+| `guardian_record_hash` | (27) H_G = H(H_B; 0x13, K, K-hat, all K_{i,j}, all K-hat_{i,j}, kappa_1..kappa_n), guardian-major, len(B1) = 1 + (2 + 2nk + n) * 512 |
 | `extended_base_hash` | (30) H_E = H(H_B; 0x14, K, K-hat) |
 | `selection_encryption_identifier_hash` | (32) H_I = H(H_E; 0x20, id_B) |
 | `encryption_nonce` | (33) xi_{i,j} = H_q(H_I; 0x21, i, j, xi_B) |
@@ -44,3 +45,9 @@ the exact message bytes hashed (`b1_hex`, `b1_len`), the length the spec's secti
 (`b1_len_spec_table`, `null` where the table prints none), and `expected_hex`. For H_q families
 `expected_hex` is the reduced value as 32 bytes and `expected_hmac_hex` is the raw HMAC output.
 Hex is uppercase big-endian. `main_chain` summarizes the n = 3, k = 2 chain the later vectors build on.
+
+`guardian_record_hash` vectors also carry `b1_layout`, a list of `[offset, length, label]` for every field of
+B1, so an ordering bug can be located. Every slot is a distinct group element, K = prod K_{i,0} and
+K-hat = prod K-hat_{i,0} (eqs. 25, 26), and the n = 3, k = 2 case is built so that K = g^5 and K-hat = g^7,
+the key pair `main_chain` uses for H_E. These vectors are appended after all earlier families, so existing
+vector positions are unchanged.

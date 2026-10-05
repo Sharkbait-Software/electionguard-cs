@@ -27,6 +27,17 @@ string outputDirectory = @"c:\temp\eg\data\1";
 
 try
 {
+    // The manifest file. H_B = H(H_P; 0x01, manifest) (eq. 5) is part of the guardian record: each
+    // guardian checks it by performing Verification 1 and keys its comparison hash H_G with it
+    // (§3.2.2 step 1). The same bytes go into the encryption record (§3.7).
+    var manifestBytes = File.ReadAllBytes(Path.Combine(inputDirectory, "manifest.json"));
+    var manifestFile = new ManifestFile
+    {
+        Bytes = manifestBytes
+    };
+    var manifest = JsonSerializer.Deserialize<Manifest>(manifestBytes, jsonOptions)!;
+    var electionBaseHash = new ElectionBaseHash(EGParameters.ParameterBaseHash, manifestFile);
+
     List<Guardian> guardians = new List<Guardian>();
     for (int i = 1; i <= guardianParameters.N; i++)
     {
@@ -63,13 +74,15 @@ try
         CryptographicParameters = cryptographicParameters,
         GuardianParameters = guardianParameters,
         ParameterBaseHash = EGParameters.ParameterBaseHash,
+        ManifestFile = manifestFile,
+        ElectionBaseHash = electionBaseHash,
         Guardians = guardianKeys,
         ElectionPublicKeys = electionPublicKeys,
     };
 
     foreach (var guardian in guardians)
     {
-        guardian.Verify(guardianRecord);
+        guardian.Verify(guardianRecord, manifestFile);
     }
 
     // Write out guardian record
@@ -78,13 +91,6 @@ try
     File.WriteAllBytes(Path.Combine(outputDirectory, "guardian-record.json"), System.Text.Encoding.UTF8.GetBytes(serializedGuardianRecord));
 
     // Combine with manifest
-    var manifestBytes = File.ReadAllBytes(Path.Combine(inputDirectory, "manifest.json"));
-    var manifestFile = new ManifestFile
-    {
-        Bytes = manifestBytes
-    };
-    var manifest = JsonSerializer.Deserialize<Manifest>(manifestBytes, jsonOptions)!;
-    var electionBaseHash = new ElectionBaseHash(EGParameters.ParameterBaseHash, manifestFile);
     var extendedBaseHash = new ExtendedBaseHash(electionBaseHash, electionPublicKeys);
 
     // Write out encryption record
@@ -93,6 +99,9 @@ try
     {
         CryptographicParameters = cryptographicParameters,
         GuardianParameters = guardianParameters,
+        ParameterBaseHash = EGParameters.ParameterBaseHash,
+        ManifestFile = manifestFile,
+        ElectionBaseHash = electionBaseHash,
         Guardians = guardianKeys,
         ElectionPublicKeys = electionPublicKeys,
         ExtendedBaseHash = extendedBaseHash,
@@ -161,9 +170,21 @@ try
 
     //    TODO: SOMEWHERE NEEDS TO BE AN 'END OF ELECTION' FUNCTION(MAYBE TALLY ?) WHERE WE CLOSE THE CONFIRMATION CODE CHAIN.
 
+    // Verification 1 (1.A-1.F, H_B included) on the encryption record
+    var parameterVerification = new ParameterVerification();
+    parameterVerification.Verify(encryptionRecord);
+
+    // Verification 2
+    var guardianPublicKeyVerification = new GuardianPublicKeyVerification();
+    guardianPublicKeyVerification.Verify(encryptionRecord.Guardians);
+
+    // Verification 3
+    var electionPublicKeyVerification = new ElectionPublicKeyVerification();
+    electionPublicKeyVerification.Verify(encryptionRecord.Guardians, encryptionRecord.ElectionPublicKeys);
+
     // Verification 4
     var extendedBaseHashVerification = new ExtendedBaseHashVerification();
-    extendedBaseHashVerification.Verify(extendedBaseHash, electionBaseHash, electionPublicKeys);
+    extendedBaseHashVerification.Verify(encryptionRecord.ExtendedBaseHash, encryptionRecord.ElectionBaseHash, encryptionRecord.ElectionPublicKeys);
 
     // Verification 5
     Parallel.ForEach(encryptedBallots, encryptedBallot =>

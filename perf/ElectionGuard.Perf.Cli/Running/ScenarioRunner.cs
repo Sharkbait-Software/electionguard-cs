@@ -6,6 +6,7 @@ using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.Models;
 using ElectionGuard.Core.Tally;
 using ElectionGuard.Core.Verify.Ballot;
+using ElectionGuard.Core.Verify.KeyGeneration;
 using ElectionGuard.Core.Verify.Tally;
 using ElectionGuard.Perf.Cli.Configuration;
 using ElectionGuard.Perf.Cli.Measurement;
@@ -85,10 +86,20 @@ public sealed class ScenarioRunner
 
         try
         {
-            guardianSet = ElectionFixtureBuilder.CreateGuardianSet(_scenario.Guardians.N, _scenario.Guardians.K);
+            // The guardians check H_B and key their comparison hash with it (§3.2.2 step 1), so the
+            // manifest file goes into the ceremony as well as into the encryption record.
             var manifestFile = new ManifestFile { Bytes = ManifestHasher.Serialize(_manifest) };
+            guardianSet = ElectionFixtureBuilder.CreateGuardianSet(_scenario.Guardians.N, _scenario.Guardians.K, manifestFile);
             records = ElectionFixtureBuilder.CreateEncryptionRecord(guardianSet, _manifest, manifestFile);
             dkgStopwatch.Stop();
+
+            // Verifications 1-4 on the record the ballots are encrypted against. Each runs once per
+            // election, not per ballot, so they sit in this untimed setup block, after the DKG
+            // stopwatch so that DkgMs stays comparable with earlier runs.
+            new ParameterVerification().Verify(records.EncryptionRecord);
+            new GuardianPublicKeyVerification().Verify(records.EncryptionRecord.Guardians);
+            new ElectionPublicKeyVerification().Verify(records.EncryptionRecord.Guardians, records.EncryptionRecord.ElectionPublicKeys);
+            new ExtendedBaseHashVerification().Verify(records.EncryptionRecord.ExtendedBaseHash, records.EncryptionRecord.ElectionBaseHash, records.EncryptionRecord.ElectionPublicKeys);
 
             deviceHash = new VotingDeviceInformationHash(records.ExtendedBaseHash, DeviceId);
             generator = new BallotGenerator(_manifest, _scenario.Seed);

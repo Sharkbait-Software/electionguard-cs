@@ -36,6 +36,9 @@ public class BallotPreEncryptorTests
         {
             CryptographicParameters = record.CryptographicParameters,
             GuardianParameters = record.GuardianParameters,
+            ParameterBaseHash = record.ParameterBaseHash,
+            ManifestFile = record.ManifestFile,
+            ElectionBaseHash = record.ElectionBaseHash,
             Guardians = record.Guardians,
             ElectionPublicKeys = record.ElectionPublicKeys,
             ExtendedBaseHash = record.ExtendedBaseHash,

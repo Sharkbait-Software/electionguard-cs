@@ -49,11 +49,19 @@ public static class ElectionFixtureBuilder
     /// Bootstraps a full N-of-K guardian set: generates keys for each guardian, exchanges and
     /// decrypts secret shares across the full set, builds the resulting ElectionPublicKeys, and
     /// verifies the resulting GuardianRecord from every guardian's perspective (mirrors
-    /// Program.cs lines 30-73). GuardianParameters is hardcoded to N=3/K=2 (see CLAUDE.md), so the
-    /// defaults here match that; do not pass values GuardianParameters doesn't support.
+    /// Program.cs). n and k must match EGParameters.GuardianParameters, which the guardians and
+    /// Verification 1 read (the defaults match the default 3-of-2 parameters).
+    ///
+    /// The guardian record carries the manifest file and H_B, because each guardian checks H_B
+    /// (Verification 1.F) and keys its comparison hash H_G with it (§3.2.2 step 1). Pass the
+    /// election's manifest file; without one, CreateMinimalManifest()'s is used. A test that then
+    /// builds an encryption record over a different manifest gets a guardian record and an
+    /// encryption record that disagree about H_B; nothing in the library compares the two.
     /// </summary>
-    public static GuardianSetResult CreateGuardianSet(int n = 3, int k = 2)
+    public static GuardianSetResult CreateGuardianSet(int n = 3, int k = 2, ManifestFile? manifestFile = null)
     {
+        manifestFile ??= CreateMinimalManifest().ManifestFile;
+
         var guardians = new List<Guardian>();
         for (int i = 1; i <= n; i++)
         {
@@ -94,13 +102,15 @@ public static class ElectionFixtureBuilder
             CryptographicParameters = EGParameters.CryptographicParameters,
             GuardianParameters = EGParameters.GuardianParameters,
             ParameterBaseHash = EGParameters.ParameterBaseHash,
+            ManifestFile = manifestFile,
+            ElectionBaseHash = new ElectionBaseHash(EGParameters.ParameterBaseHash, manifestFile),
             Guardians = guardianPublicViews,
             ElectionPublicKeys = electionPublicKeys,
         };
 
         foreach (var guardian in guardians)
         {
-            guardian.Verify(guardianRecord);
+            guardian.Verify(guardianRecord, manifestFile);
         }
 
         return new GuardianSetResult
@@ -186,6 +196,9 @@ public static class ElectionFixtureBuilder
         {
             CryptographicParameters = EGParameters.CryptographicParameters,
             GuardianParameters = EGParameters.GuardianParameters,
+            ParameterBaseHash = EGParameters.ParameterBaseHash,
+            ManifestFile = manifestFile,
+            ElectionBaseHash = electionBaseHash,
             Guardians = guardianSet.GuardianPublicViews,
             ElectionPublicKeys = guardianSet.ElectionPublicKeys,
             ExtendedBaseHash = extendedBaseHash,

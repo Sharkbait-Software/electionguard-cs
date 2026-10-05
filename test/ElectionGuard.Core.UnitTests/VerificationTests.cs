@@ -179,4 +179,108 @@ public class VerificationTests
 
         Assert.Equal("1.E", exception.SubSection);
     }
+
+    [Fact]
+    public void Verification1_GuardianParametersOtherThanThoseInForce_Fail1E()
+    {
+        // A record claiming n = 5, k = 3 with a correctly computed H_P for those values, checked by
+        // a process configured for 3-of-2. n and k reach Verification 1 only through H_P, and every
+        // later check counts guardians, commitments and responses with the n and k in force.
+        EGParameters.Init(new CryptographicParameters(), new GuardianParameters());
+        var claimed = new GuardianParameters(5, 3);
+        byte[] claimedParameterBaseHash = new ParameterBaseHash(new CryptographicParameters(), claimed);
+
+        var exception = Assert.Throws<VerificationFailedException>(() => new ParameterVerification().Verify(
+            new CryptographicParameters(), claimed, claimedParameterBaseHash));
+
+        Assert.Equal("1.E", exception.SubSection);
+    }
+
+    // --- The record entry points (S2, audit G26): 1.A-1.F in one call -----------------------------
+
+    private static ElectionGuard.Testing.Common.ElectionFixtureBuilder.EncryptionRecordResult BuildRecord()
+    {
+        EGParameters.Init(new CryptographicParameters(), new GuardianParameters());
+        var (manifest, manifestFile) = ElectionGuard.Testing.Common.ElectionFixtureBuilder.CreateMinimalManifest();
+        var guardianSet = ElectionGuard.Testing.Common.ElectionFixtureBuilder.CreateGuardianSet(manifestFile: manifestFile);
+        return ElectionGuard.Testing.Common.ElectionFixtureBuilder.CreateEncryptionRecord(guardianSet, manifest, manifestFile);
+    }
+
+    private static EncryptionRecord With(EncryptionRecord record, ManifestFile? manifestFile = null, ElectionBaseHash? electionBaseHash = null, ParameterBaseHash? parameterBaseHash = null) => new()
+    {
+        CryptographicParameters = record.CryptographicParameters,
+        GuardianParameters = record.GuardianParameters,
+        ParameterBaseHash = parameterBaseHash ?? record.ParameterBaseHash,
+        ManifestFile = manifestFile ?? record.ManifestFile,
+        ElectionBaseHash = electionBaseHash ?? record.ElectionBaseHash,
+        Guardians = record.Guardians,
+        ElectionPublicKeys = record.ElectionPublicKeys,
+        ExtendedBaseHash = record.ExtendedBaseHash,
+        Manifest = record.Manifest,
+    };
+
+    [Fact]
+    public void Verification1_EncryptionRecord_Passes()
+    {
+        var record = BuildRecord().EncryptionRecord;
+
+        Assert.Null(Record.Exception(() => new ParameterVerification().Verify(record)));
+    }
+
+    [Fact]
+    public void Verification1_EncryptionRecord_ManifestFileNotTheOneHashed_Fails1F()
+    {
+        var record = BuildRecord().EncryptionRecord;
+        var tampered = With(record, manifestFile: new ManifestFile { Bytes = record.ManifestFile.Bytes.Append((byte)' ').ToArray() });
+
+        var exception = Assert.Throws<VerificationFailedException>(() => new ParameterVerification().Verify(tampered));
+
+        Assert.Equal("1.F", exception.SubSection);
+    }
+
+    [Fact]
+    public void Verification1_EncryptionRecord_ElectionBaseHashOverAnotherManifest_Fails1F()
+    {
+        var record = BuildRecord().EncryptionRecord;
+        var otherHash = new ElectionBaseHash(EGParameters.ParameterBaseHash, new ManifestFile { Bytes = ManifestBytes });
+
+        var exception = Assert.Throws<VerificationFailedException>(() => new ParameterVerification().Verify(With(record, electionBaseHash: otherHash)));
+
+        Assert.Equal("1.F", exception.SubSection);
+    }
+
+    [Fact]
+    public void Verification1_EncryptionRecord_WrongParameterBaseHash_Fails1E()
+    {
+        var record = BuildRecord().EncryptionRecord;
+        var otherParameterBaseHash = new ParameterBaseHash(new CryptographicParameters(), new GuardianParameters(5, 3));
+
+        var exception = Assert.Throws<VerificationFailedException>(() => new ParameterVerification().Verify(With(record, parameterBaseHash: otherParameterBaseHash)));
+
+        Assert.Equal("1.E", exception.SubSection);
+    }
+
+    [Fact]
+    public void Verification1_GuardianRecord_PassesAndChecksElectionBaseHash()
+    {
+        EGParameters.Init(new CryptographicParameters(), new GuardianParameters());
+        var guardianSet = ElectionGuard.Testing.Common.ElectionFixtureBuilder.CreateGuardianSet();
+        var record = guardianSet.GuardianRecord;
+
+        Assert.Null(Record.Exception(() => new ParameterVerification().Verify(record)));
+
+        var tampered = new ElectionGuard.Core.KeyGeneration.GuardianRecord
+        {
+            CryptographicParameters = record.CryptographicParameters,
+            GuardianParameters = record.GuardianParameters,
+            ParameterBaseHash = record.ParameterBaseHash,
+            ManifestFile = new ManifestFile { Bytes = ManifestBytes },
+            ElectionBaseHash = record.ElectionBaseHash,
+            Guardians = record.Guardians,
+            ElectionPublicKeys = record.ElectionPublicKeys,
+        };
+
+        var exception = Assert.Throws<VerificationFailedException>(() => new ParameterVerification().Verify(tampered));
+        Assert.Equal("1.F", exception.SubSection);
+    }
 }

@@ -165,6 +165,7 @@ public class KnownAnswerTests
             "parameter_base_hash",
             "election_base_hash",
             "guardian_share_kdf_key",
+            "guardian_record_hash",
             "extended_base_hash",
             "selection_encryption_identifier_hash",
             "encryption_nonce",
@@ -268,6 +269,65 @@ public class KnownAnswerTests
             new IntegerModP(Hex(inputs, "beta_hex")));
 
         AssertExpected(vector, key);
+    }
+
+    [Theory]
+    [MemberData(nameof(VectorNames), "guardian_record_hash")]
+    public void GuardianRecordHash_Eq27(string name)
+    {
+        var vector = Vector(name);
+        var inputs = Inputs(vector);
+        int n = Int(inputs, "n");
+        int k = Int(inputs, "k");
+        var g = EGParameters.G;
+
+        // The key, H_B, rebuilt through the library from H_P(n, k) and the named manifest's bytes
+        // (taken from an election_base_hash vector over the same manifest; (1, 1) has no H_B vector
+        // of its own).
+        var manifestName = inputs.GetProperty("manifest").GetString()!;
+        var manifest = Hex(Inputs(AllVectors.First(x =>
+            x.GetProperty("family").GetString() == "election_base_hash"
+            && x.GetProperty("name").GetString()!.EndsWith(" " + manifestName))), "manifest_hex");
+        var electionBaseHash = new ElectionBaseHash(new ParameterBaseHash(new CryptographicParameters(), new GuardianParameters(n, k)), new ManifestFile { Bytes = manifest });
+        Assert.Equal(inputs.GetProperty("H_B_hex").GetString(), ToHex(electionBaseHash));
+        Assert.Equal(vector.GetProperty("b0_hex").GetString(), ToHex(electionBaseHash));
+
+        // Every element is g^exponent; check each one against its published value as it is built.
+        IntegerModP Element(JsonElement entry)
+        {
+            var element = IntegerModP.PowModP(g, new BigInteger(Convert.FromHexString(entry.GetProperty("exponent_hex").GetString()!), isUnsigned: true, isBigEndian: true));
+            Assert.Equal(entry.GetProperty("hex").GetString(), ToHex(element));
+            return element;
+        }
+
+        var commitments = inputs.GetProperty("K_i_j").EnumerateArray().Select(row => row.EnumerateArray().Select(Element).ToList()).ToList();
+        var commitmentsHat = inputs.GetProperty("K_hat_i_j").EnumerateArray().Select(row => row.EnumerateArray().Select(Element).ToList()).ToList();
+        var kappas = inputs.GetProperty("kappa_i").EnumerateArray().Select(Element).ToList();
+        Assert.Equal(n, commitments.Count);
+        Assert.All(commitments, row => Assert.Equal(k, row.Count));
+
+        // H_G hashes no proof, so the views carry a placeholder.
+        var placeholderProof = new SchnorrProof { Challenge = new IntegerModQ(0), Responses = [] };
+        var views = Enumerable.Range(0, n).Select(i => new GuardianPublicView
+        {
+            Index = new GuardianIndex(i + 1),
+            VoteEncryptionCommitments = commitments[i],
+            OtherBallotDataEncryptionCommitments = commitmentsHat[i],
+            CommunicationPublicKey = kappas[i],
+            VoteEncryptionProof = placeholderProof,
+            OtherDataEncryptionProof = placeholderProof,
+        }).ToList();
+
+        // K and K-hat through the library's own product (eqs. 25, 26, with K_i = K_{i,0}).
+        var keys = new ElectionPublicKeys(views.Select(v => v.VoteEncryptionCommitments[0]), views.Select(v => v.OtherBallotDataEncryptionCommitments[0]));
+        Assert.Equal(inputs.GetProperty("K_hex").GetString(), ToHex(keys.VoteEncryptionKey));
+        Assert.Equal(inputs.GetProperty("K_hat_hex").GetString(), ToHex(keys.OtherBallotDataEncryptionKey));
+
+        AssertExpected(vector, Guardian.ComputeGuardianRecordHash(electionBaseHash, keys, views));
+
+        // The guardians are taken in index order whatever order the record lists them in.
+        views.Reverse();
+        AssertExpected(vector, Guardian.ComputeGuardianRecordHash(electionBaseHash, keys, views));
     }
 
     [Theory]

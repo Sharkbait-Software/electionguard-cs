@@ -11,6 +11,26 @@ public class ElectionPublicKeyVerification
 {
     public void Verify(List<GuardianPublicView> guardians, ElectionPublicKeys electionPublicKeys)
     {
+        // K and K-hat are products over i = 1..n (eqs. 25, 26). Over a short, padded or duplicated
+        // guardian list they can still be computed consistently, so the set itself is checked
+        // first: a ceremony run with fewer guardians than H_P claims would otherwise pass while
+        // silently changing the threshold. It is reported under 3.A, the first product that
+        // cannot be formed.
+        GuardianSet.RequireComplete(guardians, "3.A");
+
+        foreach (var guardian in guardians)
+        {
+            if (guardian.VoteEncryptionCommitments.Count == 0)
+            {
+                throw new VerificationFailedException("3.A", $"Guardian {guardian.Index.Index} has no vote encryption public key K_i.");
+            }
+
+            if (guardian.OtherBallotDataEncryptionCommitments.Count == 0)
+            {
+                throw new VerificationFailedException("3.B", $"Guardian {guardian.Index.Index} has no ballot data encryption public key K-hat_i.");
+            }
+        }
+
         // 3.A
         Verify("3.A", guardians.Select(x => x.VoteEncryptionCommitments[0]).ToList(), electionPublicKeys.VoteEncryptionKey);
 
