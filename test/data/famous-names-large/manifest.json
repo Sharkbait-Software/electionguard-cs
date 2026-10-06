@@ -16,10 +16,10 @@
         { "id": "4", "name": "Theodore Roosevelt", "index": 4 }
       ],
       "supplementalFields": [
-        { "id": "overvotes", "name": "Overvotes", "index": 5, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "null-votes", "name": "Null votes", "index": 6, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "undervote-difference", "name": "Undervote difference", "index": 7, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "write-ins", "name": "Write-ins", "index": 8, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+        { "id": "overvotes", "name": "Overvotes", "index": 5, "kind": "OvervoteIndicator" },
+        { "id": "null-votes", "name": "Null votes", "index": 6, "kind": "NullVoteIndicator" },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 7, "kind": "UndervoteDifferenceCount" },
+        { "id": "write-ins", "name": "Write-ins", "index": 8, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 1
     },
@@ -38,10 +38,10 @@
         { "id": "10", "name": "Odie", "index": 6 }
       ],
       "supplementalFields": [
-        { "id": "overvotes", "name": "Overvotes", "index": 7, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "null-votes", "name": "Null votes", "index": 8, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "undervote-difference", "name": "Undervote difference", "index": 9, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "write-ins", "name": "Write-ins", "index": 10, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+        { "id": "overvotes", "name": "Overvotes", "index": 7, "kind": "OvervoteIndicator" },
+        { "id": "null-votes", "name": "Null votes", "index": 8, "kind": "NullVoteIndicator" },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 9, "kind": "UndervoteDifferenceCount" },
+        { "id": "write-ins", "name": "Write-ins", "index": 10, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 1
     },
@@ -57,10 +57,10 @@
         { "id": "13", "name": "Marie Curie", "index": 3 }
       ],
       "supplementalFields": [
-        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator" },
+        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator" },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount" },
+        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 1
     },
@@ -76,10 +76,10 @@
         { "id": "16", "name": "Pablo Picasso", "index": 3 }
       ],
       "supplementalFields": [
-        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator" },
+        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator" },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount" },
+        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 1
     },
@@ -96,10 +96,10 @@
         { "id": "20", "name": "Frederic Chopin", "index": 4 }
       ],
       "supplementalFields": [
-        { "id": "overvotes", "name": "Overvotes", "index": 5, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "null-votes", "name": "Null votes", "index": 6, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "undervote-difference", "name": "Undervote difference", "index": 7, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "write-ins", "name": "Write-ins", "index": 8, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+        { "id": "overvotes", "name": "Overvotes", "index": 5, "kind": "OvervoteIndicator" },
+        { "id": "null-votes", "name": "Null votes", "index": 6, "kind": "NullVoteIndicator" },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 7, "kind": "UndervoteDifferenceCount" },
+        { "id": "write-ins", "name": "Write-ins", "index": 8, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 1
     },
@@ -114,10 +114,10 @@
         { "id": "22", "name": "Arthur Miller", "index": 2 }
       ],
       "supplementalFields": [
-        { "id": "overvotes", "name": "Overvotes", "index": 3, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "null-votes", "name": "Null votes", "index": 4, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "undervote-difference", "name": "Undervote difference", "index": 5, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "write-ins", "name": "Write-ins", "index": 6, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+        { "id": "overvotes", "name": "Overvotes", "index": 3, "kind": "OvervoteIndicator" },
+        { "id": "null-votes", "name": "Null votes", "index": 4, "kind": "NullVoteIndicator" },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 5, "kind": "UndervoteDifferenceCount" },
+        { "id": "write-ins", "name": "Write-ins", "index": 6, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 1
     },
@@ -133,10 +133,10 @@
         { "id": "25", "name": "Ferdinand Magellan", "index": 3 }
       ],
       "supplementalFields": [
-        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator" },
+        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator" },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount" },
+        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 1
     },
@@ -152,10 +152,10 @@
         { "id": "28", "name": "Yuri Gagarin", "index": 3 }
       ],
       "supplementalFields": [
-        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator" },
+        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator" },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount" },
+        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 1
     },
@@ -172,10 +172,10 @@
         { "id": "32", "name": "Benjamin Franklin", "index": 4 }
       ],
       "supplementalFields": [
-        { "id": "overvotes", "name": "Overvotes", "index": 5, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "null-votes", "name": "Null votes", "index": 6, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "undervote-difference", "name": "Undervote difference", "index": 7, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "write-ins", "name": "Write-ins", "index": 8, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+        { "id": "overvotes", "name": "Overvotes", "index": 5, "kind": "OvervoteIndicator" },
+        { "id": "null-votes", "name": "Null votes", "index": 6, "kind": "NullVoteIndicator" },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 7, "kind": "UndervoteDifferenceCount" },
+        { "id": "write-ins", "name": "Write-ins", "index": 8, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 1
     },
@@ -190,10 +190,10 @@
         { "id": "34", "name": "Sylvester", "index": 2 }
       ],
       "supplementalFields": [
-        { "id": "overvotes", "name": "Overvotes", "index": 3, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "null-votes", "name": "Null votes", "index": 4, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "undervote-difference", "name": "Undervote difference", "index": 5, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "write-ins", "name": "Write-ins", "index": 6, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+        { "id": "overvotes", "name": "Overvotes", "index": 3, "kind": "OvervoteIndicator" },
+        { "id": "null-votes", "name": "Null votes", "index": 4, "kind": "NullVoteIndicator" },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 5, "kind": "UndervoteDifferenceCount" },
+        { "id": "write-ins", "name": "Write-ins", "index": 6, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 1
     },
@@ -209,10 +209,10 @@
         { "id": "37", "name": "Miss Marple", "index": 3 }
       ],
       "supplementalFields": [
-        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator" },
+        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator" },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount" },
+        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 1
     },
@@ -228,10 +228,10 @@
         { "id": "40", "name": "Cleopatra", "index": 3 }
       ],
       "supplementalFields": [
-        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator" },
+        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator" },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount" },
+        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 1
     },
@@ -248,10 +248,10 @@
         { "id": "44", "name": "Confucius", "index": 4 }
       ],
       "supplementalFields": [
-        { "id": "overvotes", "name": "Overvotes", "index": 5, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "null-votes", "name": "Null votes", "index": 6, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "undervote-difference", "name": "Undervote difference", "index": 7, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "write-ins", "name": "Write-ins", "index": 8, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+        { "id": "overvotes", "name": "Overvotes", "index": 5, "kind": "OvervoteIndicator" },
+        { "id": "null-votes", "name": "Null votes", "index": 6, "kind": "NullVoteIndicator" },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 7, "kind": "UndervoteDifferenceCount" },
+        { "id": "write-ins", "name": "Write-ins", "index": 8, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 1
     },
@@ -266,10 +266,10 @@
         { "id": "46", "name": "Leonhard Euler", "index": 2 }
       ],
       "supplementalFields": [
-        { "id": "overvotes", "name": "Overvotes", "index": 3, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "null-votes", "name": "Null votes", "index": 4, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "undervote-difference", "name": "Undervote difference", "index": 5, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "write-ins", "name": "Write-ins", "index": 6, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+        { "id": "overvotes", "name": "Overvotes", "index": 3, "kind": "OvervoteIndicator" },
+        { "id": "null-votes", "name": "Null votes", "index": 4, "kind": "NullVoteIndicator" },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 5, "kind": "UndervoteDifferenceCount" },
+        { "id": "write-ins", "name": "Write-ins", "index": 6, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 1
     },
@@ -285,10 +285,10 @@
         { "id": "49", "name": "Kareem Abdul-Jabbar", "index": 3 }
       ],
       "supplementalFields": [
-        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator" },
+        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator" },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount" },
+        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 1
     },
@@ -303,10 +303,10 @@
         { "id": "51", "name": "Joe Louis", "index": 2 }
       ],
       "supplementalFields": [
-        { "id": "overvotes", "name": "Overvotes", "index": 3, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "null-votes", "name": "Null votes", "index": 4, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "undervote-difference", "name": "Undervote difference", "index": 5, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "write-ins", "name": "Write-ins", "index": 6, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+        { "id": "overvotes", "name": "Overvotes", "index": 3, "kind": "OvervoteIndicator" },
+        { "id": "null-votes", "name": "Null votes", "index": 4, "kind": "NullVoteIndicator" },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 5, "kind": "UndervoteDifferenceCount" },
+        { "id": "write-ins", "name": "Write-ins", "index": 6, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 1
     },
@@ -324,10 +324,10 @@
         { "id": "56", "name": "Toni Morrison", "index": 5 }
       ],
       "supplementalFields": [
-        { "id": "overvotes", "name": "Overvotes", "index": 6, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "null-votes", "name": "Null votes", "index": 7, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "undervote-difference", "name": "Undervote difference", "index": 8, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "write-ins", "name": "Write-ins", "index": 9, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+        { "id": "overvotes", "name": "Overvotes", "index": 6, "kind": "OvervoteIndicator" },
+        { "id": "null-votes", "name": "Null votes", "index": 7, "kind": "NullVoteIndicator" },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 8, "kind": "UndervoteDifferenceCount" },
+        { "id": "write-ins", "name": "Write-ins", "index": 9, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 1
     },
@@ -343,10 +343,10 @@
         { "id": "59", "name": "Frederick Douglass", "index": 3 }
       ],
       "supplementalFields": [
-        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator" },
+        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator" },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount" },
+        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 1
     },
@@ -362,10 +362,10 @@
         { "id": "62", "name": "Jimmy Page", "index": 3 }
       ],
       "supplementalFields": [
-        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator" },
+        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator" },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount" },
+        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 1
     },
@@ -380,10 +380,10 @@
         { "id": "64", "name": "Robert Frost", "index": 2 }
       ],
       "supplementalFields": [
-        { "id": "overvotes", "name": "Overvotes", "index": 3, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "null-votes", "name": "Null votes", "index": 4, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "undervote-difference", "name": "Undervote difference", "index": 5, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "write-ins", "name": "Write-ins", "index": 6, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+        { "id": "overvotes", "name": "Overvotes", "index": 3, "kind": "OvervoteIndicator" },
+        { "id": "null-votes", "name": "Null votes", "index": 4, "kind": "NullVoteIndicator" },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 5, "kind": "UndervoteDifferenceCount" },
+        { "id": "write-ins", "name": "Write-ins", "index": 6, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 1
     },
@@ -399,10 +399,10 @@
         { "id": "67", "name": "Orville Wright", "index": 3 }
       ],
       "supplementalFields": [
-        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator" },
+        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator" },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount" },
+        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 1
     },
@@ -417,10 +417,10 @@
         { "id": "69", "name": "Mighty Mouse", "index": 2 }
       ],
       "supplementalFields": [
-        { "id": "overvotes", "name": "Overvotes", "index": 3, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "null-votes", "name": "Null votes", "index": 4, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "undervote-difference", "name": "Undervote difference", "index": 5, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "write-ins", "name": "Write-ins", "index": 6, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+        { "id": "overvotes", "name": "Overvotes", "index": 3, "kind": "OvervoteIndicator" },
+        { "id": "null-votes", "name": "Null votes", "index": 4, "kind": "NullVoteIndicator" },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 5, "kind": "UndervoteDifferenceCount" },
+        { "id": "write-ins", "name": "Write-ins", "index": 6, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 1
     },
@@ -436,10 +436,10 @@
         { "id": "72", "name": "David Letterman", "index": 3 }
       ],
       "supplementalFields": [
-        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator" },
+        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator" },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount" },
+        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 1
     },
@@ -456,10 +456,10 @@
         { "id": "76", "name": "Stanley Kubrick", "index": 4 }
       ],
       "supplementalFields": [
-        { "id": "overvotes", "name": "Overvotes", "index": 5, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "null-votes", "name": "Null votes", "index": 6, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "undervote-difference", "name": "Undervote difference", "index": 7, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "write-ins", "name": "Write-ins", "index": 8, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+        { "id": "overvotes", "name": "Overvotes", "index": 5, "kind": "OvervoteIndicator" },
+        { "id": "null-votes", "name": "Null votes", "index": 6, "kind": "NullVoteIndicator" },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 7, "kind": "UndervoteDifferenceCount" },
+        { "id": "write-ins", "name": "Write-ins", "index": 8, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 1
     },
@@ -474,10 +474,10 @@
         { "id": "78", "name": "Gordon Ramsay", "index": 2 }
       ],
       "supplementalFields": [
-        { "id": "overvotes", "name": "Overvotes", "index": 3, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "null-votes", "name": "Null votes", "index": 4, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "undervote-difference", "name": "Undervote difference", "index": 5, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "write-ins", "name": "Write-ins", "index": 6, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+        { "id": "overvotes", "name": "Overvotes", "index": 3, "kind": "OvervoteIndicator" },
+        { "id": "null-votes", "name": "Null votes", "index": 4, "kind": "NullVoteIndicator" },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 5, "kind": "UndervoteDifferenceCount" },
+        { "id": "write-ins", "name": "Write-ins", "index": 6, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 1
     },
@@ -493,10 +493,10 @@
         { "id": "81", "name": "Albus Dumbledore", "index": 3 }
       ],
       "supplementalFields": [
-        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator" },
+        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator" },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount" },
+        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 1
     },
@@ -512,10 +512,10 @@
         { "id": "84", "name": "Peter Parker", "index": 3 }
       ],
       "supplementalFields": [
-        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator" },
+        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator" },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount" },
+        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 1
     },
@@ -531,10 +531,10 @@
         { "id": "87", "name": "Hannibal Barca", "index": 3 }
       ],
       "supplementalFields": [
-        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator" },
+        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator" },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount" },
+        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 1
     },
@@ -549,10 +549,10 @@
         { "id": "89", "name": "Gregor Mendel", "index": 2 }
       ],
       "supplementalFields": [
-        { "id": "overvotes", "name": "Overvotes", "index": 3, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "null-votes", "name": "Null votes", "index": 4, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "undervote-difference", "name": "Undervote difference", "index": 5, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "write-ins", "name": "Write-ins", "index": 6, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+        { "id": "overvotes", "name": "Overvotes", "index": 3, "kind": "OvervoteIndicator" },
+        { "id": "null-votes", "name": "Null votes", "index": 4, "kind": "NullVoteIndicator" },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 5, "kind": "UndervoteDifferenceCount" },
+        { "id": "write-ins", "name": "Write-ins", "index": 6, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 1
     },
@@ -568,10 +568,10 @@
         { "id": "92", "name": "Scrooge McDuck", "index": 3 }
       ],
       "supplementalFields": [
-        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+        { "id": "overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator" },
+        { "id": "null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator" },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount" },
+        { "id": "write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 1
     }

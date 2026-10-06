@@ -30,7 +30,7 @@ quotes, code references, fix sketches and verifier notes) are in
 
 Note: egperf's correctness check only shows that the pipeline agrees with itself. It cannot catch a hash computed
 consistently wrong. That is the KAT's job. Before S5, `ExpectedTallyAccumulator` copied the encryptor's overvote rule;
-S5 re-derived it from the spec text, and it now also produces the supplemental-field totals that `TallyComparer`
+S5 re-derived it from the spec text (S5b again, from decisions Q11-Q16), and it now also produces the supplemental-field totals that `TallyComparer`
 checks.
 
 Baseline on `846897e`: 945 tests pass (746 Core + 199 Perf); smoke prints `correctness passed`; the console pipeline
@@ -54,6 +54,7 @@ User answers (2026-10-04):
   the kind, its own option index after the selectable options, and a counts-toward-limit flag. Each field is
   encrypted, proved, hashed, aggregated and decrypted as an ordinary option, in manifest order. The election-wide
   `Include*` flags are removed.
+  - *Superseded by Q14 (S5b removed the counts-toward-limit flag). The S5 implementer note follows for the record.*
   - *Implementer note (S5, not part of the user's answer; awaiting the user's acceptance, see S5 review round 2):*
     `Manifest.Validate` narrows the per-field flag. The overvote indicator must count (it enters the limit proof
     L times). The null-vote indicator, the undervote indicator and the undervote difference count must not.
@@ -86,6 +87,43 @@ User answers (2026-10-04):
 - **Q10 Order of U in eqs (88)/(90) (S4), answered 2026-10-05:** "Ascending index". The participating-guardian set U is
   encoded as b(#U,4) followed by b(j,4) for each j, in ascending guardian index. S4 already does this, and the KAT oracle
   assumes it.
+- **S5 follow-up decisions, answered 2026-10-05.** These supersede the parts of the S5 build that conflict with them.
+  Notation: s = sum of selections, w = write-in count, L = selection limit.
+  - **Q11 Undervote indicator on an overvote:** the user wrote: "The sum of all votes + undervotes + overvotes should
+    be less than the selection limit. Therefore, if a contest is an overvote, it is not an undervote. So overvote: 1
+    undervote: 0 would sum to a selection limit of 1 in a normal vote by 1 contest." So on an overvote the undervote
+    indicator is **0**. The S5 build had 1.
+  - **Q12 Write-in count on an overvote:** "Zero it".
+  - **Q13 Write-ins that do not count toward the limit:** the user wrote: "What is a write in that does not count
+    toward the limit? Any write in should count towards the limit as far as I know." So write-ins **always** count
+    toward the limit, exactly like selections. There is no flag. A ballot that uses a write-in is not a null vote, and
+    undervote is judged on s + w.
+  - **Q14 Counts-toward-limit flags:** the user wrote: "this shouldn't be about whether or not a field counts towards
+    the limit as much as whether or not a field is tracked. If a field is tracked, it needs to be counted towards the
+    sum of fields being less than or equal to the selection limit. If it is not tracked, then it doesn't matter at all
+    and presumably isn't included." So the per-field `CountsTowardLimit` flag is **removed**. Every tracked field is
+    checked against L.
+  - **Q15 Null-vote and undervote tracked together:** "Null in its own check". Null-vote is a special undervote, so
+    putting both in one sum would count the same missing vote twice. The relations are:
+    - Limit proof: s + w + L·overvote + undervote-indicator ≤ L.
+    - Undervote difference count u, proved exactly: s + w + L·overvote + u = L, so u = 0 on an overvote.
+    - Null-vote indicator, its own relation per p.39: s + w + L·null ≤ L.
+  - **Q16 Overvote weight:** the user asked to use footnote 42, "exponentiating the ciphertext encrypting the overvote
+    field with the contest selection limit". That is the L·overvote term already built in S5 (α_ov^L, β_ov^L).
+    Unchanged.
+  - Resulting values on an overvote: options 0, write-in count 0, overvote 1, undervote indicator 0, undervote
+    difference 0, null 0. On a null vote (s + w = 0, no overvote): undervote indicator 1, difference L, null 1.
+- **S5b follow-up decisions, answered 2026-10-05:**
+  - **Q17 (S5b question C), null-vote relation and overvote:** "Add overvote term". When the overvote indicator is
+    tracked, the null relation becomes s + w + L·overvote + L·null ≤ L. Without the overvote term, overvote = 1 with
+    null = 1 would verify. Fixed in S5c.
+  - **Q18 (S5b question A), u tracked without an overvote indicator:** the user wrote: "the question says that the
+    overvote indicator is not tracked. There is therefore no indication of whether or not something is an overvote, so
+    'on an overvote...' doesn't make sense to me." The orchestrator's resolution: without a tracked overvote field
+    there is no published notion of an overvote. The neutralized contest (§3.3.5: options zeroed) is indistinguishable
+    from a blank contest, so u = L. The S5b behavior is kept, and Validate does not require the overvote indicator
+    when u is tracked.
+  - **Q19 (S5b question B), write-in fields without a write-in count:** "Reject manifest". Kept as built.
 - **Cadence:** "Keep going". After each stage: commit, update this tracker, push, start the next stage. Stop only
   for a new spec contradiction or question.
 
@@ -97,7 +135,7 @@ User answers (2026-10-04):
 | S2 Key-generation hardening | G5, G14, G15, G25, G34, G26 (H_B in record and guardian check) | S1 | done | 6fbc25c |
 | S3 Ballot verification strictness | G4, G13, G33, G23, G24, G36; plus the push security-review findings on V8 (missing completeness/validation checks: ballot contest set vs ballot style, option set vs manifest, duplicates) | — | done | 7ae4cfc |
 | S4 Tally soundness | G2, G27, G28, G20, G21, G30, G38, G16 | — | done | c549325 |
-| S5 Supplemental fields redesign | G3, G8, G22, G29, G10 | — | done (4 semantic questions pending with the user, see S5 log; recommended answers implemented) | see next commit |
+| S5 Supplemental fields redesign (with S5b: user follow-up decisions Q11-Q16) | G3, G8, G22, G29, G10 | — | done (gate green; awaiting commit). The four S5 questions are answered (Q11-Q16) and applied in S5b; three new S5b questions (A, B, C) are open, see the S5b log and S5b review round 1 | see next commit |
 | S6 Contest data | G11, G32 | after S4 | todo | |
 | S7 Ballot nonce and challenged ballots | G17, G18 | after S4 | todo | |
 | S8 Chain closing | G19, G37 | — | todo | |
@@ -161,24 +199,364 @@ re-pinned (the gate was green before any test edit). The round only adds tests.
 S5 review round 3: no hash, nonce, ciphertext, confirmation code or KAT value moved, and no existing assertion was
 re-pinned. The round adds three Manifest.Validate tests and marks the question 4 pins below.
 
-S5 decision-dependent pins (review rounds 1 and 3). These pin the recommended option (a) of open S5 user questions
-1, 2 and 4; they move published totals, never bytes, and must be re-pinned if the user picks (b). Each is marked
-`DECISION-DEPENDENT PIN` in the source:
+S5 decision-dependent pins (review rounds 1 and 3). These pinned the recommended option (a) of S5 user questions
+1, 2 and 4. **Resolved in S5b** by user decisions Q11-Q16: the `DECISION-DEPENDENT PIN` markers are gone from the
+source, and the last column says what each pin became. None of the user's answers was option (a) or (b) as asked:
+Q13/Q14 removed the "does not count" case the first four rows were about.
+
+| Location | Pinned | Question | S5b |
+|---|---|---|---|
+| `SupplementalFieldVerificationTests.HonestCases` row `{1, 1, false, 0, 0, 1}` | null indicator 1 when the only marks are uncounted write-ins | 2 | Row removed (no uncounted write-ins, Q13). New row `{1, 1, 0, 0, 1}`: a write-in-only ballot has null indicator 0. |
+| `SupplementalFieldVerificationTests.HonestCases` row `{1, 1, false, 1, 1, 2}` | write-in count 0 on an overvote although it does not count | 1 | Row removed (Q13). Write-ins are 0 on every overvote (Q12): rows `{1, 1, 1, 0, 1}`, `{2, 1, 1, 0, 2}`. |
+| `ExpectedTallyTests.Add_WriteInsCountTowardTheLimitOnlyWhereTheManifestSaysSo(false, 0, false)` | `Nullvotes` 1 for uncounted write-ins only | 2 | Theory replaced by `Add_WriteInsAlwaysCountTowardTheLimit` (5 rows); a write-in alone gives `Nullvotes` 0. |
+| `ExpectedTallyTests.Add_OnAnOvervote_ZeroesWriteInsThatDoNotCountTowardTheLimit` | `WriteIns` 0 on an overvote with uncounted write-ins | 1 | Removed; its case is row (1, 1, 1) of `Add_WriteInsAlwaysCountTowardTheLimit` (`WriteIns` 0, Q12). |
+| `ExpectedTallyAccumulator.Add` and `BallotEncryptor.EncryptContest`/`SupplementalValue` | the rules themselves | 1, 2 | Both re-derived for Q11-Q15; the egperf `limits` scenario and `ScenarioRunnerTests` check that they agree. |
+| `SupplementalFieldVerificationTests.HonestCases`, every overvoted row | undervote indicator 1 on an overvote | 4 | Undervote indicator 0 and difference 0 on every overvoted row (Q11, Q15). |
+| `BallotEncryptorTests.Encrypt_OvervoteCounter_ProofIsWellFormed` | encrypted undervote indicator 1 on an overvote | 4 | Indicator 0, difference 0. |
+| `ExpectedTallyTests.GetCounters_CountsAnOvervote`, `GetCounters_OnAnOvervote_ComputesTheUndervoteFieldsOnTheZeroedSelections` | `Undervotes` 1 on an overvote | 4 | `Undervotes` 0 and `UndervoteDifference` 0. The second test is renamed `GetCounters_OnAnOvervote_TheUndervoteFieldsAreZero`. |
+| `SupplementalFieldTallyTests.Decrypt_EverySupplementalFieldTotal_MatchesTheIndependentlyAccumulatedTally_AndVerifies` | `Undervotes` 5 (includes the 3 overvotes) | 4 | `[3, 1, 2, 3, 2]`: undervotes 2, difference 3 (0 per overvote). |
+| `ExpectedTallyAccumulator.Add` and `BallotEncryptor.SupplementalValue` | the undervote rule | 4 | Both 0 on an overvote. The difference is 0 too, or L where the overvote indicator is not declared (open S5b question A). |
+
+S5b: no KAT value moved, and every KAT family passed before and after, including `ContestHash_Eq70` and
+`Encryption_ReproducesTheContestHashAndConfirmationCodeVectors`. What moved, by design:
+- The selection-limit proof's ciphertext now includes the undervote indicator, where one is declared.
+- The undervote difference relation's ciphertext now always includes the write-in count, and the overvote indicator
+  raised to L.
+- Every contest that declares the null-vote indicator carries the new `NullVoteProof`.
+- On an overvote, the undervote indicator and the difference count encrypt 0 (S5: 1 and L), so those ballots' field
+  ciphertexts, contest hashes and confirmation codes differ.
+
+No test holds a literal for any of these. The non-spec formats are pinned by recomputation in
+`SupplementalFieldVerificationTests`: `LimitProof_IsEq62...`, `UndervoteDifferenceProof_IsTheDocumentedOneValueProof`,
+`NullVoteProof_IsTheDocumentedRangeProof` and `RelationCiphertexts_MatchTheirDefinitions_OnBothEngines`.
+
+The committed manifests lost their `countsTowardSelectionLimit` keys, so every scenario's `manifestHash` changed.
+`option-limits` also replaced its third contest. The console's `tally.json` counts are unchanged.
+
+S5b decision-dependent pins (review round 1). These pin the implemented option (a) of the open S5b user questions
+A, B and C (see the S5b log and the S5b review round 1 entry). They move published totals, accepted manifests or
+which forgeries verify, never bytes for a manifest that declares both fields, except C(b), which changes the
+`NullVoteProof` ciphertext (a non-spec, non-interoperable format). The tests are marked `DECISION-DEPENDENT PIN`
+in the source; the fixture and the rules cannot carry a marker.
 
 | Location | Pins | Question | On (b) |
 |---|---|---|---|
-| `SupplementalFieldVerificationTests.HonestCases` row `{1, 1, false, 0, 0, 1}` | null indicator 1 when the only marks are uncounted write-ins | 2 | null indicator 0 |
-| `SupplementalFieldVerificationTests.HonestCases` row `{1, 1, false, 1, 1, 2}` | write-in count 0 on an overvote although it does not count | 1 | write-in count 2 |
-| `ExpectedTallyTests.Add_WriteInsCountTowardTheLimitOnlyWhereTheManifestSaysSo(false, 0, false)` | `Nullvotes` 1 for uncounted write-ins only | 2 | `Nullvotes` 0 |
-| `ExpectedTallyTests.Add_OnAnOvervote_ZeroesWriteInsThatDoNotCountTowardTheLimit` | `WriteIns` 0 on an overvote with uncounted write-ins | 1 | `WriteIns` 1 |
-| `ExpectedTallyAccumulator.Add` (`countedWriteIns`, `Nullvotes` from `countedTotal`) and `BallotEncryptor.EncryptContest`/`SupplementalValue` | the rules themselves; the egperf `limits` scenario and `ScenarioRunnerTests` (3, 3, not counted) check that the two agree | 1, 2 | change both |
-| `SupplementalFieldVerificationTests.HonestCases`, every overvoted row (overvote entry 1, 7 rows) | undervote indicator 1 on an overvote | 4 | undervote entry 0 (difference stays L) |
-| `BallotEncryptorTests.Encrypt_OvervoteCounter_ProofIsWellFormed` | encrypted undervote indicator 1 on an overvote | 4 | 0 |
-| `ExpectedTallyTests.GetCounters_CountsAnOvervote`, `GetCounters_OnAnOvervote_ComputesTheUndervoteFieldsOnTheZeroedSelections` | `Undervotes` 1 on an overvote | 4 | `Undervotes` 0 |
-| `SupplementalFieldTallyTests.Decrypt_EverySupplementalFieldTotal_MatchesTheIndependentlyAccumulatedTally_AndVerifies` | `Undervotes` 5 (includes the 3 overvotes) | 4 | 2 |
-| `ExpectedTallyAccumulator.Add` (`Undervotes` from `countedTotal`, 0 on an overvote) and `BallotEncryptor.SupplementalValue` (`sum < limit` on the neutralized sum) | the rule itself | 4 | change both to 0 on an overvote; `Manifest.Validate` could then let the undervote indicator count toward the limit (it would be 0 on every overvote) |
+| `ExpectedTallyAccumulator.Add` and `BallotEncryptor.SupplementalValue` | u = L on an overvote when the overvote indicator is not declared | A | Unreachable (Validate rejects such a contest); the rule may stay or be simplified to u = 0. |
+| `test/data/option-limits/manifest.json`, contest `l3-r3-no-overvote` (used only by `perf/scenarios/limits.json`; no unit test loads it) | a contest declaring u without the overvote indicator | A | Validate rejects the manifest and egperf `limits` fails at load: add the overvote indicator to the contest (or drop it), then rebaseline `limits`. |
+| `SupplementalFieldVerificationTests.EveryCombinationOfTrackedFields_HonestBallotsOfEveryKind_Verify`, the `expected = election.L` branch | u = L on an overvote without the overvote indicator | A | The 8 masks that declare u without the overvote indicator throw at Build: skip them (or assert the throw) and drop the branch. |
+| `ExpectedTallyTests.GetCounters_OnAnOvervoteWithoutAnOvervoteIndicator_TheUndervoteDifferenceIsL` | `UndervoteDifference` 2 (= L) | A | Would still pass silently (neither `CreateMinimalManifest` nor the accumulator validates): delete it or make it a Validate test. |
+| `ManifestValidationTests.Validate_AnyKindDeclaredOnItsOwn_DoesNotThrow(UndervoteDifferenceCount)` | u alone is a valid declaration | A | Throws; move the row to a Throws test. |
+| `Manifest.Validate`'s write-in rule | write-in fields offered require a declared write-in count | B | Remove the rule; the encryptor and accumulator must then ignore untracked write-ins in every rule. |
+| `ManifestValidationTests.Validate_WriteInFieldsOfferedWithoutAWriteInCount_Throws` (×2) | Validate throws | B | Does not throw. |
+| `SupplementalFieldVerificationTests.Build`, `ManifestValidationTests.WithFields`, `SupplementalFieldSerializationTests.Encrypt` defaults (W = 0 unless the count is declared) | not a pin: valid under both options | B | No change required. |
+| `SupplementalFieldVerificationTests.Verification7_InconsistentIndicatorsNoRelationCovers_Verify("null-vote indicator 1 on an overvote")` | that forgery verifies | C | Fails 7.D ("Null-vote proof"): move it to `ForgeryCases`. Also `RangeProofChallenge.RelationCiphertexts`, the encryptor's null-vote `Combine`, `NullVoteProof_IsTheDocumentedRangeProof`, `RelationCiphertexts_MatchTheirDefinitions_OnBothEngines` and the `DeviceProof`/`Forge` null-value formulas gain the L*overvote term. |
 
 ## Log
+
+### 2026-10-05 — S5b review round 1 (G22, G10: a third unchecked indicator case, decision-dependent pins, tracker repair)
+Four review findings. All four are right, with one correction to finding 2's evidence. Nothing in `src/` changed except
+a doc comment. No assertion moved; the round adds tests and comments only. Everything is still unstaged on top of
+S5 (27e75e2); nothing was staged, committed or stashed.
+- **R1 (spec, minor), right: V7 accepts overvote 1 with null 1.**
+  - Checked by hand with every field declared. Take overvote 1, null 1 and s = w = und = u = 0: (1) gives L,
+    (2) gives L and (3) gives L. All pass, and V6 passes too. p.39 (spec text: "When all the selections are set to
+    zero as a consequence of an overvote, the null vote indicator should be set to zero") and Q3 say null is 0.
+  - The cause: (1) forces the undervote indicator to 0 on an overvote through its L*overvote term, but (3), as
+    Q15 states it ("s + w + L·null ≤ L"), has no overvote term.
+  - Enumerated the full solution set of (1)-(3) instead of trusting a count. Given the true s + w:
+    - with overvote 1, the relations force s + w = 0, und = 0 and u = 0, and leave null free;
+    - with overvote 0, they force u = L - s - w, und = 0 at s + w = L and null = 0 at s + w > 0.
+    - So the inconsistent values that verify are exactly: und 0 with s + w < L (Q2), null 0 with s + w = 0 (Q2),
+      and null 1 on an overvote (new).
+    - Separately, and inherent in the spec's design, an encrypted overvote (all zero, overvote 1) cannot be told
+      apart from a null vote that a device re-encodes as an overvote. This is now documented too, so that it is
+      not counted as a missed gap.
+  - `AdherenceToVoteLimitsVerification`'s remarks and CLAUDE.md now list the three cases and the inherent one.
+  - New `Verification7_InconsistentIndicatorsNoRelationCovers_Verify` (4 cases) pins all four: a device forges
+    the values, re-proves every relation, and V6 and V7 pass. The overvote+null case is marked
+    `DECISION-DEPENDENT PIN (open S5b question C, option (a))`.
+  - Not implemented: the fix changes the Q15 relation as the user stated it. It is new open question C:
+    - (a) keep (3) as s + w + L·null in 0..L (implemented);
+    - (b) make (3) s + w + L·overvote + L·null in 0..L.
+    - Under (b), honest ballots still give at most L (overvote: 0 + L + 0; null vote: 0 + 0 + L), and overvote 1
+      with null 1 gives 2L. The cost is one multiply per contest, since `RelationCiphertexts` already holds the
+      overvote indicator's L-th power, plus one `Combine` term in the encryptor.
+    - `NullVoteProof` is already a non-spec, non-interoperable format, so (b) has no interop cost. It does change
+      that proof's bytes.
+    - Recommendation: (b), which matches p.39 and Q3.
+- **R2 (code, minor), right, with one correction.** The tracker's "No committed manifest ... hits either case"
+  contradicted the next sentence. It now says that `option-limits`' `l3-r3-no-overvote` contest hits case A.
+  - Correction to the finding: no unit test loads `option-limits`; only `perf/scenarios/limits.json` does. So
+    under A(b) the blast radius is the egperf `limits` run plus the pinned tests, not "every test that loads that
+    manifest".
+  - The A pins are now marked `DECISION-DEPENDENT PIN (open S5b question A, option (a))`:
+    - the `expected = election.L` branch in `EveryCombinationOfTrackedFields_...`;
+    - `GetCounters_OnAnOvervoteWithoutAnOvervoteIndicator_TheUndervoteDifferenceIsL`;
+    - `Validate_AnyKindDeclaredOnItsOwn_DoesNotThrow`'s `UndervoteDifferenceCount` row, which the finding missed.
+  - The `GetCounters_...` pin is the risky one: neither `CreateMinimalManifest` nor the accumulator calls
+    Validate, so under A(b) it would keep passing on a manifest that no election can use. Its marker says so.
+  - The JSON fixture cannot carry a comment. perf/README's `limits` paragraph and the inventory say what it
+    needs under A(b).
+- **R3 (tests, minor), right.** Inserting the S5b entry had overwritten the S5 review round 3 heading. The heading
+  is restored and the stray fragment removed. Also fixed two stale git-state lines in the S5b entry ("S5 is still
+  staged", "S5's new files are staged"): S5 was committed as 27e75e2 before the S5b gate ran.
+- **R4 (tests, minor), right in substance.**
+  - `Validate_WriteInFieldsOfferedWithoutAWriteInCount_Throws` is marked
+    `DECISION-DEPENDENT PIN (open S5b question B, option (a))`.
+  - Judgment call: the W = 0 defaults in the `Build`, `WithFields` and `Encrypt` helpers are not pins. A pin
+    breaks under option (b), and these manifests are valid under both options. They are not marked; their
+    comments name question B and say they hold under either option. The inventory lists them as "no change
+    required".
+- The pinned-value inventory gains an "S5b decision-dependent pins" table (A, B, C) saying what each entry
+  becomes under option (b).
+
+Gate before re-pinning: no assertion changed (this round only adds tests and comments), so the gate run after the
+edits is both the before and the after:
+- Build: `0 Warning(s)`, `0 Error(s)`.
+- Smoke: `correctness passed`. dkg 137 ms; EncryptBallots 0.237 ms/ballot, 169.7 MB; VerifyBallots 0.981 ms/ballot,
+  12.4 MB; Tally 9; VerifyTally 4; DecryptTally 34; VerifyDecryption 8 ms; `tallyVerification: ran`,
+  `decryptionVerification: ran`. Within S5b's range; no hot path changed.
+- Console: `Done.`, then the expected ReadKey exception. tally.json rewritten at 20:44:12: `0-0 (1, 3)`,
+  `0-1 (2, 0)`, fields (3..7, 0).
+- Tests: Core `Passed: 1284, Total: 1284` (1280 + the 4 new cases); Perf `Passed: 225, Total: 225`.
+
+Carry-overs: as in S5b, plus open question C. New files: none.
+
+### 2026-10-05 — S5b (supplemental fields: user follow-up decisions Q11-Q16; G3, G8, G22, G29, G10)
+The user answered the four S5 questions plus two follow-ups (Q11-Q16 under Decisions). S5b applies them.
+- Git state: S5 is committed (27e75e2). S5b is unstaged working-tree changes on top; no new files. Nothing was
+  staged, committed or stashed. (Corrected in S5b review round 1: this line first said S5 was still staged.)
+- The S5 questions are answered as follows:
+  - Question 1 (write-ins on an overvote): zeroed (Q12).
+  - Question 2 (write-in-only null vote): not a null vote (Q13).
+  - Question 3 (the `Validate` narrowing): the flag is removed (Q14).
+  - Question 4 (undervote indicator on an overvote): 0 (Q11).
+- Notation: s = sum of selections, w = write-in count, L = selection limit, u = undervote difference count.
+
+Code changes per G-ID:
+- **G10 / G22 model (Q13, Q14).**
+  - `SupplementalField.CountsTowardSelectionLimit`, `Contest.SelectionLimitWeight` and `Validate`'s flag rules
+    are deleted.
+  - New `Validate` rule: a contest that offers write-in fields (`WriteInFieldCount > 0`) must declare the
+    write-in count. Q13 says write-ins always count toward the limit, and only the count's ciphertext can carry
+    them into a proof. See open question B.
+  - The S5 implementer note under Q1 is marked superseded.
+- **G10 / G22 values (`BallotEncryptor.SupplementalValue`/`EncryptContest`).**
+  - A contest is overvoted when s + w > L or an option > R.
+  - On an overvote: options 0, w 0, overvote 1, null 0, undervote indicator 0, and u = 0 when the overvote
+    indicator is declared (L when it is not; see open question A).
+  - Otherwise: null = (s + w = 0), undervote indicator = (s + w < L), u = L - s - w.
+- **Q15 relations (encryptor and `AdherenceToVoteLimitsVerification`).** Each relation is over the ciphertext of
+  s + w (the options and the write-in count) and the terms of the declared fields only:
+  - (1) The selection-limit proof, eq. (62) format, 0..L, over s + w + L*overvote + undervote indicator.
+  - (2) `UndervoteDifferenceProof`: one-value proof that s + w + L*overvote + u = L. Same challenge format as S5,
+    with the documented ciphertext updated.
+  - (3) New `NullVoteProof`: range proof over 0..L of s + w + L*null, present exactly when the null-vote indicator
+    is declared. Challenge: H_q(H_I; 0x24, ind_c, ind_o(null), b(L,4), A, B, a_0, b_0, ..., a_L, b_L).
+  - The b(L,4) field makes the null proof's input 13 + 1024(L+2) bytes after H_I. Every other 0x24 input in the
+    contest is 5 or 9 mod 1024. Without it, at L = 1 the null proof would share its prefix and length with the
+    indicator's own 0..1 proof.
+  - (3) is documented as not spec-defined, like (2).
+  - Verification 7 checks (1), (2) and (3) in that order. Each proof's Z_q checks are 7.B/C and its challenge
+    check is 7.D, with a message naming the proof.
+  - A missing, unexpected or wrong-length null-vote proof, or one with a null entry, is `"7"`.
+  - 7.A covers every field, as before. V6 is unchanged.
+- **Serialization (G22).** `EncryptedContest.NullVoteProof` is in the domain type, in JSON (`nullVoteProof`,
+  omitted when null) and in protobuf (member 12; an absent or empty list decodes as null), mirroring
+  `UndervoteDifferenceProof`.
+- **Montgomery fix (S5 review note).** V7 used to leave and re-enter Montgomery form several times per contest:
+  `Aggregate` out, then two `ModPProduct`s back in and out. The new `RangeProofChallenge.RelationCiphertexts`
+  computes all three relation ciphertexts in the active engine's representation:
+  - each input is converted in once, and the overvote indicator's L-th power is shared by (1) and (2);
+  - each output is converted out once;
+  - L's power is a short window over L's own bytes (public, small);
+  - with no field declared it falls back to `Aggregate`.
+  - The encryptor's `Combine` uses `ModPProduct.Multiply`/`MultiplyPower` as before.
+- **G29 test infrastructure.**
+  - `ExpectedTallyAccumulator` is re-derived from the Q11-Q16 text, which its doc comment quotes, and not from
+    the encryptor. `ContestCounters` docs are updated.
+  - `ElectionFixtureBuilder.SupplementalFields`/`CreateMinimalManifest` lose `writeInsCountTowardLimit`.
+  - Testing.Cli and the `BallotGenerator` comment are updated.
+- **Fixtures.**
+  - The `countsTowardSelectionLimit` key is stripped from `test/data/{single-contest,famous-names,
+    famous-names-large,option-limits}/manifest.json`.
+  - `option-limits`' third contest was the S5 "write-ins not counted" contest, which is now identical to the
+    second. It is replaced by `l3-r3-no-overvote` (L = R = 3; null, undervote, difference and write-ins; no
+    overvote indicator). The `limits` scenario now covers the relations without the overvote term.
+  - `C:\temp\eg\data\1\manifest.json` (the console input) lost the key. The previous file is kept as
+    `manifest.json.pre-s5b.bak`.
+- **Docs.** CLAUDE.md (BallotEncryption supplemental-fields text, the overvote bullet, the Verify and
+  Serialization paragraphs, the `Validate` rule list) and perf/README (S5b paragraph, `limits` description).
+  The pinned-value inventory is updated above.
+
+Gate before re-pinning (code, fixtures and compile migrations only; no assertion changed):
+- Compile migrations: removed the `writeInsCountTowardLimit:` arguments in ManifestValidationTests,
+  SupplementalFieldTallyTests, SupplementalFieldVerificationTests, ExpectedTallyTests and ScenarioRunnerTests, and
+  `CountsTowardSelectionLimit = counts` in ManifestValidationTests.
+- Build: `0 Error(s)`, `1 Warning(s)`. The warning was xUnit1026 on ScenarioRunnerTests' now-unused
+  `writeInsCount` theory parameter.
+- Smoke: `correctness passed`. dkg 138 ms; EncryptBallots 0.237 ms/ballot, 169.6 MB; VerifyBallots
+  1.022 ms/ballot, 12.4 MB; Tally 9; VerifyTally 4; DecryptTally 34; VerifyDecryption 8 ms;
+  `tallyVerification: ran`, `decryptionVerification: ran`.
+- Console: `Done.`, then the expected ReadKey exception. tally.json `0-0 (1, 3), 0-1 (2, 0)`, fields
+  (3..7, 0).
+- Tests: Core `Failed: 37, Passed: 1191, Total: 1228`; Perf `Failed: 12, Passed: 213, Total: 225`.
+
+The failures, and what each was:
+- **ManifestValidationTests.** `Validate_CountsTowardSelectionLimit_OnlyWhereEveryHonestBallotHasAProof`, all 6
+  failing rows. The flag no longer exists.
+- **Fixture inputs: new `Validate` rule (W > 0 with no write-in count field).** The test builders defaulted to
+  W = 2 while declaring no write-in count:
+  - SupplementalFieldSerializationTests `RoundTrip_ContestWithoutAnUndervoteDifferenceCount_HasNoProof` ×2 and
+    `RoundTrip_ContestWithoutSupplementalFields_DecodesAnEmptyList` ×2;
+  - SupplementalFieldVerificationTests `BallotWithoutExactlyTheDeclaredFields_IsRejectedAsStructure` ×12 and
+    `Verification7_UndervoteDifferenceProofWithoutTheField_Fails`.
+- **Pins on the S5 rules** (rows where write-ins did not count, or the undervote indicator / u was L on an
+  overvote):
+  - SupplementalFieldVerificationTests `Encrypt_DerivesEveryFieldFromTheSelections_AndTheBallotVerifies` ×9;
+  - `BallotEncryptorTests.Encrypt_OvervoteCounter_ProofIsWellFormed`;
+  - `SupplementalFieldTallyTests.Decrypt_EverySupplementalFieldTotal_...` (expected `[3, 1, 5, 9, 2]`, got
+    `[3, 1, 2, 3, 2]`);
+  - Perf ExpectedTallyTests `Add_OvervoteRule_IsSumAboveLOrAnOptionAboveR` ×4,
+    `Add_WriteInsCountTowardTheLimitOnlyWhereTheManifestSaysSo` ×3,
+    `Add_OnAnOvervote_ZeroesWriteInsThatDoNotCountTowardTheLimit`, `GetCounters_CountsAnOvervote`,
+    `GetCounters_CountsWriteInsFromTheBallotContestRegardlessOfSelections` and
+    `GetCounters_OnAnOvervote_ComputesTheUndervoteFieldsOnTheZeroedSelections`;
+  - `TallyComparerTests.Compare_ChecksEveryDeclaredSupplementalField`.
+- **Format pins, recomputed with the S5 ciphertexts:**
+  - `LimitProof_IsEq62OverTheSelectionsTheCountedWriteInsAndTheOvervoteIndicatorToTheL`;
+  - `UndervoteDifferenceProof_IsTheDocumentedOneValueProof`;
+  - `Verification7_UndervoteDifferenceProofRecomputedByTheDevice_Passes`, whose helper omitted ov^L.
+
+Re-pinned, and why (nothing weakened or skipped):
+- **Deleted:**
+  - `Validate_CountsTowardSelectionLimit_...`: the flag no longer exists (Q14). It is replaced by
+    `Validate_AnyKindDeclaredOnItsOwn_DoesNotThrow` (×5), `Validate_WriteInFieldsOfferedWithoutAWriteInCount_Throws`
+    (×2) and `Validate_ALeftoverCountsTowardSelectionLimitKey_IsNotAField`.
+  - The `(3, 3, false)` row of ScenarioRunnerTests' R > 1 theory, and the theory's `writeInsCount` parameter. That
+    row now duplicates `(3, 3)`.
+  - `Add_OnAnOvervote_ZeroesWriteInsThatDoNotCountTowardTheLimit`: uncounted write-ins no longer exist. Its case is
+    row (1, 1, 1) of the new `Add_WriteInsAlwaysCountTowardTheLimit`.
+- **Fixture inputs:** the builders in ManifestValidationTests, SupplementalFieldVerificationTests and
+  SupplementalFieldSerializationTests now default to W = 0 unless the write-in count is declared. Assertions are
+  unchanged.
+- **Rule pins, moved to Q11-Q15 values** (each test's comment cites the decision):
+  - `HonestCases` rewritten: 14 rows, all fields declared. They include a write-in-only ballot (not null), a
+    partial undervote with a write-in, write-ins pushing over L, and write-ins filling L.
+  - `Encrypt_OvervoteCounter_ProofIsWellFormed`: undervote indicator 0, difference 0.
+  - The tally total: `[3, 1, 2, 3, 2]`.
+  - ExpectedTallyTests: the overvote theory expects undervote 0 and difference 0 on an overvote.
+    `GetCounters_CountsAnOvervote` expects 0/0. `GetCounters_OnAnOvervote_...` is renamed
+    `..._TheUndervoteFieldsAreZero`.
+  - `GetCounters_CountsWriteInsFromTheBallotContest...` now uses L = 2. With L = 1, a selection plus a write-in is
+    now an overvote.
+  - The write-ins theory is replaced by `Add_WriteInsAlwaysCountTowardTheLimit` (5 rows).
+  - `Compare_ChecksEveryDeclaredSupplementalField`: undervotes 1, difference 1.
+- **Format pins** now recompute the Q15 ciphertexts: `LimitProof_IsEq62OverTheSelectionsWriteInsOvervoteToTheLAndUndervoteIndicator`
+  (renamed) and `UndervoteDifferenceProof_IsTheDocumentedOneValueProof`. The S5 `RelationProof` helper is replaced
+  by `DeviceProof`, a generic prover for the documented formats.
+
+New tests (Core 1228 → 1280, Perf 225 → 225):
+- `EveryCombinationOfTrackedFields_HonestBallotsOfEveryKind_Verify`, 32 masks (every subset of the five kinds),
+  with L = 3, R = 2, W = 2. Each mask runs 8 ballot kinds: normal, partial undervote, null, write-in only,
+  write-ins filling L, overvote by sum, overvote by an option above R, and write-ins pushing over L. Write-in
+  ballots are skipped where the count is not declared.
+  - Each kind checks every declared field's plaintext, the presence of each proof, and V6-V8.
+  - This includes null, undervote indicator and difference tracked together (masks with bits 1-3 set), and the
+    no-overvote-indicator case (u = L on an overvote).
+- `NullVoteProof_IsTheDocumentedRangeProof` and `RelationCiphertexts_MatchTheirDefinitions_OnBothEngines` (×2;
+  AVX-512 and scalar).
+- `Verification7_EveryRelationReprovedByTheDeviceOnHonestValues_Passes`: the positive control for `DeviceProof`.
+- `Verification7_DeviceThatForgesAFieldAndReprovesEveryRelation_Fails7D` (13 cases). In each, Verification 6
+  passes and the device re-proves every relation:
+  - overvote = 1 beside real selections;
+  - null = 1 beside a selection, or beside a write-in;
+  - u ignoring a selection, ignoring the write-ins, or L on an overvote;
+  - undervote indicator = 1 with s = L, or with s + w = L;
+  - a write-in on a full contest;
+  - and four "proved without its term" variants. In those the device proves valid statements that leave the
+    forged field out, so only a verifier that includes the term rejects them.
+- `Verification7_TamperedNullVoteProof_Fails7D`, `Verification7_NullVoteProofOfTheWrongLength_Fails` (×3) and
+  `Verification7_NullVoteProofWithoutTheField_Fails`.
+- The JSON null-entry theory gains "null-vote proof entry".
+- StrictDecodingTests gains the null-vote proof's challenge = q and response = q sites.
+- The serialization round trips check `NullVoteProof`.
+- `GetCounters_OnAnOvervoteWithoutAnOvervoteIndicator_TheUndervoteDifferenceIsL`.
+
+Mutation checks. Each was applied from a script, built, run, and restored from `C:\temp\s5b` (`cmp` clean):
+- **V7 skips relation (3), plus (1) drops the undervote indicator on both encryptor and verifier** (so honest
+  ballots still verify): 12 Core tests failed.
+  - These included every null forgery, the tampered null proof, and "undervote indicator ... proved without its
+    term".
+  - Before that variant was added, the term-dropping mutation went unseen. That is why the "without its term"
+    cases exist.
+- **Encryptor back to S5's undervote indicator (1 on an overvote), plus accumulator u = L on every overvote:**
+  - Core: 16 `EveryCombination` masks, 2 HonestCases rows and the tally total failed.
+  - Perf: 20 failed (ExpectedTallyTests, the ScenarioRunner end-to-end runs, TallyComparer).
+  - An egperf `limits` run against that stale mutant build failed with `VerificationFailedException: Sum of
+    challenge values did not equal c.`, and appended an error record to the gitignored
+    `perf/results/sethpc2023.jsonl`. Rebuilt clean, `limits` passes.
+
+Gate after:
+- Build: `0 Warning(s)`, `0 Error(s)`.
+- Smoke ×3, each `correctness passed`:
+  - dkg 132-135 ms;
+  - EncryptBallots 0.236 / 0.245 / 0.232 ms/ballot, 169.5-169.7 MB;
+  - VerifyBallots 0.988 / 0.972 / 0.984 ms/ballot, 12.3-12.4 MB;
+  - Tally 8; VerifyTally 4; DecryptTally 33-36; VerifyDecryption 8-9 ms.
+- `limits`: `correctness passed`. EncryptBallots 0.849 ms/ballot, 1,309.9 MB; VerifyBallots 3.389 ms/ballot,
+  93.7 MB; DecryptTally 44; VerifyDecryption 13 ms.
+- Console: `Done.`, then the expected ReadKey exception. tally.json was rewritten at 20:18:34:
+  `0-0 (1, 3), 0-1 (2, 0)`, fields (3..7, 0).
+- Tests: Core `Passed: 1280, Total: 1280`; Perf `Passed: 225, Total: 225`.
+
+Perf against S5 (same machine):
+
+| Scenario | Phase | S5 (round 3) | S5b |
+|---|---|---|---|
+| smoke | EncryptBallots | 0.220 ms/ballot, 152.2 MB | 0.232-0.245, 169.5-169.7 MB |
+| smoke | VerifyBallots | 0.918 ms/ballot, 14.9 MB | 0.972-0.988, 12.3-12.4 MB |
+| limits | EncryptBallots | 0.771-0.788 ms/ballot, 1,171 MB (rounds 1-2) | 0.849-0.864, 1,310 MB |
+| limits | VerifyBallots | 3.12-3.18 ms/ballot, 112.4 MB | 3.389-3.395, 93.5-93.7 MB |
+
+- The workload grew. Each contest that declares the null-vote indicator gains an (L + 1)-pair range proof:
+  - Encryption: 2 more pairs per smoke ballot (L = 1), about +7% time and +11% allocation (the proof, plus one
+    more combined ciphertext).
+  - Verification: smoke's V6 + V7 pairs go from 21 to 23 (+9.5%), which matches the +6-8% in time.
+- Allocation fell by 17% in smoke `VerifyBallots` and 17% in `limits` `VerifyBallots` even with the extra proof.
+  That is the Montgomery fix: one engine pass replaces `Aggregate` plus two `ModPProduct`s.
+- `limits`' third contest changed, so its figures compare the scenario, not identical work.
+- No hot path outside the supplemental fields changed.
+
+Decisions taken (low stakes; recorded here):
+- **The null-vote proof's challenge carries b(L,4)** for domain separation by length (above). Its proof list is
+  L + 1 long, like the limit proof.
+- **The verification order inside V7** is: presence and length of each proof (`"7"`), all 7.B/C, then 7.D for
+  (1), (2), (3).
+- **`option-limits`' third contest** is repurposed as above.
+- **`RelationCiphertexts`** lives on `RangeProofChallenge` next to `Aggregate`, and returns a
+  `ContestRelationCiphertexts` record struct.
+
+Open questions (asked in the stage report; implemented as described; they move published totals or reject
+manifests, never bytes, for any manifest that declares both fields):
+- **A.** What should u be on an overvote when the contest declares the undervote difference count but not the
+  overvote indicator? Q15's relation has no overvote term then (Q14: an untracked field "isn't included"), so
+  s = w = 0 forces u = L. Options:
+  - (a) u = L there (implemented; p.38's relation applied literally);
+  - (b) `Validate` requires the overvote indicator wherever the difference count is declared, so that u = 0 on
+    every overvote, as the decision text states.
+- **B.** Write-in fields offered without a declared write-in count. Options:
+  - (a) `Validate` rejects the manifest (implemented; Q13 says write-ins always count, and only the count's
+    ciphertext can enter the proofs);
+  - (b) allow it, and ignore untracked write-ins in every rule (Q14's "doesn't matter at all"). Then a write-in
+    could not overvote such a contest.
+- Case A is hit by one committed manifest: `option-limits`' `l3-r3-no-overvote` contest declares u without the
+  overvote indicator, so the egperf `limits` scenario exercises A(a). No committed manifest or generator hits
+  case B. (Corrected in S5b review round 1: this line first said neither case was hit.) Question C was added
+  in S5b review round 1. The pins of A, B and C are listed in the pinned-value inventory.
+
+Carry-overs: unchanged from S5. Known-issue note for memory: the S5 open questions are closed.
+New files: none. S5's new files were committed with S5 (27e75e2); S5b only modifies tracked files.
 
 ### 2026-10-05 — S5 review round 3 (G22, G10: undervote indicator on an overvote, Manifest guard tests)
 Two review findings, both right. Neither changes behavior: one is documentation plus a new user question, the other

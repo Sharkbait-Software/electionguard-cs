@@ -16,11 +16,11 @@
         { "id": "4", "name": "Choice Four", "index": 4 }
       ],
       "supplementalFields": [
-        { "id": "overvotes", "name": "Overvotes", "index": 5, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "null-votes", "name": "Null votes", "index": 6, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "undervotes", "name": "Undervotes", "index": 7, "kind": "UndervoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "undervote-difference", "name": "Undervote difference", "index": 8, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "write-ins", "name": "Write-ins", "index": 9, "kind": "WriteInCount", "countsTowardSelectionLimit": true }
+        { "id": "overvotes", "name": "Overvotes", "index": 5, "kind": "OvervoteIndicator" },
+        { "id": "null-votes", "name": "Null votes", "index": 6, "kind": "NullVoteIndicator" },
+        { "id": "undervotes", "name": "Undervotes", "index": 7, "kind": "UndervoteIndicator" },
+        { "id": "undervote-difference", "name": "Undervote difference", "index": 8, "kind": "UndervoteDifferenceCount" },
+        { "id": "write-ins", "name": "Write-ins", "index": 9, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 1
     }

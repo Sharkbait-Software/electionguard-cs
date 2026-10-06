@@ -5,7 +5,7 @@
   "contests": [
     {
       "id": "l1-r2",
-      "name": "Selection limit 1, option selection limit 2, write-ins counted",
+      "name": "Selection limit 1, option selection limit 2",
       "index": 1,
       "selectionLimit": 1,
       "optionSelectionLimit": 2,
@@ -14,17 +14,17 @@
         { "id": "l1-r2-2", "name": "Choice Two", "index": 2 }
       ],
       "supplementalFields": [
-        { "id": "l1-r2-overvotes", "name": "Overvotes", "index": 3, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "l1-r2-null-votes", "name": "Null votes", "index": 4, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "l1-r2-undervotes", "name": "Undervotes", "index": 5, "kind": "UndervoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "l1-r2-undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "l1-r2-write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount", "countsTowardSelectionLimit": true }
+        { "id": "l1-r2-overvotes", "name": "Overvotes", "index": 3, "kind": "OvervoteIndicator" },
+        { "id": "l1-r2-null-votes", "name": "Null votes", "index": 4, "kind": "NullVoteIndicator" },
+        { "id": "l1-r2-undervotes", "name": "Undervotes", "index": 5, "kind": "UndervoteIndicator" },
+        { "id": "l1-r2-undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount" },
+        { "id": "l1-r2-write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 2
     },
     {
       "id": "l3-r3",
-      "name": "Selection limit 3, option selection limit 3, write-ins counted",
+      "name": "Selection limit 3, option selection limit 3",
       "index": 2,
       "selectionLimit": 3,
       "optionSelectionLimit": 3,
@@ -33,36 +33,35 @@
         { "id": "l3-r3-2", "name": "Choice Two", "index": 2 }
       ],
       "supplementalFields": [
-        { "id": "l3-r3-overvotes", "name": "Overvotes", "index": 3, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "l3-r3-null-votes", "name": "Null votes", "index": 4, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "l3-r3-undervotes", "name": "Undervotes", "index": 5, "kind": "UndervoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "l3-r3-undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "l3-r3-write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount", "countsTowardSelectionLimit": true }
+        { "id": "l3-r3-overvotes", "name": "Overvotes", "index": 3, "kind": "OvervoteIndicator" },
+        { "id": "l3-r3-null-votes", "name": "Null votes", "index": 4, "kind": "NullVoteIndicator" },
+        { "id": "l3-r3-undervotes", "name": "Undervotes", "index": 5, "kind": "UndervoteIndicator" },
+        { "id": "l3-r3-undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount" },
+        { "id": "l3-r3-write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 2
     },
     {
-      "id": "l3-r3-uncounted",
-      "name": "Selection limit 3, option selection limit 3, write-ins not counted",
+      "id": "l3-r3-no-overvote",
+      "name": "Selection limit 3, option selection limit 3, no overvote indicator",
       "index": 3,
       "selectionLimit": 3,
       "optionSelectionLimit": 3,
       "choices": [
-        { "id": "l3-r3-uncounted-1", "name": "Choice One", "index": 1 },
-        { "id": "l3-r3-uncounted-2", "name": "Choice Two", "index": 2 }
+        { "id": "l3-r3-no-overvote-1", "name": "Choice One", "index": 1 },
+        { "id": "l3-r3-no-overvote-2", "name": "Choice Two", "index": 2 }
       ],
       "supplementalFields": [
-        { "id": "l3-r3-uncounted-overvotes", "name": "Overvotes", "index": 3, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "l3-r3-uncounted-null-votes", "name": "Null votes", "index": 4, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "l3-r3-uncounted-undervotes", "name": "Undervotes", "index": 5, "kind": "UndervoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "l3-r3-uncounted-undervote-difference", "name": "Undervote difference", "index": 6, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "l3-r3-uncounted-write-ins", "name": "Write-ins", "index": 7, "kind": "WriteInCount", "countsTowardSelectionLimit": false }
+        { "id": "l3-r3-no-overvote-null-votes", "name": "Null votes", "index": 3, "kind": "NullVoteIndicator" },
+        { "id": "l3-r3-no-overvote-undervotes", "name": "Undervotes", "index": 4, "kind": "UndervoteIndicator" },
+        { "id": "l3-r3-no-overvote-undervote-difference", "name": "Undervote difference", "index": 5, "kind": "UndervoteDifferenceCount" },
+        { "id": "l3-r3-no-overvote-write-ins", "name": "Write-ins", "index": 6, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 2
     },
     {
       "id": "l2-r1",
-      "name": "Selection limit 2, option selection limit 1, write-ins counted",
+      "name": "Selection limit 2, option selection limit 1",
       "index": 4,
       "selectionLimit": 2,
       "optionSelectionLimit": 1,
@@ -72,16 +71,16 @@
         { "id": "l2-r1-3", "name": "Choice Three", "index": 3 }
       ],
       "supplementalFields": [
-        { "id": "l2-r1-overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator", "countsTowardSelectionLimit": true },
-        { "id": "l2-r1-null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "l2-r1-undervotes", "name": "Undervotes", "index": 6, "kind": "UndervoteIndicator", "countsTowardSelectionLimit": false },
-        { "id": "l2-r1-undervote-difference", "name": "Undervote difference", "index": 7, "kind": "UndervoteDifferenceCount", "countsTowardSelectionLimit": false },
-        { "id": "l2-r1-write-ins", "name": "Write-ins", "index": 8, "kind": "WriteInCount", "countsTowardSelectionLimit": true }
+        { "id": "l2-r1-overvotes", "name": "Overvotes", "index": 4, "kind": "OvervoteIndicator" },
+        { "id": "l2-r1-null-votes", "name": "Null votes", "index": 5, "kind": "NullVoteIndicator" },
+        { "id": "l2-r1-undervotes", "name": "Undervotes", "index": 6, "kind": "UndervoteIndicator" },
+        { "id": "l2-r1-undervote-difference", "name": "Undervote difference", "index": 7, "kind": "UndervoteDifferenceCount" },
+        { "id": "l2-r1-write-ins", "name": "Write-ins", "index": 8, "kind": "WriteInCount" }
       ],
       "writeInFieldCount": 2
     }
   ],
   "ballotStyles": [
-    { "id": "1", "name": "All option-limit contests", "contestIds": ["l1-r2", "l3-r3", "l3-r3-uncounted", "l2-r1"] }
+    { "id": "1", "name": "All option-limit contests", "contestIds": ["l1-r2", "l3-r3", "l3-r3-no-overvote", "l2-r1"] }
   ]
 }

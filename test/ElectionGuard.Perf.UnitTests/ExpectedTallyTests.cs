@@ -109,15 +109,12 @@ public class ExpectedTallyTests
 
         Assert.Equal(1, counters.Overvotes);
         Assert.Equal(0, counters.Nullvotes);
-        // The undervote fields of an overvoted contest are computed on the zeroed selections
-        // (sum 0 < L = 1), so the indicator is 1 and the difference L = 1. The difference is forced
-        // (L - u = sum); the indicator follows p.38's disjunctive proof, where p.18/p.38's definition
-        // by the voter's sum would give 0. DECISION-DEPENDENT PIN (open user question 4, option (a)):
-        // re-pin Undervotes to 0 if the user picks (b).
-        // Before S5 the single undervote counter was L minus the number of nonzero options before
-        // zeroing, clamped at 0.
-        Assert.Equal(1, counters.Undervotes);
-        Assert.Equal(1, counters.UndervoteDifference);
+        // User decisions Q11 and Q15: an overvote is not an undervote, and the undervote difference
+        // count is 0, since s + w + L*overvote + u = L with s = w = 0. (S5 had 1 and L, computed on
+        // the zeroed selections; before S5 the single undervote counter was L minus the number of
+        // nonzero options before zeroing, clamped at 0.)
+        Assert.Equal(0, counters.Undervotes);
+        Assert.Equal(0, counters.UndervoteDifference);
         Assert.Equal(0, counters.WriteIns);
     }
 
@@ -165,7 +162,8 @@ public class ExpectedTallyTests
     [Fact]
     public void GetCounters_CountsWriteInsFromTheBallotContestRegardlessOfSelections()
     {
-        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest(includeWriteIns: true);
+        // L = 2: one selection and one write-in fill the limit (write-ins count toward it, Q13).
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest(includeWriteIns: true, selectionLimit: 2);
         var accumulator = new ExpectedTallyAccumulator(manifest);
 
         accumulator.Add(ElectionFixtureBuilder.CreateBallot(
@@ -196,15 +194,13 @@ public class ExpectedTallyTests
     }
 
     [Fact]
-    public void GetCounters_OnAnOvervote_ComputesTheUndervoteFieldsOnTheZeroedSelections()
+    public void GetCounters_OnAnOvervote_TheUndervoteFieldsAreZero()
     {
         // OptionSelectionLimit 2, SelectionLimit 1: choice-1 = 2 and choice-2 = 1 sum to 3 > L, an
-        // overvote (and choice-1 = 2 alone would be one too: 2 > L). The selections are zeroed, the
-        // null-vote indicator is 0 on an overvote (§3.3.9 p.39, user decision Q3), and the undervote
-        // fields see the zeroed sum: indicator 1, difference L. DECISION-DEPENDENT PIN (open user
-        // question 4, option (a)): re-pin Undervotes to 0 if the user picks (b). (Before S5 this test pinned the
-        // opposite, computing them from the original values; that matched the old encryptor, whose
-        // overvote threshold L * R did not even treat 2 + 1 = 3 > 2 consistently with the spec.)
+        // overvote (and choice-1 = 2 alone would be one too: 2 > L). The selections are zeroed, and
+        // the null-vote indicator, the undervote indicator and the undervote difference count are 0
+        // (§3.3.9 p.39; user decisions Q3, Q11, Q15). (S5 pinned the undervote fields computed on the
+        // zeroed sum, 1 and L; before S5 this test pinned them computed from the original values.)
         var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest(optionSelectionLimit: 2, selectionLimit: 1);
         var accumulator = new ExpectedTallyAccumulator(manifest);
 
@@ -217,10 +213,35 @@ public class ExpectedTallyTests
 
         Assert.Equal(1, counters.Overvotes);
         Assert.Equal(0, counters.Nullvotes);
-        Assert.Equal(1, counters.Undervotes);
-        Assert.Equal(1, counters.UndervoteDifference);
+        Assert.Equal(0, counters.Undervotes);
+        Assert.Equal(0, counters.UndervoteDifference);
         Assert.Equal(0, tally.GetVotes("contest-1", "choice-1"));
         Assert.Equal(0, tally.GetVotes("contest-1", "choice-2"));
+    }
+
+    [Fact]
+    public void GetCounters_OnAnOvervoteWithoutAnOvervoteIndicator_TheUndervoteDifferenceIsL()
+    {
+        // Q15's relation s + w + L*overvote + u = L has the overvote term only when the contest
+        // declares the indicator (Q14: an untracked field "isn't included"). Without it, an
+        // overvoted contest's u is L, the difference to the zeroed selections.
+        // DECISION-DEPENDENT PIN (open S5b question A, option (a)). If the user picks (b),
+        // Manifest.Validate rejects this manifest, but neither CreateMinimalManifest nor the
+        // accumulator validates, so this test would keep passing on a manifest no election can
+        // use: delete it, or turn it into a Validate test.
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest(
+            selectionLimit: 2,
+            supplementalFields: [SupplementalFieldKind.UndervoteIndicator, SupplementalFieldKind.UndervoteDifferenceCount]);
+        var accumulator = new ExpectedTallyAccumulator(manifest);
+
+        accumulator.Add(ElectionFixtureBuilder.CreateBallot(
+            manifest,
+            selectionValuesByChoiceId: new Dictionary<string, int> { ["choice-1"] = 2, ["choice-2"] = 1 }));
+
+        var counters = accumulator.Build().GetCounters("contest-1");
+
+        Assert.Equal(0, counters.Undervotes);
+        Assert.Equal(2, counters.UndervoteDifference);
     }
 
     // --- G10: the overvote rule is "sum > L or any option > R", re-derived from the spec ---------
@@ -252,66 +273,44 @@ public class ExpectedTallyTests
         Assert.Equal(overvoted ? 1 : 0, counters.Overvotes);
         Assert.Equal(overvoted ? 0 : values[0], tally.GetVotes("contest-1", "choice-1"));
         Assert.Equal(overvoted ? 0 : values[1], tally.GetVotes("contest-1", "choice-2"));
-        int countedSum = overvoted ? 0 : values[0] + values[1];
-        Assert.Equal(selectionLimit - countedSum, counters.UndervoteDifference);
-        Assert.Equal(countedSum < selectionLimit ? 1 : 0, counters.Undervotes);
-        Assert.Equal(!overvoted && countedSum == 0 ? 1 : 0, counters.Nullvotes);
+        // On an overvote every undervote field and the null-vote indicator are 0 (Q11, Q15, Q3).
+        int sum = values[0] + values[1];
+        Assert.Equal(overvoted ? 0 : selectionLimit - sum, counters.UndervoteDifference);
+        Assert.Equal(!overvoted && sum < selectionLimit ? 1 : 0, counters.Undervotes);
+        Assert.Equal(!overvoted && sum == 0 ? 1 : 0, counters.Nullvotes);
     }
 
     [Theory]
-    // L = 1, one option selected and one write-in used: counted write-ins make the sum 2 > L.
-    [InlineData(true, 1, true)]
-    [InlineData(false, 1, false)]
-    // No option selected, one write-in: counted, the sum is 1 = L (no undervote, not a null vote).
-    [InlineData(true, 0, false)]
-    // DECISION-DEPENDENT PIN (open user question 2, option (a)): not counted, the sum is 0, so the
-    // ballot is a null vote although it used a write-in. Re-pin if the user picks (b).
-    [InlineData(false, 0, false)]
-    public void Add_WriteInsCountTowardTheLimitOnlyWhereTheManifestSaysSo(bool writeInsCount, int optionSelected, bool overvoted)
+    // User decision Q13: write-ins always count toward the limit, exactly like selections, and the
+    // null and undervote fields are judged on s + w. Columns: L, s, w, then the expected overvotes,
+    // null votes, undervotes, undervote difference and write-ins.
+    // L = 1: a selection and a write-in are 2 > L, an overvote whose write-ins are zeroed (Q12).
+    [InlineData(1, 1, 1, 1, 0, 0, 0, 0)]
+    // L = 1: a write-in alone fills the limit; it is not a null vote.
+    [InlineData(1, 0, 1, 0, 0, 0, 0, 1)]
+    // L = 3: a write-in alone is an undervote by 2, not a null vote.
+    [InlineData(3, 0, 1, 0, 0, 1, 2, 1)]
+    // L = 3: one selection and two write-ins fill the limit.
+    [InlineData(3, 1, 2, 0, 0, 0, 0, 2)]
+    // L = 2: one selection and two write-ins are 3 > L.
+    [InlineData(2, 1, 2, 1, 0, 0, 0, 0)]
+    public void Add_WriteInsAlwaysCountTowardTheLimit(int selectionLimit, int selected, int writeIns, int overvotes, int nullvotes, int undervotes, int difference, int writeInsCounted)
     {
-        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest(includeWriteIns: true, writeInsCountTowardLimit: writeInsCount);
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest(includeWriteIns: true, selectionLimit: selectionLimit, writeInFieldCount: 2);
         var accumulator = new ExpectedTallyAccumulator(manifest);
 
         accumulator.Add(ElectionFixtureBuilder.CreateBallot(
             manifest,
-            selectionValuesByChoiceId: new Dictionary<string, int> { ["choice-1"] = optionSelected },
-            numWriteinsSelected: 1));
+            selectionValuesByChoiceId: new Dictionary<string, int> { ["choice-1"] = selected },
+            numWriteinsSelected: writeIns));
 
         var tally = accumulator.Build();
         var counters = tally.GetCounters("contest-1");
 
-        Assert.Equal(overvoted ? 1 : 0, counters.Overvotes);
-        // An overvoted contest's write-ins are part of its invalid votes.
-        Assert.Equal(overvoted ? 0 : 1, counters.WriteIns);
-        int countedSum = overvoted ? 0 : optionSelected + (writeInsCount ? 1 : 0);
-        Assert.Equal(1 - countedSum, counters.UndervoteDifference);
-        Assert.Equal(!overvoted && countedSum == 0 ? 1 : 0, counters.Nullvotes);
-    }
-
-    [Fact]
-    public void Add_OnAnOvervote_ZeroesWriteInsThatDoNotCountTowardTheLimit()
-    {
-        // DECISION-DEPENDENT PIN (open user question 1, option (a)): L = 1, both options selected
-        // (an overvote) and one write-in that does not count toward the limit. The contest's votes
-        // are invalid as a whole (§3.3.5 p.31), so its write-ins are not counted either. Re-pin
-        // WriteIns to 1 if the user picks (b).
-        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest(includeWriteIns: true, writeInsCountTowardLimit: false);
-        var accumulator = new ExpectedTallyAccumulator(manifest);
-
-        accumulator.Add(ElectionFixtureBuilder.CreateBallot(
-            manifest,
-            selectionValuesByChoiceId: new Dictionary<string, int> { ["choice-1"] = 1, ["choice-2"] = 1 },
-            numWriteinsSelected: 1));
-
-        var tally = accumulator.Build();
-        var counters = tally.GetCounters("contest-1");
-
-        Assert.Equal(1, counters.Overvotes);
-        Assert.Equal(0, counters.WriteIns);
-        Assert.Equal(0, counters.Nullvotes);
-        Assert.Equal(1, counters.Undervotes);
-        Assert.Equal(1, counters.UndervoteDifference);
-        Assert.Equal(0, tally.GetVotes("contest-1", "choice-1"));
+        Assert.Equal(
+            [overvotes, nullvotes, undervotes, difference, writeInsCounted],
+            new[] { counters.Overvotes, counters.Nullvotes, counters.Undervotes, counters.UndervoteDifference, counters.WriteIns });
+        Assert.Equal(overvotes == 1 ? 0 : selected, tally.GetVotes("contest-1", "choice-1"));
     }
 
     [Fact]

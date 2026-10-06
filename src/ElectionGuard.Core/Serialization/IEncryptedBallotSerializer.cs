@@ -106,6 +106,11 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
                     Challenge = p.Challenge.ToByteArray(),
                     Response = p.Response.ToByteArray()
                 }).ToArray(),
+                NullVoteProof = c.NullVoteProof?.Select(p => new ProtobufChallengeResponsePair
+                {
+                    Challenge = p.Challenge.ToByteArray(),
+                    Response = p.Response.ToByteArray()
+                }).ToArray(),
                 ContestData = c.ContestData != null ? new ProtobufEncryptedData
                 {
                     C0 = c.ContestData.C0,
@@ -171,9 +176,17 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
                     }).ToArray()
                 }).ToList(),
                 // Protobuf cannot tell an empty repeated field from an absent one, and the encryptor
-                // never writes an empty proof, so either decodes as no proof.
+                // never writes an empty proof, so either decodes as no proof (here and for the
+                // null-vote proof below).
                 UndervoteDifferenceProof = c.UndervoteDifferenceProof is { Length: > 0 } relationProof
                     ? relationProof.Select(p => new ChallengeResponsePair
+                    {
+                        Challenge = IntegerModQ.FromCanonicalBytes(p.Challenge),
+                        Response = IntegerModQ.FromCanonicalBytes(p.Response)
+                    }).ToArray()
+                    : null,
+                NullVoteProof = c.NullVoteProof is { Length: > 0 } nullVoteProof
+                    ? nullVoteProof.Select(p => new ChallengeResponsePair
                     {
                         Challenge = IntegerModQ.FromCanonicalBytes(p.Challenge),
                         Response = IntegerModQ.FromCanonicalBytes(p.Response)
@@ -252,6 +265,10 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
         /// <summary><see cref="EncryptedContest.UndervoteDifferenceProof"/>; absent when there is none.</summary>
         [ProtoMember(11)]
         public ProtobufChallengeResponsePair[]? UndervoteDifferenceProof { get; init; }
+
+        /// <summary><see cref="EncryptedContest.NullVoteProof"/>; absent when there is none.</summary>
+        [ProtoMember(12)]
+        public ProtobufChallengeResponsePair[]? NullVoteProof { get; init; }
     }
 
     /// <summary>A supplemental field's encryption, keyed by its label, as a selection is keyed by its option's.</summary>

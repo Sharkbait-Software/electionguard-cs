@@ -28,14 +28,13 @@ public class SupplementalFieldTallyTests
         VotingDeviceInformationHash DeviceHash,
         ElectionFixtureBuilder.GuardianSetResult GuardianSet);
 
-    private static Election Build(int selectionLimit, int optionSelectionLimit, bool writeInsCount = true, int writeInFields = 2)
+    private static Election Build(int selectionLimit, int optionSelectionLimit, int writeInFields = 2)
     {
         var (manifest, manifestFile) = ElectionFixtureBuilder.CreateMinimalManifest(
             optionSelectionLimit: optionSelectionLimit,
             selectionLimit: selectionLimit,
             supplementalFields: ElectionFixtureBuilder.AllSupplementalFields,
-            writeInFieldCount: writeInFields,
-            writeInsCountTowardLimit: writeInsCount);
+            writeInFieldCount: writeInFields);
         var guardianSet = ElectionFixtureBuilder.CreateGuardianSet(manifestFile: manifestFile);
         var records = ElectionFixtureBuilder.CreateEncryptionRecord(guardianSet, manifest, manifestFile);
         return new Election(manifest, records.EncryptionRecord, new VotingDeviceInformationHash(records.ExtendedBaseHash, DeviceId), guardianSet);
@@ -68,7 +67,7 @@ public class SupplementalFieldTallyTests
     [Fact]
     public void Decrypt_EverySupplementalFieldTotal_MatchesTheIndependentlyAccumulatedTally_AndVerifies()
     {
-        // L = 2, R = 2, write-ins counted toward the limit, two write-in fields.
+        // L = 2, R = 2, two write-in fields (which count toward the limit, user decision Q13).
         var election = Build(selectionLimit: 2, optionSelectionLimit: 2);
         var (ballots, tally, expected) = EncryptAndTally(election,
             Plaintext(election, "full", 1, 1),
@@ -91,11 +90,11 @@ public class SupplementalFieldTallyTests
             Assert.Equal(field.Index, contest.Choices[field.Id].ChoiceIndex);
         }
 
-        // Hand-checked against §3.3.9: 3 overvotes; 1 null vote; undervotes on null,
-        // write-in-only and the three zeroed overvotes; difference 2 + 1 + 3 * 2; write-ins 1 + 1.
-        // DECISION-DEPENDENT PIN (open user question 4, option (a)): the three overvotes count as
-        // undervotes; re-pin Undervotes to 2 if the user picks (b).
-        Assert.Equal([3, 1, 5, 9, 2], new[]
+        // Hand-checked against §3.3.9 and user decisions Q11-Q15: 3 overvotes; 1 null vote;
+        // undervotes on null and write-in-only (an overvote is not an undervote, Q11); difference
+        // 2 + 1 (0 on each overvote, since s + w + L*overvote + u = L); write-ins 1 + 1 (0 on an
+        // overvote, Q12).
+        Assert.Equal([3, 1, 2, 3, 2], new[]
         {
             counters.Overvotes, counters.Nullvotes, counters.Undervotes, counters.UndervoteDifference, counters.WriteIns,
         });
@@ -133,7 +132,7 @@ public class SupplementalFieldTallyTests
         // The S4 hook EncryptedTally.MaximumOptionValue, per field: an indicator adds at most 1 per
         // ballot, the undervote difference count L, the write-in count the number of write-in fields,
         // an option min(R, L).
-        var election = Build(selectionLimit, optionSelectionLimit, writeInsCount: false, writeInFields: writeInFields);
+        var election = Build(selectionLimit, optionSelectionLimit, writeInFields: writeInFields);
         var (_, tally, _) = EncryptAndTally(election,
             Plaintext(election, "a", 0, 0),
             Plaintext(election, "b", 0, 0));

@@ -59,18 +59,16 @@ public class ScenarioRunnerTests
     /// overvote rule fails the run.
     /// </summary>
     [Theory]
-    [InlineData(1, 2, true)]
-    [InlineData(3, 3, true)]
-    [InlineData(3, 3, false)]
-    [InlineData(2, 1, true)]
-    public void Run_WithEverySupplementalFieldAndOptionLimitsAboveOne_ProducesTheExpectedTally(int selectionLimit, int optionSelectionLimit, bool writeInsCount)
+    [InlineData(1, 2)]
+    [InlineData(3, 3)]
+    [InlineData(2, 1)]
+    public void Run_WithEverySupplementalFieldAndOptionLimitsAboveOne_ProducesTheExpectedTally(int selectionLimit, int optionSelectionLimit)
     {
         var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest(
             selectionLimit: selectionLimit,
             optionSelectionLimit: optionSelectionLimit,
             supplementalFields: ElectionFixtureBuilder.AllSupplementalFields,
-            writeInFieldCount: 2,
-            writeInsCountTowardLimit: writeInsCount);
+            writeInFieldCount: 2);
 
         var outcome = new ScenarioRunner(Scenario(ballotCount: 600, chunkSize: 300, ballotVerification: true, tallyVerification: true), manifest).Run();
 

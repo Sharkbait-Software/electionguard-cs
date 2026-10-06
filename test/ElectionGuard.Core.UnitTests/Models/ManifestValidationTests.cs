@@ -192,19 +192,27 @@ public class ManifestValidationTests
 
     // --- S5: per-contest supplemental fields (user decision Q1) ---------------------------------
 
-    private static Manifest WithFields(List<SupplementalField> fields, int writeInFieldCount = 1)
+    /// <summary>
+    /// The minimal manifest's contest declaring <paramref name="fields"/> and offering
+    /// <paramref name="writeInFieldCount"/> write-in fields: by default 1 when the write-in count is
+    /// declared and none otherwise (a contest that offers write-ins must declare the count, Q13;
+    /// open S5b question B, option (a). The default is valid under option (b) too, so it is not a
+    /// pin).
+    /// </summary>
+    private static Manifest WithFields(List<SupplementalField> fields, int? writeInFieldCount = null)
     {
         var template = Minimal();
-        return template with { Contests = [template.Contests[0] with { SupplementalFields = fields, WriteInFieldCount = writeInFieldCount }] };
+        int offered = writeInFieldCount ?? (fields.Any(x => x.Kind == SupplementalFieldKind.WriteInCount) ? 1 : 0);
+        return template with { Contests = [template.Contests[0] with { SupplementalFields = fields, WriteInFieldCount = offered }] };
     }
 
-    private static SupplementalField Field(string id, int index, SupplementalFieldKind kind, bool counts = false) =>
-        new() { Id = id, Name = id, Index = index, Kind = kind, CountsTowardSelectionLimit = counts };
+    private static SupplementalField Field(string id, int index, SupplementalFieldKind kind) =>
+        new() { Id = id, Name = id, Index = index, Kind = kind };
 
     [Fact]
     public void Validate_EveryKindDeclaredAfterTheOptions_DoesNotThrow()
     {
-        var manifest = WithFields(ElectionFixtureBuilder.SupplementalFields(2, ElectionFixtureBuilder.AllSupplementalFields, writeInsCountTowardLimit: true));
+        var manifest = WithFields(ElectionFixtureBuilder.SupplementalFields(2, ElectionFixtureBuilder.AllSupplementalFields));
 
         Assert.Null(Record.Exception(manifest.Validate));
     }
@@ -215,7 +223,7 @@ public class ManifestValidationTests
     [InlineData(1)]
     public void Validate_SupplementalFieldIndexNotContinuingAfterTheOptions_Throws(int index)
     {
-        var manifest = WithFields([Field("overvotes", index, SupplementalFieldKind.OvervoteIndicator, counts: true)]);
+        var manifest = WithFields([Field("overvotes", index, SupplementalFieldKind.OvervoteIndicator)]);
 
         var exception = Assert.Throws<InvalidManifestException>(manifest.Validate);
 
@@ -260,33 +268,53 @@ public class ManifestValidationTests
     }
 
     [Theory]
-    // The overvote indicator must count toward the limit (§3.3.9 p.39); the write-in count may.
-    [InlineData(SupplementalFieldKind.OvervoteIndicator, false, "must count toward the selection limit")]
-    [InlineData(SupplementalFieldKind.OvervoteIndicator, true, null)]
-    [InlineData(SupplementalFieldKind.WriteInCount, true, null)]
-    [InlineData(SupplementalFieldKind.WriteInCount, false, null)]
-    // The null-vote indicator must not, because p.39's optional L-times-null relation is not
-    // implemented (Q2); the two undervote kinds must not, because on an overvote they are nonzero
-    // while the overvote term takes the whole limit. Each refusal gives its own reason.
-    [InlineData(SupplementalFieldKind.NullVoteIndicator, true, "not implemented")]
-    [InlineData(SupplementalFieldKind.UndervoteIndicator, true, "on an overvoted contest it is nonzero")]
-    [InlineData(SupplementalFieldKind.UndervoteDifferenceCount, true, "on an overvoted contest it is nonzero")]
-    [InlineData(SupplementalFieldKind.UndervoteDifferenceCount, false, null)]
-    public void Validate_CountsTowardSelectionLimit_OnlyWhereEveryHonestBallotHasAProof(SupplementalFieldKind kind, bool counts, string? reason)
+    // S5b (user decision Q14): there is no counts-toward-limit setting. A field is declared
+    // ("tracked") or not, and any one kind may be declared on its own; Verification 7 includes every
+    // declared field in its relations. DECISION-DEPENDENT PIN (open S5b question A, option (a)):
+    // the UndervoteDifferenceCount row declares u without the overvote indicator. If the user picks
+    // (b), Validate rejects it; move that row to a Throws test.
+    [InlineData(SupplementalFieldKind.OvervoteIndicator)]
+    [InlineData(SupplementalFieldKind.NullVoteIndicator)]
+    [InlineData(SupplementalFieldKind.UndervoteIndicator)]
+    [InlineData(SupplementalFieldKind.UndervoteDifferenceCount)]
+    [InlineData(SupplementalFieldKind.WriteInCount)]
+    public void Validate_AnyKindDeclaredOnItsOwn_DoesNotThrow(SupplementalFieldKind kind)
     {
-        var manifest = WithFields([Field("field", 3, kind, counts)]);
+        var manifest = WithFields([Field("field", 3, kind)]);
 
-        var exception = Record.Exception(manifest.Validate);
+        Assert.Null(Record.Exception(manifest.Validate));
+    }
 
-        if (reason is null)
-        {
-            Assert.Null(exception);
-        }
-        else
-        {
-            var invalid = Assert.IsType<InvalidManifestException>(exception);
-            Assert.Contains(reason, invalid.Message);
-        }
+    [Fact]
+    public void Validate_ALeftoverCountsTowardSelectionLimitKey_IsNotAField()
+    {
+        // The S5 flag is gone (Q14). System.Text.Json ignores the key, so a manifest written before
+        // S5b still reads, with the same fields; its H_B changes only if its bytes are rewritten.
+        var options = new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase };
+        var json = System.Text.Json.JsonSerializer.Serialize(WithFields([Field("overvotes", 3, SupplementalFieldKind.OvervoteIndicator)]), options)
+            .Replace("\"kind\":\"OvervoteIndicator\"", "\"kind\":\"OvervoteIndicator\",\"countsTowardSelectionLimit\":true");
+        Assert.Contains("countsTowardSelectionLimit", json);
+
+        var read = System.Text.Json.JsonSerializer.Deserialize<Manifest>(json, options)!;
+
+        Assert.Equal(SupplementalFieldKind.OvervoteIndicator, Assert.Single(read.Contests[0].SupplementalFields).Kind);
+        Assert.Null(Record.Exception(read.Validate));
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(3)]
+    public void Validate_WriteInFieldsOfferedWithoutAWriteInCount_Throws(int writeInFieldCount)
+    {
+        // User decision Q13: write-ins always count toward the selection limit, and only the
+        // write-in count's encryption can carry them into the selection-limit proof.
+        // DECISION-DEPENDENT PIN (open S5b question B, option (a)). If the user picks (b), this
+        // manifest is valid: assert that Validate does not throw.
+        var manifest = WithFields(ElectionFixtureBuilder.SupplementalFields(2, ElectionFixtureBuilder.DefaultSupplementalFields), writeInFieldCount);
+
+        var exception = Assert.Throws<InvalidManifestException>(manifest.Validate);
+
+        Assert.Contains("declares no write-in count field", exception.Message);
     }
 
     [Theory]
@@ -338,7 +366,7 @@ public class ManifestValidationTests
             "null field list" => template.Contests[0] with { SupplementalFields = null! },
             "negative write-in fields, no write-in count field" => template.Contests[0] with
             {
-                SupplementalFields = [Field("overvotes", 3, SupplementalFieldKind.OvervoteIndicator, counts: true)],
+                SupplementalFields = [Field("overvotes", 3, SupplementalFieldKind.OvervoteIndicator)],
                 WriteInFieldCount = -1,
             },
             _ => throw new ArgumentOutOfRangeException(nameof(declaration)),
@@ -368,7 +396,7 @@ public class ManifestValidationTests
     [Fact]
     public void Manifest_JsonRoundTrip_KeepsTheSupplementalFieldsWithKindsByName()
     {
-        var manifest = WithFields(ElectionFixtureBuilder.SupplementalFields(2, ElectionFixtureBuilder.AllSupplementalFields, writeInsCountTowardLimit: true), writeInFieldCount: 3);
+        var manifest = WithFields(ElectionFixtureBuilder.SupplementalFields(2, ElectionFixtureBuilder.AllSupplementalFields), writeInFieldCount: 3);
         var options = new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase };
 
         var json = System.Text.Json.JsonSerializer.Serialize(manifest, options);

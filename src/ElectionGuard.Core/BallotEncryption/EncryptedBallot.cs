@@ -95,20 +95,32 @@ public record EncryptedContest
 
     /// <summary>
     /// The contest selection-limit range proof (§3.3.8, eq. 62), over 0..L, of the combined
-    /// ciphertext: the product of the selections, of every supplemental field that counts toward
-    /// the limit, and of the overvote indicator raised to L (§3.3.9 p.39 and footnote 42). With no
-    /// supplemental field that counts, that is the plain aggregate of eq. (62).
+    /// ciphertext of s + w + L*overvote + undervote indicator (user decision Q15): the product of
+    /// the selections, of the write-in count, of the overvote indicator raised to L (§3.3.9 p.39 and
+    /// footnote 42) and of the undervote indicator, each field only when the contest declares it.
+    /// With no field declared, that is the plain aggregate of eq. (62).
     /// </summary>
     public required ChallengeResponsePair[] Proofs { get; init; }
 
     /// <summary>
     /// Present exactly when the contest declares an undervote difference count u: a one-value
-    /// range proof (Note 3.4, the singleton set {L}) that the product of the counted selections and
-    /// of u encrypts L, i.e. L - u is the sum of the selections (§3.3.9 p.38). The spec gives no
-    /// challenge format for it; see <see cref="BallotEncryptor"/>. Null otherwise.
+    /// range proof (Note 3.4, the singleton set {L}) that the encryption of
+    /// s + w + L*overvote + u (the overvote term when the indicator is declared) encrypts L
+    /// (§3.3.9 p.38; user decision Q15). The spec gives no challenge format for it; see
+    /// <see cref="BallotEncryptor"/>. Null otherwise.
     /// </summary>
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public ChallengeResponsePair[]? UndervoteDifferenceProof { get; init; }
+
+    /// <summary>
+    /// Present exactly when the contest declares a null-vote indicator: a range proof over 0..L
+    /// (L + 1 pairs) that the encryption of s + w + L*null lies in 0..L, which enforces the
+    /// indicator "just as the validity of the encrypted overvote indicator" (§3.3.9 p.39; user
+    /// decision Q15). The spec gives no challenge format for it; see <see cref="BallotEncryptor"/>.
+    /// Null otherwise.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public ChallengeResponsePair[]? NullVoteProof { get; init; }
 
     public required EncryptedData? ContestData { get; init; }
     public required ContestHash ContestHash { get; init; }

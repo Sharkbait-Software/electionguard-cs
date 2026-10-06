@@ -148,11 +148,9 @@ public static class ElectionFixtureBuilder
 
     /// <summary>
     /// Supplemental field declarations for a contest with <paramref name="optionCount"/> options, in
-    /// the order given, with option indices continuing after the options (§3.1.3 p.19). The overvote
-    /// indicator counts toward the selection limit (it must); the write-in count does when
-    /// <paramref name="writeInsCountTowardLimit"/>.
+    /// the order given, with option indices continuing after the options (§3.1.3 p.19).
     /// </summary>
-    public static List<SupplementalField> SupplementalFields(int optionCount, IEnumerable<SupplementalFieldKind> kinds, bool writeInsCountTowardLimit = false)
+    public static List<SupplementalField> SupplementalFields(int optionCount, IEnumerable<SupplementalFieldKind> kinds)
     {
         return kinds.Select((kind, position) => new SupplementalField
         {
@@ -160,8 +158,6 @@ public static class ElectionFixtureBuilder
             Name = kind.ToString(),
             Index = optionCount + position + 1,
             Kind = kind,
-            CountsTowardSelectionLimit = kind == SupplementalFieldKind.OvervoteIndicator
-                || (kind == SupplementalFieldKind.WriteInCount && writeInsCountTowardLimit),
         }).ToList();
     }
 
@@ -191,8 +187,7 @@ public static class ElectionFixtureBuilder
         int selectionLimit = 1,
         HashTrimmingFunction? hashTrimmingFunction = null,
         IReadOnlyList<SupplementalFieldKind>? supplementalFields = null,
-        int? writeInFieldCount = null,
-        bool writeInsCountTowardLimit = false)
+        int? writeInFieldCount = null)
     {
         var kinds = (supplementalFields ?? DefaultSupplementalFields).ToList();
         if (includeWriteIns && !kinds.Contains(SupplementalFieldKind.WriteInCount))
@@ -220,7 +215,7 @@ public static class ElectionFixtureBuilder
                         new Choice { Id = "choice-1", Name = "Choice 1", Index = 1 },
                         new Choice { Id = "choice-2", Name = "Choice 2", Index = 2 },
                     },
-                    SupplementalFields = SupplementalFields(2, kinds, writeInsCountTowardLimit),
+                    SupplementalFields = SupplementalFields(2, kinds),
                     WriteInFieldCount = writeInFields,
                 },
             },

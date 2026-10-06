@@ -113,8 +113,7 @@ public sealed class BallotGenerator
         if (isOvervote)
         {
             // Half the overvoted contests that offer write-in fields use some too, so the gate sees
-            // what an overvote does to the write-in count (zeroed whether or not it counts toward
-            // the limit; open user question 1, option (a)).
+            // what an overvote does to the write-in count (zeroed, user decision Q12).
             if (contest.WriteInFieldCount > 0 && random.Next(2) == 0)
             {
                 numWriteIns = random.Next(1, contest.WriteInFieldCount + 1);

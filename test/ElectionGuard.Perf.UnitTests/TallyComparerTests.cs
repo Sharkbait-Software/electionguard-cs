@@ -142,8 +142,10 @@ public class TallyComparerTests
             ("contest-1", "choice-2", 0),
             ("contest-1", "overvotes", 1),
             ("contest-1", "null-votes", 1),
-            ("contest-1", "undervotes", 2),
-            ("contest-1", "undervote-difference", 2),
+            // Only the null vote is an undervote: on an overvote the undervote indicator and the
+            // difference count are 0 (user decisions Q11, Q15; S5 had 2 and 2).
+            ("contest-1", "undervotes", 1),
+            ("contest-1", "undervote-difference", 1),
             ("contest-1", "write-ins", 0),
         ];
 

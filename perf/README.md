@@ -159,26 +159,37 @@ Since stage S5, supplemental fields (overvote, null-vote and undervote indicator
 difference count, write-in count) are declared per contest in the manifest and are encrypted, proved,
 verified, tallied and decrypted like options. The committed manifests changed with it, so `compare`
 reports every pre-S5 record as incomparable (its manifest hash differs); rebaseline. `smoke`'s
-manifest declares all five kinds, with write-ins that count toward the limit, so each ballot carries
+manifest declares all five kinds, so each ballot carries
 nine range proofs instead of four options' plus four unverified counters, and an undervote difference
 proof: on this machine `VerifyBallots` went from 0.46 to 0.90 ms/ballot and `EncryptBallots` from
 0.20 to 0.21 ms/ballot (135 to 152 MB). On the same corpus with no supplemental fields declared,
 `VerifyBallots` is 0.46 ms/ballot, as at S4: the per-proof cost did not move. `famous-names-large`
 declares the four kinds the old election-wide flags produced (overvote, null vote, undervote difference
 count, write-in count). The correctness check now compares every declared field's decrypted total
-too, against `ExpectedTallyAccumulator`, which applies the spec's overvote rule (sum above L or one
-option above R) on its own; `BallotGenerator` emits values up to R, options above R, and write-ins only
+too, against `ExpectedTallyAccumulator`, which applies the spec's overvote rule (selections plus
+write-ins above L, or one option above R) and the user's S5 follow-up decisions on its own; `BallotGenerator` emits values up to R, options above R, and write-ins only
 where a contest offers write-in fields (on half of the overvoted contests that do, too, so the gate sees
 an overvote zero the write-in count).
 
+Stage S5b applied the user's follow-up decisions: there is no per-field counts-toward-limit flag (a
+field is declared or not), write-ins always count toward the limit, and on an overvote the undervote
+indicator and the undervote difference count are 0. Each contest that declares the null-vote indicator
+also carries a null-vote proof (a range proof over 0..L of s + w + L*null), so `smoke`'s
+`VerifyBallots` rose from 0.90 to about 1.0 ms/ballot; its allocation fell from 15.0 to 12.4 MB because
+Verification 7 now builds its relation ciphertexts in one Montgomery representation. The committed
+manifests dropped the `countsTowardSelectionLimit` key, so `compare` reports S5 records as incomparable.
+
 `smoke`'s contest has L = 1 and R = 1, where "sum above L or an option above R" and the old "sum above
 L x R" rule agree, so `smoke` cannot tell them apart. The `limits` scenario (`test/data/option-limits`,
-2,000 ballots) can: its four contests (L/R = 1/2, 3/3, 3/3 with write-ins not counted, 2/1) declare every
-supplemental field and offer two write-in fields each. Encrypting with the old threshold fails its
-ballot verification (`Sum of challenge values did not equal c.`), and keeping an uncounted write-in
-count on an overvote fails its correctness check, while `smoke` passes both. Run it after touching the
-overvote rule or the supplemental fields; the unit-level coverage is `ScenarioRunnerTests`' R > 1
-theory in `ElectionGuard.Perf.UnitTests`.
+2,000 ballots) can: its four contests (L/R = 1/2, 3/3, 3/3 without an overvote indicator, 2/1) offer two
+write-in fields each, and all but the third declare every supplemental field. Encrypting with the old
+threshold fails its ballot verification (`Sum of challenge values did not equal c.`), as does an
+encryptor that sets the undervote indicator on an overvote, while `smoke` passes. The third contest
+covers the relations without the overvote term (there an overvoted contest's undervote difference
+count is L). That contest depends on open S5b question A: if `Manifest.Validate` comes to require the
+overvote indicator wherever the difference count is declared, it must gain the indicator or be dropped,
+and `limits` rebaselined. Run it after touching the overvote rule or the supplemental fields; the unit-level
+coverage is `ScenarioRunnerTests`' R > 1 theory in `ElectionGuard.Perf.UnitTests`.
 
 ## Why the harness streams
 

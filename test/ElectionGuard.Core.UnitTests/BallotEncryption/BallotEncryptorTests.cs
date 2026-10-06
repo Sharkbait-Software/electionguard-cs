@@ -171,21 +171,19 @@ public class BallotEncryptorTests
         // Per spec, selections themselves are re-encrypted as zero once an overvote is detected.
         Assert.All(contest.Choices, c => AssertEncrypts(c, 0, k));
 
-        // §3.3.9 p.39 and user decision Q3: the null-vote indicator is 0 on an overvote. The
-        // undervote fields are computed on the neutralized sum, 0 (see
-        // BallotEncryptor.SupplementalValue): the difference is L = 1, so that L - u equals the sum
-        // the selection-limit proof sees, and the indicator is 1, following p.38's disjunctive proof
-        // (p.18/p.38's definition by the voter's sum would give 0). (Before S5 the undervote counter
-        // was L minus the number of nonzero options before neutralization, clamped at 0, so 0 here.)
-        // DECISION-DEPENDENT PIN (open user question 4, option (a)): re-pin the undervote indicator
-        // to 0 if the user picks (b); the difference stays L either way.
+        // §3.3.9 p.39 and user decisions Q3, Q11 and Q15: on an overvote the null-vote and undervote
+        // indicators are 0 ("if a contest is an overvote, it is not an undervote"), and the
+        // undervote difference count is 0, since s + w + L*overvote + u = L with s = w = 0 and the
+        // overvote indicator 1. (S5 had the indicator 1 and the difference L, computed on the
+        // neutralized sum; before S5 the counter was L minus the number of nonzero options before
+        // neutralization, clamped at 0.)
         AssertEncrypts(contest.Field(SupplementalFieldKind.NullVoteIndicator), 0, k);
-        AssertEncrypts(contest.Field(SupplementalFieldKind.UndervoteIndicator), 1, k);
+        AssertEncrypts(contest.Field(SupplementalFieldKind.UndervoteIndicator), 0, k);
         var difference = contest.Field(SupplementalFieldKind.UndervoteDifferenceCount);
         AssertProofIsWellFormed(
             difference, manifestContest.SelectionLimit, manifestContest.Index, FieldIndex(manifestContest, SupplementalFieldKind.UndervoteDifferenceCount),
             encryptedBallot, encryptionRecordResult.EncryptionRecord);
-        AssertEncrypts(difference, manifestContest.SelectionLimit, k);
+        AssertEncrypts(difference, 0, k);
     }
 
     [Fact]

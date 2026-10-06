@@ -72,7 +72,7 @@ Manifest GenerateManifest(Options options)
             Choices = choices,
             // Every supplemental field kind of §3.3.9, indexed after the options; one write-in
             // field, whose use counts toward the selection limit.
-            SupplementalFields = ElectionFixtureBuilder.SupplementalFields(numChoices, ElectionFixtureBuilder.AllSupplementalFields, writeInsCountTowardLimit: true),
+            SupplementalFields = ElectionFixtureBuilder.SupplementalFields(numChoices, ElectionFixtureBuilder.AllSupplementalFields),
             WriteInFieldCount = 1,
         });
     }

@@ -272,6 +272,8 @@ public class StrictDecodingTests
             ["contest data response = q"] = dto => WithFirstContest(dto, c => c with { ContestData = WithContestData(c.ContestData!, response: NotBelowQ) }),
             ["undervote difference proof challenge = q"] = dto => WithFirstContest(dto, c => c with { UndervoteDifferenceProof = WithFirstProof(c.UndervoteDifferenceProof!, p => p with { Challenge = NotBelowQ }) }),
             ["undervote difference proof response = q"] = dto => WithFirstContest(dto, c => c with { UndervoteDifferenceProof = WithFirstProof(c.UndervoteDifferenceProof!, p => p with { Response = NotBelowQ }) }),
+            ["null-vote proof challenge = q"] = dto => WithFirstContest(dto, c => c with { NullVoteProof = WithFirstProof(c.NullVoteProof!, p => p with { Challenge = NotBelowQ }) }),
+            ["null-vote proof response = q"] = dto => WithFirstContest(dto, c => c with { NullVoteProof = WithFirstProof(c.NullVoteProof!, p => p with { Response = NotBelowQ }) }),
             ["supplemental field alpha padded to 513 bytes"] = dto => WithFirstContest(dto, c => c with
             {
                 SupplementalFields = [c.SupplementalFields![0] with { Alpha = [0, .. c.SupplementalFields[0].Alpha] }, .. c.SupplementalFields.Skip(1)],
@@ -327,6 +329,7 @@ public class StrictDecodingTests
                 .Select(kind => contest.SupplementalFields!.Single(field => field.FieldId == ElectionFixtureBuilder.SupplementalFieldId(kind))),
             value => Assert.NotEmpty(value.Proofs));
         Assert.NotEmpty(contest.UndervoteDifferenceProof!);
+        Assert.NotEmpty(contest.NullVoteProof!);
 
         // The untampered encoding decodes.
         original.Position = 0;

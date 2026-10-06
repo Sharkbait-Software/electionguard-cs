@@ -35,36 +35,31 @@
           "id": "overvotes",
           "name": "Overvotes",
           "index": 5,
-          "kind": "OvervoteIndicator",
-          "countsTowardSelectionLimit": true
+          "kind": "OvervoteIndicator"
         },
         {
           "id": "null-votes",
           "name": "Null votes",
           "index": 6,
-          "kind": "NullVoteIndicator",
-          "countsTowardSelectionLimit": false
+          "kind": "NullVoteIndicator"
         },
         {
           "id": "undervotes",
           "name": "Undervotes",
           "index": 7,
-          "kind": "UndervoteIndicator",
-          "countsTowardSelectionLimit": false
+          "kind": "UndervoteIndicator"
         },
         {
           "id": "undervote-difference",
           "name": "Undervote difference",
           "index": 8,
-          "kind": "UndervoteDifferenceCount",
-          "countsTowardSelectionLimit": false
+          "kind": "UndervoteDifferenceCount"
         },
         {
           "id": "write-ins",
           "name": "Write-ins",
           "index": 9,
-          "kind": "WriteInCount",
-          "countsTowardSelectionLimit": true
+          "kind": "WriteInCount"
         }
       ],
       "writeInFieldCount": 1
@@ -102,36 +97,31 @@
           "id": "overvotes",
           "name": "Overvotes",
           "index": 5,
-          "kind": "OvervoteIndicator",
-          "countsTowardSelectionLimit": true
+          "kind": "OvervoteIndicator"
         },
         {
           "id": "null-votes",
           "name": "Null votes",
           "index": 6,
-          "kind": "NullVoteIndicator",
-          "countsTowardSelectionLimit": false
+          "kind": "NullVoteIndicator"
         },
         {
           "id": "undervotes",
           "name": "Undervotes",
           "index": 7,
-          "kind": "UndervoteIndicator",
-          "countsTowardSelectionLimit": false
+          "kind": "UndervoteIndicator"
         },
         {
           "id": "undervote-difference",
           "name": "Undervote difference",
           "index": 8,
-          "kind": "UndervoteDifferenceCount",
-          "countsTowardSelectionLimit": false
+          "kind": "UndervoteDifferenceCount"
         },
         {
           "id": "write-ins",
           "name": "Write-ins",
           "index": 9,
-          "kind": "WriteInCount",
-          "countsTowardSelectionLimit": true
+          "kind": "WriteInCount"
         }
       ],
       "writeInFieldCount": 1

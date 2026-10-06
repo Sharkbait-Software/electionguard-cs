@@ -8,28 +8,46 @@ namespace ElectionGuard.Core.Verify.Ballot;
 
 /// <summary>
 /// Verification 7 (Adherence to vote limits), extended to the supplemental fields a contest declares
-/// (§3.3.9):
+/// (§3.3.9; user decisions Q13-Q16). With s the sum of the selections, w the write-in count and L
+/// the contest selection limit, each relation below is over the product of the encryptions of the
+/// selections and the write-in count (which always counts toward the limit, Q13) and of the terms
+/// of the fields the contest declares, and only those (Q14: an undeclared field "doesn't matter at
+/// all"). L times a field is its ciphertext raised to L (footnote 42, Q16).
 /// <list type="bullet">
-/// <item>The selection-limit proof (7.B-7.D, eq. 62 format) is over the combined ciphertext: the
-/// selections, every supplemental field that counts toward the limit (the write-in count, when the
-/// manifest says so), and the overvote indicator raised to L (p.39 and footnote 42). Without such
-/// fields that is the plain aggregate (7.1, 7.2).</item>
-/// <item>When the contest declares an undervote difference count u, its relation L - u = the sum of
-/// the selections (p.38) is proved by a one-value range proof that the selections' and counted
-/// fields' product times u's ciphertext encrypts L. Its challenge and response are checked as 7.B
-/// and 7.C, and its challenge equation as 7.D, with messages that name the relation. The spec
-/// defines no challenge format for this proof ("These proofs are not described in detail"); see
-/// <see cref="ComputeUndervoteDifferenceChallenge"/>.</item>
+/// <item>(1) The selection-limit proof (7.B-7.D, eq. 62 format) shows that
+/// s + w + L*overvote + undervote indicator lies in 0..L. Without declared fields that is the plain
+/// aggregate (7.1, 7.2). An overvoted ballot has every selection and write-in at 0 and the overvote
+/// indicator at 1; a ballot that keeps a selection beside the indicator, or sets the undervote
+/// indicator with s + w = L, exceeds L.</item>
+/// <item>(2) When the contest declares an undervote difference count u, a one-value range proof
+/// shows that s + w + L*overvote + u = L exactly (p.38's relation with the overvote term). Its
+/// challenge and response are checked as 7.B and 7.C, its challenge equation as 7.D, with messages
+/// that name the relation; see <see cref="ComputeUndervoteDifferenceChallenge"/>.</item>
+/// <item>(3) When the contest declares a null-vote indicator, a range proof shows that
+/// s + w + L*null lies in 0..L, which enforces the indicator "just as the validity of the encrypted
+/// overvote indicator" (p.39; Q15 "Null in its own check": in (1) it would count the same missing
+/// vote as the undervote indicator twice). Checked as 7.B, 7.C and 7.D like (2); see
+/// <see cref="ComputeNullVoteChallenge"/>.</item>
 /// <item>7.A covers every verifiable field's alpha and beta, supplemental fields included (§3.1.3
 /// p.19: whenever the spec lists option fields "it is assumed that these include all verifiable
 /// fields in that contest").</item>
 /// </list>
-/// The disjunctive indicator-consistency proofs of §3.3.9 (undervote indicator 1 iff the sum is
-/// below L; null-vote indicator 1 iff the sum is 0) are not implemented (user decision Q2): an
-/// indicator is checked only to be 0 or 1 (Verification 6). Neither is p.39's optional enforcement
-/// of the null-vote indicator "just as the validity of the encrypted overvote indicator" (adding L
-/// times it to the selection-limit proof), which Q2's list of relations leaves out; this is why
-/// <see cref="Manifest.Validate"/> refuses a null-vote indicator that counts toward the limit.
+/// The spec defines no challenge format for (2) and (3) ("These proofs are not described in
+/// detail"), so those are this implementation's own and not interoperable. The disjunctive
+/// indicator-consistency proofs of §3.3.9 p.38-39 are not implemented (user decision Q2). With
+/// every field declared, the relations leave exactly these inconsistent values unchecked (each
+/// field is still range-checked by Verification 6):
+/// <list type="bullet">
+/// <item>an undervote indicator of 0 when s + w is below L (Q2);</item>
+/// <item>a null-vote indicator of 0 when s + w = 0 (Q2);</item>
+/// <item>a null-vote indicator of 1 on an overvoted contest (overvote indicator 1, s + w = 0),
+/// although p.39 and Q3 say it is 0 there. (1) forces the undervote indicator to 0 on an overvote
+/// through its L*overvote term, but (3), as Q15 states it, has no overvote term (open S5b
+/// question C).</item>
+/// </list>
+/// Separately, and as in the spec, an overvote indicator of 1 is only ever checked against the
+/// selections and write-ins being 0: an encrypted overvote (all zero, overvote 1, the other
+/// indicators and u 0) is indistinguishable from a device reporting a null vote as an overvote.
 /// </summary>
 public class AdherenceToVoteLimitsVerification
 {
@@ -122,6 +140,23 @@ public class AdherenceToVoteLimitsVerification
             throw new VerificationFailedException("7", $"Contest {contest.Id}'s undervote difference proof has a null entry in place of its (challenge, response).");
         }
 
+        var nullVote = contest.SupplementalFieldOfKind(SupplementalFieldKind.NullVoteIndicator);
+        ChallengeResponsePair[] nullVoteProof = encryptedContest.NullVoteProof ?? [];
+        if (nullVote is not null && nullVoteProof.Length != contest.SelectionLimit + 1)
+        {
+            throw new VerificationFailedException("7", $"Contest {contest.Id} declares a null-vote indicator, so it must carry a null-vote proof with a (challenge, response) for each of the {contest.SelectionLimit + 1} values 0..L; it carries {nullVoteProof.Length}.");
+        }
+
+        if (nullVote is null && nullVoteProof.Length != 0)
+        {
+            throw new VerificationFailedException("7", $"Contest {contest.Id} declares no null-vote indicator, but carries a null-vote proof.");
+        }
+
+        if (HasNullEntry(nullVoteProof))
+        {
+            throw new VerificationFailedException("7", $"Contest {contest.Id}'s null-vote proof has a null entry in place of a (challenge, response).");
+        }
+
         // 7.B/C for every proof before any exponentiation. Nothing below can throw, so this
         // raises exactly the exception, for exactly the inputs, that checking proof by proof did.
         ChallengeResponsePair[] proofs = encryptedContest.Proofs;
@@ -137,94 +172,94 @@ public class AdherenceToVoteLimitsVerification
             VerifyIsInZq(relationProof[i].Response, "undervote difference proof: ");
         }
 
-        var (limit, relation) = Ciphertexts(encryptedContest, contest, challenge, undervoteDifference);
+        for (int i = 0; i < nullVoteProof.Length; i++)
+        {
+            VerifyIsInZq(nullVoteProof[i].Challenge, "null-vote proof: ");
+            VerifyIsInZq(nullVoteProof[i].Response, "null-vote proof: ");
+        }
 
-        var c = ComputeChallenge(contest, limit.Alpha, limit.Beta, proofs, challenge, encryptedBallot);
+        var ciphertexts = Ciphertexts(encryptedContest, contest, challenge);
+
+        // (1) s + w + L*overvote + undervote indicator in 0..L.
+        var c = ComputeChallenge(contest, ciphertexts.Limit.Alpha, ciphertexts.Limit.Beta, proofs, challenge, encryptedBallot);
         if (SumOfChallenges(proofs) != c)
         {
             throw new VerificationFailedException("7.D", "Sum of challenge values did not equal c.");
         }
 
+        // (2) s + w + L*overvote + u = L.
         if (undervoteDifference is not null)
         {
-            var relationChallenge = ComputeUndervoteDifferenceChallenge(contest, undervoteDifference, relation.Alpha, relation.Beta, relationProof, challenge, encryptedBallot);
+            var (alpha, beta) = ciphertexts.Difference!.Value;
+            var relationChallenge = ComputeUndervoteDifferenceChallenge(contest, undervoteDifference, alpha, beta, relationProof, challenge, encryptedBallot);
             if (relationProof[0].Challenge != relationChallenge)
             {
-                throw new VerificationFailedException("7.D", $"Undervote difference proof of contest {contest.Id}: the challenge does not equal c, so L - u is not shown to equal the sum of the selections (§3.3.9).");
+                throw new VerificationFailedException("7.D", $"Undervote difference proof of contest {contest.Id}: the challenge does not equal c, so the sum of the selections, the write-ins, L times the overvote indicator and the undervote difference count u is not shown to equal L (§3.3.9).");
+            }
+        }
+
+        // (3) s + w + L*null in 0..L.
+        if (nullVote is not null)
+        {
+            var (alpha, beta) = ciphertexts.NullVote!.Value;
+            var nullVoteChallenge = ComputeNullVoteChallenge(contest, nullVote, alpha, beta, nullVoteProof, challenge, encryptedBallot);
+            if (SumOfChallenges(nullVoteProof) != nullVoteChallenge)
+            {
+                throw new VerificationFailedException("7.D", $"Null-vote proof of contest {contest.Id}: the sum of the challenges does not equal c, so the sum of the selections, the write-ins and L times the null-vote indicator is not shown to lie in 0..L (§3.3.9 p.39).");
             }
         }
     }
 
     /// <summary>
-    /// The contest's proof ciphertexts, computed alike by the encryptor and here, from "sum": the
-    /// product of the selections and of every supplemental field of weight 1
-    /// (<see cref="Contest.SelectionLimitWeight"/>), which encrypts the sum of the selections.
-    /// <list type="bullet">
-    /// <item>limit: sum times the overvote indicator raised to L, when one is declared (§3.3.9 p.39,
-    /// footnote 42); the ciphertext of the selection-limit proof;</item>
-    /// <item>relation: sum times the undervote difference count, when one is declared; the
-    /// ciphertext of the undervote difference proof.</item>
-    /// </list>
-    /// L is a small public number, so the power is a short window over L's bits.
+    /// The contest's relation ciphertexts (see the class remarks), computed alike by the encryptor
+    /// and here. The fields are found by kind through their labels; BallotStructure has already
+    /// required exactly the declared fields, each once.
     /// </summary>
-    private static ((IntegerModP Alpha, IntegerModP Beta) Limit, (IntegerModP Alpha, IntegerModP Beta) Relation) Ciphertexts(
-        EncryptedContest encryptedContest,
-        Contest contest,
-        RangeProofChallenge challenge,
-        SupplementalField? undervoteDifference)
+    private static ContestRelationCiphertexts Ciphertexts(EncryptedContest encryptedContest, Contest contest, RangeProofChallenge challenge)
     {
         EncryptedSupplementalField? overvote = null;
+        EncryptedSupplementalField? undervote = null;
         EncryptedSupplementalField? difference = null;
-        List<EncryptedValueWithProofs>? counted = null;
+        EncryptedSupplementalField? nullVote = null;
+        List<EncryptedValueWithProofs>? sumTerms = null;
         foreach (var field in encryptedContest.SupplementalFields)
         {
             var declared = contest.SupplementalFields.Single(x => x.Id == field.FieldId);
-            if (declared.Kind == SupplementalFieldKind.OvervoteIndicator)
+            switch (declared.Kind)
             {
-                overvote = field;
-            }
-            else if (declared.Kind == SupplementalFieldKind.UndervoteDifferenceCount)
-            {
-                difference = field;
-            }
-            else if (contest.SelectionLimitWeight(declared) == 1)
-            {
-                counted ??= new List<EncryptedValueWithProofs>(encryptedContest.Choices);
-                counted.Add(field);
+                case SupplementalFieldKind.OvervoteIndicator:
+                    overvote = field;
+                    break;
+                case SupplementalFieldKind.UndervoteIndicator:
+                    undervote = field;
+                    break;
+                case SupplementalFieldKind.UndervoteDifferenceCount:
+                    difference = field;
+                    break;
+                case SupplementalFieldKind.NullVoteIndicator:
+                    nullVote = field;
+                    break;
+                case SupplementalFieldKind.WriteInCount:
+                    sumTerms ??= new List<EncryptedValueWithProofs>(encryptedContest.Choices);
+                    sumTerms.Add(field);
+                    break;
             }
         }
 
-        // The product of the selections (7.1, 7.2), and of the counted fields.
-        var sum = challenge.Aggregate(counted ?? (IReadOnlyList<EncryptedValueWithProofs>)encryptedContest.Choices);
-
-        var limit = sum;
-        if (overvote is not null)
-        {
-            var alpha = new ModPProduct(sum.Alpha);
-            var beta = new ModPProduct(sum.Beta);
-            alpha.MultiplyPower(overvote.Alpha, contest.SelectionLimit);
-            beta.MultiplyPower(overvote.Beta, contest.SelectionLimit);
-            limit = (alpha.Value, beta.Value);
-        }
-
-        var relation = sum;
-        if (undervoteDifference is not null && difference is not null)
-        {
-            var alpha = new ModPProduct(sum.Alpha);
-            var beta = new ModPProduct(sum.Beta);
-            alpha.Multiply(difference.Alpha);
-            beta.Multiply(difference.Beta);
-            relation = (alpha.Value, beta.Value);
-        }
-
-        return (limit, relation);
+        return challenge.RelationCiphertexts(
+            sumTerms ?? (IReadOnlyList<EncryptedValueWithProofs>)encryptedContest.Choices,
+            overvote,
+            undervote,
+            difference,
+            nullVote,
+            contest.SelectionLimit);
     }
 
     /// <summary>
     /// c = H(H_I; 0x24, i, alpha, beta, a_0, b_0, ..., a_L, b_L) over the combined ciphertext
     /// (alpha, beta) (7.5, eq. 62), with a_j = g^v_j * alpha^c_j and b_j = K^(v_j - j * c_j) * beta^c_j.
     /// The prefix is everything before alpha; RangeProofChallenge computes the a_j and b_j and
-    /// appends the rest.
+    /// appends the rest. Its input is 5 + 1024 (L + 2) bytes after H_I.
     /// </summary>
     private static IntegerModQ ComputeChallenge(Contest contest, IntegerModP alpha, IntegerModP beta, ChallengeResponsePair[] proofs, RangeProofChallenge challenge, EncryptedBallot encryptedBallot)
     {
@@ -236,15 +271,18 @@ public class AdherenceToVoteLimitsVerification
     }
 
     /// <summary>
-    /// The challenge of the undervote difference relation proof. NOT spec-defined (§3.3.9: these
+    /// The challenge of the undervote difference relation proof (2). NOT spec-defined (§3.3.9: these
     /// proofs "are not described in detail"), so not interoperable: this implementation uses eq.
     /// (59)'s range-proof format restricted, as Note 3.4 allows, to the singleton set {L}:
     /// c = H_q(H_I; 0x24, ind_c, ind_o(u), alpha, beta, a_L, b_L), where ind_o(u) is the undervote
-    /// difference field's option index, (alpha, beta) the product of the sum ciphertext and u's
-    /// ciphertext, a_L = g^v * alpha^c and b_L = K^(v - L * c) * beta^c. The proof is (c_L, v) with
-    /// c_L = c. Its input is 2057 bytes after H_I; u's own range proof hashes the same prefix but has
-    /// L + 1 &gt;= 2 commitment pairs, so the two inputs never coincide. L &gt;= 1 is a precondition
-    /// that <see cref="Manifest.Validate"/> enforces when the record is built.
+    /// difference field's option index, (alpha, beta) the encryption of s + w + L*overvote + u (the
+    /// overvote term when that indicator is declared), a_L = g^v * alpha^c and
+    /// b_L = K^(v - L * c) * beta^c. The proof is (c_L, v) with c_L = c. Its input is
+    /// 9 + 1024 * 2 = 2057 bytes after H_I. Every eq. (59) range proof has 9 + 1024 (B + 2) bytes
+    /// with a bound B &gt;= 1 (u's own hashes the same prefix with B = L), the selection-limit proof
+    /// 5 + 1024 (L + 2) and the null-vote proof 13 + 1024 (L + 2), so no two inputs coincide.
+    /// L &gt;= 1 is a precondition that <see cref="Manifest.Validate"/> enforces when the record is
+    /// built.
     /// </summary>
     private static IntegerModQ ComputeUndervoteDifferenceChallenge(Contest contest, SupplementalField undervoteDifference, IntegerModP alpha, IntegerModP beta, ChallengeResponsePair[] proofs, RangeProofChallenge challenge, EncryptedBallot encryptedBallot)
     {
@@ -254,6 +292,30 @@ public class AdherenceToVoteLimitsVerification
         RangeProofChallenge.WriteIndex(prefix.Slice(5, 4), undervoteDifference.Index);
 
         return challenge.Compute(encryptedBallot.SelectionEncryptionIdentifierHash, prefix, alpha, beta, proofs, firstValue: contest.SelectionLimit);
+    }
+
+    /// <summary>
+    /// The challenge of the null-vote relation proof (3). NOT spec-defined (§3.3.9 p.39 says the
+    /// indicator "can be enforced just as the validity of the encrypted overvote indicator" but
+    /// gives no format), so not interoperable. It is eq. (59)'s range proof over 0..L with the
+    /// weight of the null term after the option index:
+    /// c = H_q(H_I; 0x24, ind_c, ind_o(null), b(L, 4), alpha, beta, a_0, b_0, ..., a_L, b_L), where
+    /// ind_o(null) is the null-vote indicator's option index, (alpha, beta) the encryption of
+    /// s + w + L*null, a_j = g^v_j * alpha^c_j and b_j = K^(v_j - j * c_j) * beta^c_j. b(L, 4) makes
+    /// its input 13 + 1024 (L + 2) bytes after H_I, 13 mod 1024, while every other 0x24 input of the
+    /// contest is 5 or 9 mod 1024 (see <see cref="ComputeUndervoteDifferenceChallenge"/>). Without
+    /// it, at L = 1 the input would have the same prefix and length as the indicator's own 0..1
+    /// range proof.
+    /// </summary>
+    private static IntegerModQ ComputeNullVoteChallenge(Contest contest, SupplementalField nullVote, IntegerModP alpha, IntegerModP beta, ChallengeResponsePair[] proofs, RangeProofChallenge challenge, EncryptedBallot encryptedBallot)
+    {
+        Span<byte> prefix = stackalloc byte[13];
+        prefix[0] = 0x24;
+        RangeProofChallenge.WriteIndex(prefix.Slice(1, 4), contest.Index);
+        RangeProofChallenge.WriteIndex(prefix.Slice(5, 4), nullVote.Index);
+        RangeProofChallenge.WriteIndex(prefix.Slice(9, 4), contest.SelectionLimit);
+
+        return challenge.Compute(encryptedBallot.SelectionEncryptionIdentifierHash, prefix, alpha, beta, proofs);
     }
 
     private static bool HasNullEntry(ChallengeResponsePair[] proofs)

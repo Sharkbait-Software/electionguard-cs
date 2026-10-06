@@ -9,7 +9,8 @@ namespace ElectionGuard.Core.UnitTests.Serialization;
 
 /// <summary>
 /// S5: the supplemental fields are a manifest-indexed list on <see cref="EncryptedContest"/>, keyed
-/// by label, and a contest may carry the undervote difference proof. Both serializers carry both
+/// by label, and a contest may carry the undervote difference proof and (S5b) the null-vote proof.
+/// Both serializers carry all three
 /// (CLAUDE.md: a field added to an encrypted-ballot type goes into the domain type and the protobuf
 /// DTO), and a decoded ballot still passes Verifications 6 to 8.
 /// </summary>
@@ -27,7 +28,12 @@ public class SupplementalFieldSerializationTests
 
     private static (EncryptedBallot Ballot, EncryptionRecord Record, VotingDeviceInformationHash DeviceHash) Encrypt(IReadOnlyList<SupplementalFieldKind> kinds)
     {
-        var (manifest, manifestFile) = ElectionFixtureBuilder.CreateMinimalManifest(selectionLimit: 2, supplementalFields: kinds, writeInFieldCount: 2);
+        var (manifest, manifestFile) = ElectionFixtureBuilder.CreateMinimalManifest(
+            selectionLimit: 2,
+            supplementalFields: kinds,
+            // Write-ins only where the count is declared (Manifest.Validate, open S5b question B,
+            // option (a)); valid under option (b) too, so not a pin.
+            writeInFieldCount: kinds.Contains(SupplementalFieldKind.WriteInCount) ? 2 : 0);
         var guardianSet = ElectionFixtureBuilder.CreateGuardianSet(manifestFile: manifestFile);
         var records = ElectionFixtureBuilder.CreateEncryptionRecord(guardianSet, manifest, manifestFile);
         var deviceHash = new VotingDeviceInformationHash(records.ExtendedBaseHash, "device-1");
@@ -48,7 +54,7 @@ public class SupplementalFieldSerializationTests
 
     [Theory]
     [MemberData(nameof(Serializers))]
-    public void RoundTrip_KeepsEveryFieldInOrder_AndTheUndervoteDifferenceProof_AndStillVerifies(string serializerName)
+    public void RoundTrip_KeepsEveryFieldInOrder_AndTheRelationProofs_AndStillVerifies(string serializerName)
     {
         var (original, record, deviceHash) = Encrypt(ElectionFixtureBuilder.AllSupplementalFields);
 
@@ -69,6 +75,8 @@ public class SupplementalFieldSerializationTests
 
         Assert.Equal(originalContest.UndervoteDifferenceProof, resultContest.UndervoteDifferenceProof);
         Assert.Single(resultContest.UndervoteDifferenceProof!);
+        Assert.Equal(originalContest.NullVoteProof, resultContest.NullVoteProof);
+        Assert.Equal(3, resultContest.NullVoteProof!.Length);
 
         new SelectionEncryptionsWellFormedVerification().Verify(result, record);
         new AdherenceToVoteLimitsVerification().Verify(result, record);
@@ -77,17 +85,20 @@ public class SupplementalFieldSerializationTests
 
     [Theory]
     [MemberData(nameof(Serializers))]
-    public void RoundTrip_ContestWithoutAnUndervoteDifferenceCount_HasNoProof(string serializerName)
+    public void RoundTrip_ContestWithoutAnUndervoteDifferenceCountOrNullVoteIndicator_HasNoRelationProof(string serializerName)
     {
         var (original, record, _) = Encrypt([SupplementalFieldKind.OvervoteIndicator]);
         Assert.Null(original.Contests.Single().UndervoteDifferenceProof);
+        Assert.Null(original.Contests.Single().NullVoteProof);
 
         var (result, encoded) = RoundTrip(serializerName, original);
 
         Assert.Null(result.Contests.Single().UndervoteDifferenceProof);
+        Assert.Null(result.Contests.Single().NullVoteProof);
         if (serializerName == "json")
         {
             Assert.DoesNotContain("undervoteDifferenceProof", Encoding.UTF8.GetString(encoded), StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("nullVoteProof", Encoding.UTF8.GetString(encoded), StringComparison.OrdinalIgnoreCase);
         }
 
         new AdherenceToVoteLimitsVerification().Verify(result, record);

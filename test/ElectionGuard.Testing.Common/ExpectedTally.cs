@@ -5,14 +5,16 @@ namespace ElectionGuard.Testing.Common;
 
 /// <summary>
 /// The totals of a contest's supplemental verifiable fields (§3.3.9) over every ballot contributing
-/// to an <see cref="ExpectedTally"/>, whether or not the contest declares the field:
+/// to an <see cref="ExpectedTally"/>, whether or not the contest declares the field (see
+/// <see cref="ExpectedTallyAccumulator"/> for the rules):
 /// <list type="bullet">
 /// <item><see cref="Overvotes"/>: ballots whose contest was overvoted.</item>
-/// <item><see cref="Nullvotes"/>: ballots with no selection in the contest, overvotes excluded.</item>
-/// <item><see cref="Undervotes"/>: ballots whose sum of selections was below the selection
-/// limit.</item>
-/// <item><see cref="UndervoteDifference"/>: the sum over ballots of the selection limit minus the
-/// sum of selections.</item>
+/// <item><see cref="Nullvotes"/>: ballots with no selection and no write-in in the contest,
+/// overvotes excluded.</item>
+/// <item><see cref="Undervotes"/>: ballots whose selections and write-ins were below the selection
+/// limit, overvotes excluded.</item>
+/// <item><see cref="UndervoteDifference"/>: the sum over ballots of the undervote difference
+/// count.</item>
 /// <item><see cref="WriteIns"/>: write-in fields used, overvoted contests excluded.</item>
 /// </list>
 /// </summary>
@@ -78,25 +80,30 @@ public sealed class ExpectedTally
 /// <summary>
 /// Accumulates the expected tally from plaintext ballots.
 ///
-/// The overvote rule and the supplemental-field values are derived here from the spec text, not
-/// from BallotEncryptor's code, so that egperf's correctness gate is an independent check:
+/// The overvote rule and the supplemental-field values are derived here from the spec text and the
+/// user's S5 follow-up decisions as recorded in docs/spec-compliance/2026-10-04-fix-progress.md
+/// (Q11-Q16), not from BallotEncryptor's code, so that egperf's correctness gate is an independent
+/// check. With s the sum of the voter's selections, w the number of write-ins used and L the
+/// contest selection limit:
 /// <list type="bullet">
 /// <item>§3.1.3 p.17: a selection is a value in {0, ..., R}; L is "the maximal total value for the
 /// sum of all selections made in that contest".</item>
-/// <item>§3.1.3 p.19 and §3.3.9 p.39: write-ins count toward the selection limit when the manifest
-/// says so ("Which of those fields are counted while ensuring adherence to the contest selection
-/// limit must also be specified in the manifest").</item>
+/// <item>Q13: "Any write in should count towards the limit", "exactly like selections". The total
+/// every rule is judged on is s + w.</item>
 /// <item>§3.3.5 p.31: "When the number of selections made by the voter exceeds the contest selection
 /// limit or when the selection assigned to a single option in a contest exceeds its option
 /// selection limit, the votes in the contest become invalid as an overvote. To not affect the
-/// election tallies, all selectable options in the contest are set to zero." The contest's
-/// write-ins are part of its invalid votes, so they are not counted either.</item>
-/// <item>§3.3.9 pp.38-39: overvote indicator 1 iff overvoted; null-vote indicator 1 iff no selection
-/// was made, and 0 on an overvote ("should be set to zero"); undervote indicator 1 iff the sum of
-/// the selections is strictly less than L; undervote difference L minus that sum. On an overvote the
-/// sum is that of the zeroed selections, so the indicator is 1 and the difference L. For the
-/// difference that is forced (L - u = sum); for the indicator it follows p.38's disjunctive proof,
-/// where p.18/p.38's definition by the voter's sum would give 0 (open S5 user question 4).</item>
+/// election tallies, all selectable options in the contest are set to zero." So: overvoted when
+/// s + w &gt; L or some option &gt; R.</item>
+/// <item>"Resulting values on an overvote: options 0, write-in count 0, overvote 1, undervote
+/// indicator 0, undervote difference 0, null 0" (Q11, Q12, Q3). The undervote difference count is
+/// 0 because Q15 proves "s + w + L·overvote + u = L"; a contest that does not track the overvote
+/// indicator has no such term (Q14: an untracked field "doesn't matter at all and presumably isn't
+/// included"), and there the relation gives u = L (open S5b user question).</item>
+/// <item>"On a null vote (s + w = 0, no overvote): undervote indicator 1, difference L, null 1."
+/// Otherwise (no overvote): undervote indicator 1 iff s + w &lt; L (§3.3.9 p.38 "strictly less
+/// than the contest selection limit"), difference L - (s + w), null 0 (Q13: "A ballot that uses a
+/// write-in is not a null vote").</item>
 /// </list>
 ///
 /// IMPORTANT: Add(ballot) must be called BEFORE the ballot is encrypted.
@@ -131,36 +138,42 @@ public sealed class ExpectedTallyAccumulator
             int contestLimit = contest.SelectionLimit;      // L
             int optionLimit = contest.OptionSelectionLimit; // R
 
-            bool writeInsAreSelections = contest.SupplementalFields
-                .Any(field => field.Kind == SupplementalFieldKind.WriteInCount && field.CountsTowardSelectionLimit);
-
-            long selectionsTotal = ballotContest.Choices.Sum(choice => (long)choice.SelectionValue)
-                + (writeInsAreSelections ? ballotContest.NumWriteinsSelected : 0);
+            long selections = ballotContest.Choices.Sum(choice => (long)choice.SelectionValue); // s
+            int writeIns = ballotContest.NumWriteinsSelected;                                    // w
             bool someOptionAboveItsLimit = ballotContest.Choices.Any(choice => choice.SelectionValue > optionLimit);
-            bool overvoted = selectionsTotal > contestLimit || someOptionAboveItsLimit;
+            bool overvoted = selections + writeIns > contestLimit || someOptionAboveItsLimit;
 
-            // What the tally sees: nothing at all from an overvoted contest.
-            // Two of these rules answer open user questions with the recommended option (a); both
-            // change published totals only, and the tests that pin them are marked
-            // DECISION-DEPENDENT PIN:
-            // - question 1: an overvote zeroes the write-in count even where it does not count
-            //   toward the limit (countedWriteIns below);
-            // - question 2: uncounted write-ins are not selections, so a ballot whose only marks
-            //   are uncounted write-ins is a null vote (Nullvotes uses countedTotal, which leaves
-            //   them out).
-            int countedTotal = overvoted ? 0 : (int)selectionsTotal;
-            int countedWriteIns = overvoted ? 0 : ballotContest.NumWriteinsSelected;
+            int overvotes, nullvotes, undervotes, undervoteDifference, writeInsCounted;
+            if (overvoted)
+            {
+                bool overvoteTracked = contest.SupplementalFields.Any(field => field.Kind == SupplementalFieldKind.OvervoteIndicator);
+                overvotes = 1;
+                nullvotes = 0;
+                undervotes = 0;
+                undervoteDifference = overvoteTracked ? 0 : contestLimit;
+                writeInsCounted = 0;
+            }
+            else
+            {
+                int total = (int)selections + writeIns;
+                overvotes = 0;
+                nullvotes = total == 0 ? 1 : 0;
+                undervotes = total < contestLimit ? 1 : 0;
+                undervoteDifference = contestLimit - total;
+                writeInsCounted = writeIns;
+            }
 
             var current = _counters[ballotContest.Id];
             _counters[ballotContest.Id] = current with
             {
-                Overvotes = current.Overvotes + (overvoted ? 1 : 0),
-                Nullvotes = current.Nullvotes + (!overvoted && countedTotal == 0 ? 1 : 0),
-                Undervotes = current.Undervotes + (countedTotal < contestLimit ? 1 : 0),
-                UndervoteDifference = current.UndervoteDifference + (contestLimit - countedTotal),
-                WriteIns = current.WriteIns + countedWriteIns,
+                Overvotes = current.Overvotes + overvotes,
+                Nullvotes = current.Nullvotes + nullvotes,
+                Undervotes = current.Undervotes + undervotes,
+                UndervoteDifference = current.UndervoteDifference + undervoteDifference,
+                WriteIns = current.WriteIns + writeInsCounted,
             };
 
+            // What the tally sees: nothing at all from an overvoted contest.
             if (overvoted)
             {
                 continue;

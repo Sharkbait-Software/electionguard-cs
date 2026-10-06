@@ -105,10 +105,12 @@ public record Manifest
     /// §3.1.3 p.19 and §3.3.9: the supplemental verifiable fields a contest declares are "treated
     /// like and listed with the option selection fields", so each takes the next option index after
     /// the selectable options (m + 1, m + 2, ... in the order declared) and a label unique among the
-    /// contest's options and fields. The spec describes one field of each kind per contest. Which
-    /// fields count toward the contest selection limit "must also be specified in the manifest"; see
-    /// <see cref="SupplementalField.CountsTowardSelectionLimit"/> for the combinations that admit a
-    /// selection-limit proof at all.
+    /// contest's options and fields. The spec describes one field of each kind per contest. There is
+    /// no per-field counts-toward-limit setting (user decision Q14): a declared ("tracked") field
+    /// takes part in the selection-limit relations its kind calls for (see
+    /// <see cref="Verify.Ballot.AdherenceToVoteLimitsVerification"/>), and an undeclared one does not
+    /// exist. Write-ins always count toward the limit (Q13), so a contest that offers write-in fields
+    /// must declare the write-in count: without its ciphertext no proof could include them.
     /// </summary>
     private static void ValidateSupplementalFields(Contest contest)
     {
@@ -146,21 +148,6 @@ public record Manifest
 
             kindSeen[(int)field.Kind] = true;
 
-            bool mustCount = field.Kind == SupplementalFieldKind.OvervoteIndicator;
-            bool mayCount = mustCount || field.Kind == SupplementalFieldKind.WriteInCount;
-            if (mustCount && !field.CountsTowardSelectionLimit)
-            {
-                throw new InvalidManifestException($"Overvote indicator {field.Id} of contest {contest.Id} must count toward the selection limit: its validity is enforced by adding L times it to the selection-limit proof (§3.3.9 p.39).");
-            }
-
-            if (!mayCount && field.CountsTowardSelectionLimit)
-            {
-                string reason = field.Kind == SupplementalFieldKind.NullVoteIndicator
-                    ? "§3.3.9 p.39 suggests enforcing its validity like the overvote indicator's, by adding L times it to the selection-limit proof, but that optional relation is not implemented (user decision Q2 limits the relations to the overvote term, the write-in count and the undervote difference), so the indicator is proved only by its range proof"
-                    : "on an overvoted contest it is nonzero (the undervote fields are computed on the zeroed selections) while the overvote indicator already takes the whole limit, so an honest overvoted ballot would have no selection-limit proof";
-                throw new InvalidManifestException($"Supplemental field {field.Id} of contest {contest.Id} ({field.Kind}) cannot count toward the selection limit: {reason}.");
-            }
-
             if (field.Kind == SupplementalFieldKind.WriteInCount && contest.WriteInFieldCount < 1)
             {
                 throw new InvalidManifestException($"Contest {contest.Id} declares a write-in count field but offers {contest.WriteInFieldCount} write-in fields; the write-in count ranges over 0..the number of write-in fields (§3.3.9 p.39).");
@@ -178,6 +165,15 @@ public record Manifest
         if (FirstDuplicateId(fields, static x => x.Id) is string duplicateFieldId)
         {
             throw new InvalidManifestException($"Supplemental field id {duplicateFieldId} appears more than once in contest {contest.Id}; labels must be unique within a contest (§3.1.3).");
+        }
+
+        // User decision Q13: "Any write in should count towards the limit". Only the write-in count's
+        // ciphertext can carry the write-ins into the selection-limit proof, so a contest that offers
+        // write-in fields must track that count (open S5b user question: the alternative is to let
+        // untracked write-ins not count at all).
+        if (contest.WriteInFieldCount > 0 && !kindSeen[(int)SupplementalFieldKind.WriteInCount])
+        {
+            throw new InvalidManifestException($"Contest {contest.Id} offers {contest.WriteInFieldCount} write-in fields but declares no write-in count field; write-ins count toward the contest selection limit (user decision Q13), which only the write-in count's encryption can show (§3.3.9 p.39: \"The number of write-ins should be incorporated into the proof of meeting the selection limit\").");
         }
     }
 
@@ -318,24 +314,6 @@ public record Contest
         return field is SupplementalField supplemental ? RangeBound(supplemental.Kind) : OptionSelectionLimit;
     }
 
-    /// <summary>
-    /// How many times the encryption of <paramref name="field"/> enters the contest's
-    /// selection-limit proof (§3.3.8, §3.3.9 p.39): L for the overvote indicator (footnote 42: the
-    /// ciphertext raised to the contest selection limit), 1 for a field that counts toward the limit
-    /// (the write-in count, when the manifest says so), 0 otherwise. Every selectable option enters
-    /// once. The fields of weight 1 and the options make up the "sum of the selections" that the
-    /// undervote fields are computed from.
-    /// </summary>
-    public int SelectionLimitWeight(SupplementalField field)
-    {
-        if (field.Kind == SupplementalFieldKind.OvervoteIndicator)
-        {
-            return SelectionLimit;
-        }
-
-        return field.CountsTowardSelectionLimit ? 1 : 0;
-    }
-
     /// <summary>The range bound of a supplemental field of <paramref name="kind"/>; see <see cref="RangeBound(Choice)"/>.</summary>
     public int RangeBound(SupplementalFieldKind kind)
     {
@@ -370,32 +348,6 @@ public record SupplementalField : Choice
     internal const int KindCount = 5;
 
     public required SupplementalFieldKind Kind { get; init; }
-
-    /// <summary>
-    /// Whether the field enters the contest selection-limit proof (§3.1.3 p.19: "Which of those
-    /// fields are counted while ensuring adherence to the contest selection limit must also be
-    /// specified in the manifest"). <see cref="Manifest.Validate"/> admits only the settings for
-    /// which every honest ballot has a selection-limit proof:
-    /// <list type="bullet">
-    /// <item>the overvote indicator must count, and counts L times (§3.3.9 p.39 and footnote 42:
-    /// the sum of the selections plus L times the indicator does not exceed L);</item>
-    /// <item>the write-in count may count, once (§3.3.9 p.39: "The number of write-ins should be
-    /// incorporated into the proof of meeting the selection limit");</item>
-    /// <item>the undervote indicator and the undervote difference count must not: on an overvoted
-    /// contest they are computed on the zeroed selections, so they are nonzero (1 and L) while the
-    /// overvote term already takes the whole limit, and no honest overvoted ballot would have a
-    /// selection-limit proof (the indicator's 1 on an overvote is open S5 user question 4, see
-    /// <c>BallotEncryptor.SupplementalValue</c>; were it 0, this reason would cover only the
-    /// difference count);</item>
-    /// <item>the null-vote indicator must not either, for a different reason: it is 0 on an
-    /// overvote (user decision Q3), and §3.3.9 p.39 suggests enforcing its validity "just as the
-    /// validity of the encrypted overvote indicator", i.e. by adding L times it to the limit proof,
-    /// which every honest ballot would pass. That optional relation is not implemented (user
-    /// decision Q2 lists only the overvote term, the write-in count and the undervote difference),
-    /// so a once-weighted flag would mean something the spec does not describe.</item>
-    /// </list>
-    /// </summary>
-    public bool CountsTowardSelectionLimit { get; init; }
 }
 
 /// <summary>
@@ -410,13 +362,13 @@ public enum SupplementalFieldKind
     /// <summary>1 if the contest was overvoted, 0 otherwise (§3.3.9 p.38). Range 0..1.</summary>
     OvervoteIndicator = 1,
 
-    /// <summary>1 if no selection was made, 0 otherwise, and 0 on an overvoted contest (§3.3.9 p.39; user decision Q3). Range 0..1.</summary>
+    /// <summary>1 if no selection and no write-in was made (user decision Q13), 0 otherwise, and 0 on an overvoted contest (§3.3.9 p.39; user decision Q3). Range 0..1.</summary>
     NullVoteIndicator = 2,
 
-    /// <summary>1 if the sum of the selections is below the contest selection limit L, 0 otherwise (§3.3.9 p.38). Range 0..1.</summary>
+    /// <summary>1 if the sum of the selections and write-ins is below the contest selection limit L, 0 otherwise and 0 on an overvoted contest (§3.3.9 p.38; user decisions Q11, Q13). Range 0..1.</summary>
     UndervoteIndicator = 3,
 
-    /// <summary>L minus the sum of the selections (§3.1.3 p.18, §3.3.9 p.38). Range 0..L.</summary>
+    /// <summary>L minus the sum of the selections and write-ins, and 0 on an overvoted contest whose overvote indicator is declared (§3.1.3 p.18, §3.3.9 p.38; user decision Q15). Range 0..L.</summary>
     UndervoteDifferenceCount = 4,
 
     /// <summary>The number of write-in fields used (§3.1.3 p.19, §3.3.9 p.39). Range 0..<see cref="Contest.WriteInFieldCount"/>.</summary>
