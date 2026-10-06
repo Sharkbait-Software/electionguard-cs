@@ -99,7 +99,8 @@ public sealed class ExpectedTally
 /// indicator 0, undervote difference 0, null 0" (Q11, Q12, Q3). The undervote difference count is
 /// 0 because Q15 proves "s + w + L·overvote + u = L"; a contest that does not track the overvote
 /// indicator has no such term (Q14: an untracked field "doesn't matter at all and presumably isn't
-/// included"), and there the relation gives u = L (open S5b user question).</item>
+/// included"), and there the relation gives u = L (user decision Q18: with no tracked overvote
+/// indicator nothing publishes an overvote, so the neutralized contest is a blank one).</item>
 /// <item>"On a null vote (s + w = 0, no overvote): undervote indicator 1, difference L, null 1."
 /// Otherwise (no overvote): undervote indicator 1 iff s + w &lt; L (§3.3.9 p.38 "strictly less
 /// than the contest selection limit"), difference L - (s + w), null 0 (Q13: "A ballot that uses a

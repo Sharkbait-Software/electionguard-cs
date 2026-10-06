@@ -326,10 +326,12 @@ internal sealed class RangeProofChallenge
     /// <list type="bullet">
     /// <item>Limit: s + w + L*overvote + undervote indicator (the selection-limit proof).</item>
     /// <item>Difference: s + w + L*overvote + u, when u is declared (null otherwise).</item>
-    /// <item>NullVote: s + w + L*null, when the null-vote indicator is declared (null otherwise).</item>
+    /// <item>NullVote: s + w + L*overvote + L*null, when the null-vote indicator is declared (null
+    /// otherwise; user decision Q17).</item>
     /// </list>
-    /// Computed in one Montgomery representation: every input is converted in once, the power of
-    /// the overvote indicator is shared by the first two, and each output is converted out once.
+    /// Every L*overvote term is present only when the overvote indicator is declared. Computed in
+    /// one Montgomery representation: every input is converted in once, the power of the overvote
+    /// indicator is shared by all three, and each output is converted out once.
     /// L is public and small, so the powers are short windows over its own bits. With no field
     /// declared, Limit is <see cref="Aggregate"/> of the terms.
     /// </summary>
@@ -390,20 +392,20 @@ internal sealed class RangeProofChallenge
         BinaryPrimitives.WriteInt32BigEndian(limitBytes, limit);
         ReadOnlySpan<byte> exponent = limitBytes[Math.Min(BitOperations.LeadingZeroCount((uint)limit) / 8, sizeof(int) - 1)..];
 
-        // s + w + L*overvote, in place in the sum: both the limit and the difference relation
-        // carry the term, and the null-vote relation, which does not, is computed first.
+        // s + w + L*overvote, in place in the sum: all three relations carry the term (the
+        // null-vote relation since user decision Q17).
+        if (overvote is not null)
+        {
+            MultiplyPower(arithmetic, sumAlpha, overvote.Alpha, exponent, factor, power, sumAlpha);
+            MultiplyPower(arithmetic, sumBeta, overvote.Beta, exponent, factor, power, sumBeta);
+        }
+
         (IntegerModP Alpha, IntegerModP Beta)? nullVoteCiphertext = null;
         if (nullVote is not null)
         {
             MultiplyPower(arithmetic, sumAlpha, nullVote.Alpha, exponent, factor, power, alpha);
             MultiplyPower(arithmetic, sumBeta, nullVote.Beta, exponent, factor, power, beta);
             nullVoteCiphertext = (new IntegerModP(arithmetic.FromMontgomery(alpha)), new IntegerModP(arithmetic.FromMontgomery(beta)));
-        }
-
-        if (overvote is not null)
-        {
-            MultiplyPower(arithmetic, sumAlpha, overvote.Alpha, exponent, factor, power, sumAlpha);
-            MultiplyPower(arithmetic, sumBeta, overvote.Beta, exponent, factor, power, sumBeta);
         }
 
         (IntegerModP Alpha, IntegerModP Beta)? differenceCiphertext = null;

@@ -114,10 +114,10 @@ public record EncryptedContest
 
     /// <summary>
     /// Present exactly when the contest declares a null-vote indicator: a range proof over 0..L
-    /// (L + 1 pairs) that the encryption of s + w + L*null lies in 0..L, which enforces the
-    /// indicator "just as the validity of the encrypted overvote indicator" (§3.3.9 p.39; user
-    /// decision Q15). The spec gives no challenge format for it; see <see cref="BallotEncryptor"/>.
-    /// Null otherwise.
+    /// (L + 1 pairs) that the encryption of s + w + L*overvote + L*null lies in 0..L (the overvote
+    /// term when the contest declares that indicator), which enforces the indicator "just as the
+    /// validity of the encrypted overvote indicator" (§3.3.9 p.39; user decisions Q15, Q17). The
+    /// spec gives no challenge format for it; see <see cref="BallotEncryptor"/>. Null otherwise.
     /// </summary>
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public ChallengeResponsePair[]? NullVoteProof { get; init; }

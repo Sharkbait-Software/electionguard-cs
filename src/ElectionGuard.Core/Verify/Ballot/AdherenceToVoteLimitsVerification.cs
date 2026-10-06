@@ -24,10 +24,12 @@ namespace ElectionGuard.Core.Verify.Ballot;
 /// challenge and response are checked as 7.B and 7.C, its challenge equation as 7.D, with messages
 /// that name the relation; see <see cref="ComputeUndervoteDifferenceChallenge"/>.</item>
 /// <item>(3) When the contest declares a null-vote indicator, a range proof shows that
-/// s + w + L*null lies in 0..L, which enforces the indicator "just as the validity of the encrypted
-/// overvote indicator" (p.39; Q15 "Null in its own check": in (1) it would count the same missing
-/// vote as the undervote indicator twice). Checked as 7.B, 7.C and 7.D like (2); see
-/// <see cref="ComputeNullVoteChallenge"/>.</item>
+/// s + w + L*overvote + L*null lies in 0..L, which enforces the indicator "just as the validity of
+/// the encrypted overvote indicator" (p.39; Q15 "Null in its own check": in (1) it would count the
+/// same missing vote as the undervote indicator twice). The overvote term, present when that
+/// indicator is declared (user decision Q17), makes an overvote with a null-vote indicator of 1
+/// exceed L, as p.39 ("the null vote indicator should be set to zero") and Q3 require. Checked as
+/// 7.B, 7.C and 7.D like (2); see <see cref="ComputeNullVoteChallenge"/>.</item>
 /// <item>7.A covers every verifiable field's alpha and beta, supplemental fields included (§3.1.3
 /// p.19: whenever the spec lists option fields "it is assumed that these include all verifiable
 /// fields in that contest").</item>
@@ -39,12 +41,10 @@ namespace ElectionGuard.Core.Verify.Ballot;
 /// field is still range-checked by Verification 6):
 /// <list type="bullet">
 /// <item>an undervote indicator of 0 when s + w is below L (Q2);</item>
-/// <item>a null-vote indicator of 0 when s + w = 0 (Q2);</item>
-/// <item>a null-vote indicator of 1 on an overvoted contest (overvote indicator 1, s + w = 0),
-/// although p.39 and Q3 say it is 0 there. (1) forces the undervote indicator to 0 on an overvote
-/// through its L*overvote term, but (3), as Q15 states it, has no overvote term (open S5b
-/// question C).</item>
+/// <item>a null-vote indicator of 0 when s + w = 0 (Q2).</item>
 /// </list>
+/// On an overvote, (1) forces the undervote indicator to 0 and (3) the null-vote indicator to 0,
+/// both through their L*overvote terms.
 /// Separately, and as in the spec, an overvote indicator of 1 is only ever checked against the
 /// selections and write-ins being 0: an encrypted overvote (all zero, overvote 1, the other
 /// indicators and u 0) is indistinguishable from a device reporting a null vote as an overvote.
@@ -198,14 +198,14 @@ public class AdherenceToVoteLimitsVerification
             }
         }
 
-        // (3) s + w + L*null in 0..L.
+        // (3) s + w + L*overvote + L*null in 0..L.
         if (nullVote is not null)
         {
             var (alpha, beta) = ciphertexts.NullVote!.Value;
             var nullVoteChallenge = ComputeNullVoteChallenge(contest, nullVote, alpha, beta, nullVoteProof, challenge, encryptedBallot);
             if (SumOfChallenges(nullVoteProof) != nullVoteChallenge)
             {
-                throw new VerificationFailedException("7.D", $"Null-vote proof of contest {contest.Id}: the sum of the challenges does not equal c, so the sum of the selections, the write-ins and L times the null-vote indicator is not shown to lie in 0..L (§3.3.9 p.39).");
+                throw new VerificationFailedException("7.D", $"Null-vote proof of contest {contest.Id}: the sum of the challenges does not equal c, so the sum of the selections, the write-ins, L times the overvote indicator (where declared) and L times the null-vote indicator is not shown to lie in 0..L (§3.3.9 p.39).");
             }
         }
     }
@@ -301,7 +301,8 @@ public class AdherenceToVoteLimitsVerification
     /// weight of the null term after the option index:
     /// c = H_q(H_I; 0x24, ind_c, ind_o(null), b(L, 4), alpha, beta, a_0, b_0, ..., a_L, b_L), where
     /// ind_o(null) is the null-vote indicator's option index, (alpha, beta) the encryption of
-    /// s + w + L*null, a_j = g^v_j * alpha^c_j and b_j = K^(v_j - j * c_j) * beta^c_j. b(L, 4) makes
+    /// s + w + L*overvote + L*null (the overvote term when that indicator is declared, user decision
+    /// Q17), a_j = g^v_j * alpha^c_j and b_j = K^(v_j - j * c_j) * beta^c_j. b(L, 4) makes
     /// its input 13 + 1024 (L + 2) bytes after H_I, 13 mod 1024, while every other 0x24 input of the
     /// contest is 5 or 9 mod 1024 (see <see cref="ComputeUndervoteDifferenceChallenge"/>). Without
     /// it, at L = 1 the input would have the same prefix and length as the indicator's own 0..1

@@ -195,9 +195,8 @@ public class ManifestValidationTests
     /// <summary>
     /// The minimal manifest's contest declaring <paramref name="fields"/> and offering
     /// <paramref name="writeInFieldCount"/> write-in fields: by default 1 when the write-in count is
-    /// declared and none otherwise (a contest that offers write-ins must declare the count, Q13;
-    /// open S5b question B, option (a). The default is valid under option (b) too, so it is not a
-    /// pin).
+    /// declared and none otherwise (a contest that offers write-ins must declare the count, Q13,
+    /// Q19).
     /// </summary>
     private static Manifest WithFields(List<SupplementalField> fields, int? writeInFieldCount = null)
     {
@@ -270,9 +269,9 @@ public class ManifestValidationTests
     [Theory]
     // S5b (user decision Q14): there is no counts-toward-limit setting. A field is declared
     // ("tracked") or not, and any one kind may be declared on its own; Verification 7 includes every
-    // declared field in its relations. DECISION-DEPENDENT PIN (open S5b question A, option (a)):
-    // the UndervoteDifferenceCount row declares u without the overvote indicator. If the user picks
-    // (b), Validate rejects it; move that row to a Throws test.
+    // declared field in its relations. The UndervoteDifferenceCount row declares u without the
+    // overvote indicator, which user decision Q18 keeps valid (with no tracked overvote field,
+    // there is no published overvote, and u = L on the neutralized contest).
     [InlineData(SupplementalFieldKind.OvervoteIndicator)]
     [InlineData(SupplementalFieldKind.NullVoteIndicator)]
     [InlineData(SupplementalFieldKind.UndervoteIndicator)]
@@ -307,9 +306,8 @@ public class ManifestValidationTests
     public void Validate_WriteInFieldsOfferedWithoutAWriteInCount_Throws(int writeInFieldCount)
     {
         // User decision Q13: write-ins always count toward the selection limit, and only the
-        // write-in count's encryption can carry them into the selection-limit proof.
-        // DECISION-DEPENDENT PIN (open S5b question B, option (a)). If the user picks (b), this
-        // manifest is valid: assert that Validate does not throw.
+        // write-in count's encryption can carry them into the selection-limit proof. User decision
+        // Q19 ("Reject manifest"): write-in fields offered without a write-in count are invalid.
         var manifest = WithFields(ElectionFixtureBuilder.SupplementalFields(2, ElectionFixtureBuilder.DefaultSupplementalFields), writeInFieldCount);
 
         var exception = Assert.Throws<InvalidManifestException>(manifest.Validate);

@@ -190,8 +190,9 @@ public class BallotEncryptor
     /// <item>Undervote difference count u: L - (s + w + L * overvote), with the overvote term only
     /// when the contest declares the overvote indicator (Q15: s + w + L*overvote + u = L is proved
     /// exactly). So u = 0 on an overvote when the indicator is declared, and L, the difference to
-    /// the zeroed selections, when it is not: p.38's relation without the term (open S5b user
-    /// question).</item>
+    /// the zeroed selections, when it is not: p.38's relation without the term (user decision Q18:
+    /// with no tracked overvote indicator nothing publishes an overvote, so the neutralized contest
+    /// is a blank one).</item>
     /// <item>Write-in count: the number of write-in fields used, 0 on an overvote (p.39; Q12).</item>
     /// </list>
     /// On an overvote s and w are already 0 here.
@@ -354,15 +355,18 @@ public class BallotEncryptor
         }
 
         // (3) §3.3.9 p.39: "The validity of the encrypted null vote indicator can be enforced just as
-        //     the validity of the encrypted overvote indicator": s + w + L*null lies in 0..L, by a
-        //     range proof with c = H_q(H_I; 0x24, ind_c, ind_o(null), b(L, 4), A, B, a_0, b_0, ...,
-        //     a_L, b_L). NOT spec-defined either; see
-        //     AdherenceToVoteLimitsVerification.ComputeNullVoteChallenge.
+        //     the validity of the encrypted overvote indicator": s + w + L*overvote + L*null lies in
+        //     0..L (the overvote term when that indicator is declared, user decision Q17, so that an
+        //     overvote cannot also claim a null vote; p.39, Q3), by a range proof with
+        //     c = H_q(H_I; 0x24, ind_c, ind_o(null), b(L, 4), A, B, a_0, b_0, ..., a_L, b_L). NOT
+        //     spec-defined either; see AdherenceToVoteLimitsVerification.ComputeNullVoteChallenge.
         ChallengeResponsePair[]? nullVoteProof = null;
         if (nullVoteField is not null)
         {
-            var nullCiphertext = Combine(sumCiphertext, nullVoteField, limit, null, 0);
-            int nullValue = total + limit * nullVoteValue;
+            var nullCiphertext = Combine(sumCiphertext, overvoteField, limit, nullVoteField, limit);
+            int nullValue = total
+                + (overvoteField is not null && isOvervote ? limit : 0)
+                + limit * nullVoteValue;
             nullVoteProof = GenerateProofs(nullValue, 0, limit, nullCiphertext, _encryptionRecord.ElectionPublicKeys, selectionEncryptionIdentifierHash, manifestContest.Index, nullVoteIndex, weight: limit);
         }
 

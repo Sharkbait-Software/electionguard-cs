@@ -224,11 +224,9 @@ public class ExpectedTallyTests
     {
         // Q15's relation s + w + L*overvote + u = L has the overvote term only when the contest
         // declares the indicator (Q14: an untracked field "isn't included"). Without it, an
-        // overvoted contest's u is L, the difference to the zeroed selections.
-        // DECISION-DEPENDENT PIN (open S5b question A, option (a)). If the user picks (b),
-        // Manifest.Validate rejects this manifest, but neither CreateMinimalManifest nor the
-        // accumulator validates, so this test would keep passing on a manifest no election can
-        // use: delete it, or turn it into a Validate test.
+        // overvoted contest's u is L, the difference to the zeroed selections. User decision Q18:
+        // with no tracked overvote field there is no published overvote, so the neutralized contest
+        // is a blank one, and Manifest.Validate accepts this manifest.
         var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest(
             selectionLimit: 2,
             supplementalFields: [SupplementalFieldKind.UndervoteIndicator, SupplementalFieldKind.UndervoteDifferenceCount]);

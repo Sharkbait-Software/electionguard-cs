@@ -169,7 +169,7 @@ public record Manifest
 
         // User decision Q13: "Any write in should count towards the limit". Only the write-in count's
         // ciphertext can carry the write-ins into the selection-limit proof, so a contest that offers
-        // write-in fields must track that count (open S5b user question: the alternative is to let
+        // write-in fields must track that count (user decision Q19: "Reject manifest", rather than let
         // untracked write-ins not count at all).
         if (contest.WriteInFieldCount > 0 && !kindSeen[(int)SupplementalFieldKind.WriteInCount])
         {

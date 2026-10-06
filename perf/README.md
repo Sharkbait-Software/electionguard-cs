@@ -174,7 +174,8 @@ an overvote zero the write-in count).
 Stage S5b applied the user's follow-up decisions: there is no per-field counts-toward-limit flag (a
 field is declared or not), write-ins always count toward the limit, and on an overvote the undervote
 indicator and the undervote difference count are 0. Each contest that declares the null-vote indicator
-also carries a null-vote proof (a range proof over 0..L of s + w + L*null), so `smoke`'s
+also carries a null-vote proof (a range proof over 0..L of s + w + L*null; S5c added L*overvote where
+that indicator is declared, user decision Q17), so `smoke`'s
 `VerifyBallots` rose from 0.90 to about 1.0 ms/ballot; its allocation fell from 15.0 to 12.4 MB because
 Verification 7 now builds its relation ciphertexts in one Montgomery representation. The committed
 manifests dropped the `countsTowardSelectionLimit` key, so `compare` reports S5 records as incomparable.
@@ -186,9 +187,7 @@ write-in fields each, and all but the third declare every supplemental field. En
 threshold fails its ballot verification (`Sum of challenge values did not equal c.`), as does an
 encryptor that sets the undervote indicator on an overvote, while `smoke` passes. The third contest
 covers the relations without the overvote term (there an overvoted contest's undervote difference
-count is L). That contest depends on open S5b question A: if `Manifest.Validate` comes to require the
-overvote indicator wherever the difference count is declared, it must gain the indicator or be dropped,
-and `limits` rebaselined. Run it after touching the overvote rule or the supplemental fields; the unit-level
+count is L; user decision Q18 keeps that manifest valid). Run it after touching the overvote rule or the supplemental fields; the unit-level
 coverage is `ScenarioRunnerTests`' R > 1 theory in `ElectionGuard.Perf.UnitTests`.
 
 ## Why the harness streams

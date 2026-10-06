@@ -31,8 +31,7 @@ public class SupplementalFieldSerializationTests
         var (manifest, manifestFile) = ElectionFixtureBuilder.CreateMinimalManifest(
             selectionLimit: 2,
             supplementalFields: kinds,
-            // Write-ins only where the count is declared (Manifest.Validate, open S5b question B,
-            // option (a)); valid under option (b) too, so not a pin.
+            // Write-ins only where the count is declared (Manifest.Validate, user decision Q19).
             writeInFieldCount: kinds.Contains(SupplementalFieldKind.WriteInCount) ? 2 : 0);
         var guardianSet = ElectionFixtureBuilder.CreateGuardianSet(manifestFile: manifestFile);
         var records = ElectionFixtureBuilder.CreateEncryptionRecord(guardianSet, manifest, manifestFile);

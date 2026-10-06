@@ -2,6 +2,7 @@ using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.Extensions;
 using ElectionGuard.Core.Models;
+using ElectionGuard.Core.UnitTests.Crypto;
 using ElectionGuard.Core.Verify;
 using ElectionGuard.Core.Verify.Ballot;
 using ElectionGuard.Testing.Common;
@@ -12,11 +13,12 @@ namespace ElectionGuard.Core.UnitTests.Verify.Ballot;
 
 /// <summary>
 /// Stages S5 and S5b: supplemental verifiable fields declared per contest (user decisions Q1-Q3 and
-/// Q11-Q16; G3, G8, G10, G22). Each field is encrypted under its own nonce xi_{i,j} and option index
+/// Q11-Q17; G3, G8, G10, G22). Each field is encrypted under its own nonce xi_{i,j} and option index
 /// j and carries a range proof that Verification 6 checks. With s the sum of the selections, w the
-/// write-in count and L the selection limit, Verification 7 checks the relations of Q15 over the
-/// fields the contest declares: (1) the selection-limit proof of s + w + L*overvote + undervote
-/// indicator in 0..L, (2) s + w + L*overvote + u = L, and (3) s + w + L*null in 0..L. The encryptor
+/// write-in count and L the selection limit, Verification 7 checks the relations of Q15 (and Q17)
+/// over the fields the contest declares: (1) the selection-limit proof of s + w + L*overvote +
+/// undervote indicator in 0..L, (2) s + w + L*overvote + u = L, and (3) s + w + L*overvote + L*null
+/// in 0..L, each L*overvote term only where the overvote indicator is declared. The encryptor
 /// derives every value from the selections and the write-ins used, with the overvote rule
 /// s + w &gt; L or an option &gt; R.
 /// </summary>
@@ -45,8 +47,7 @@ public class SupplementalFieldVerificationTests
     /// declaring <paramref name="kinds"/> (every kind by default) and offering
     /// <paramref name="writeInFields"/> write-in fields (by default 2 when the write-in count is
     /// declared and none otherwise: Manifest.Validate requires the count wherever write-ins are
-    /// offered, open S5b question B, option (a); the default is valid under option (b) too, so it
-    /// is not a pin).
+    /// offered, user decision Q19 "Reject manifest").
     /// </summary>
     private static Election Build(
         int selectionLimit = 1,
@@ -183,9 +184,10 @@ public class SupplementalFieldVerificationTests
             .Times(Declared(election, contest, SupplementalFieldKind.OvervoteIndicator, omit), election.L)
             .Times(contest.Field(SupplementalFieldKind.UndervoteDifferenceCount));
 
-    /// <summary>(3) s + w + L*null.</summary>
+    /// <summary>(3) s + w + L*overvote + L*null (Q17).</summary>
     private static Ciphertext NullVoteCiphertext(Election election, EncryptedContest contest, SupplementalFieldKind? omit = null) =>
         SumOfSelectionsAndWriteIns(election, contest, omit)
+            .Times(Declared(election, contest, SupplementalFieldKind.OvervoteIndicator, omit), election.L)
             .Times(Declared(election, contest, SupplementalFieldKind.NullVoteIndicator, omit), election.L);
 
     private static int[] LimitPrefix(Election election) => [election.Contest.Index];
@@ -384,11 +386,10 @@ public class SupplementalFieldVerificationTests
                     int expected = fields[bit];
 
                     // Q15 relation (2) has the overvote term only when the overvote indicator is
-                    // tracked; without it, an overvoted contest's u is L.
-                    // DECISION-DEPENDENT PIN (open S5b question A, option (a)). If the user picks
-                    // (b), Manifest.Validate rejects the 8 masks that declare the difference count
-                    // without the overvote indicator, so Build throws for them: skip those masks
-                    // (or assert that Build throws) and drop this branch.
+                    // tracked; without it, an overvoted contest's u is L. User decision Q18: with no
+                    // tracked overvote field there is no published overvote, the neutralized
+                    // contest is a blank one, and Manifest.Validate accepts u without the
+                    // indicator.
                     if (all[bit] == SupplementalFieldKind.UndervoteDifferenceCount && overvoted && !election.Declares(SupplementalFieldKind.OvervoteIndicator))
                     {
                         expected = election.L;
@@ -516,14 +517,39 @@ public class SupplementalFieldVerificationTests
             election.Contest.Index, FieldIndex(election.Contest, SupplementalFieldKind.UndervoteDifferenceCount));
     }
 
-    [Fact]
-    public void NullVoteProof_IsTheDocumentedRangeProof()
+    [Theory]
+    [InlineData(0, 0)]
+    [InlineData(2, 1)]
+    public void NullVoteProof_IsTheDocumentedRangeProof(int choice1, int choice2)
     {
         // Not spec-defined either (§3.3.9 p.39 names the check, not its format); this pins the
-        // documented format (Q15 (3)): c = H_q(H_I; 0x24, ind_c, ind_o(null), b(L, 4), A, B,
-        // a_0, b_0, ..., a_L, b_L) with (A, B) = prod over the selections, the write-in count and
-        // the null-vote indicator raised to L. A null vote, so the value is L.
+        // documented format (Q15 (3), with Q17's overvote term): c = H_q(H_I; 0x24, ind_c,
+        // ind_o(null), b(L, 4), A, B, a_0, b_0, ..., a_L, b_L) with (A, B) = prod over the
+        // selections, the write-in count, the overvote indicator raised to L and the null-vote
+        // indicator raised to L. A null vote (null 1) and an overvote (overvote 1): the value is L.
         var election = Build(selectionLimit: 2, optionSelectionLimit: 1);
+        var ballot = Encrypt(election, choice1, choice2);
+        var contest = ballot.Contests[0];
+        var nullVote = contest.Field(SupplementalFieldKind.NullVoteIndicator);
+        var overvote = contest.Field(SupplementalFieldKind.OvervoteIndicator);
+        var writeIns = contest.Field(SupplementalFieldKind.WriteInCount);
+        Assert.Equal(1, Plaintext(nullVote, election.K) + Plaintext(overvote, election.K));
+
+        var alpha = contest.Choices[0].Alpha * contest.Choices[1].Alpha * writeIns.Alpha * IntegerModP.PowModP(overvote.Alpha, election.L) * IntegerModP.PowModP(nullVote.Alpha, election.L);
+        var beta = contest.Choices[0].Beta * contest.Choices[1].Beta * writeIns.Beta * IntegerModP.PowModP(overvote.Beta, election.L) * IntegerModP.PowModP(nullVote.Beta, election.L);
+
+        Assert.Equal(election.L + 1, contest.NullVoteProof!.Length);
+        AssertChallenge(election, ballot, contest.NullVoteProof, alpha, beta, firstValue: 0,
+            election.Contest.Index, FieldIndex(election.Contest, SupplementalFieldKind.NullVoteIndicator), election.L);
+    }
+
+    [Fact]
+    public void NullVoteProof_WithoutAnOvervoteIndicator_HasNoOvervoteTerm()
+    {
+        // Q17 adds the overvote term only "when the overvote indicator is tracked"; otherwise (3)
+        // stays s + w + L*null. A null vote in a contest declaring every field but the overvote
+        // indicator.
+        var election = Build(selectionLimit: 2, optionSelectionLimit: 1, kinds: ElectionFixtureBuilder.AllSupplementalFields.Where(x => x != SupplementalFieldKind.OvervoteIndicator).ToList());
         var ballot = Encrypt(election, 0, 0);
         var contest = ballot.Contests[0];
         var nullVote = contest.Field(SupplementalFieldKind.NullVoteIndicator);
@@ -533,39 +559,50 @@ public class SupplementalFieldVerificationTests
         var alpha = contest.Choices[0].Alpha * contest.Choices[1].Alpha * writeIns.Alpha * IntegerModP.PowModP(nullVote.Alpha, election.L);
         var beta = contest.Choices[0].Beta * contest.Choices[1].Beta * writeIns.Beta * IntegerModP.PowModP(nullVote.Beta, election.L);
 
-        Assert.Equal(election.L + 1, contest.NullVoteProof!.Length);
-        AssertChallenge(election, ballot, contest.NullVoteProof, alpha, beta, firstValue: 0,
+        AssertChallenge(election, ballot, contest.NullVoteProof!, alpha, beta, firstValue: 0,
             election.Contest.Index, FieldIndex(election.Contest, SupplementalFieldKind.NullVoteIndicator), election.L);
+        VerifyAll(election, ballot);
     }
 
-    [Theory]
-    [InlineData(1)]
-    [InlineData(3)]
-    public void RelationCiphertexts_MatchTheirDefinitions_OnBothEngines(int selectionLimit)
+    /// <summary>
+    /// RangeProofChallenge.RelationCiphertexts computes the three relation ciphertexts in one
+    /// Montgomery representation; on each engine it must equal the plain products.
+    /// </summary>
+    private static void AssertRelationCiphertextsMatchTheirDefinitions(int selectionLimit, bool avx512)
     {
-        // RangeProofChallenge.RelationCiphertexts computes the three relation ciphertexts in one
-        // Montgomery representation; on both engines it must equal the plain products.
         var election = Build(selectionLimit: selectionLimit);
         var contest = Encrypt(election, 1, 0, 1).Contests[0];
         var limit = LimitCiphertext(election, contest);
         var difference = DifferenceCiphertext(election, contest);
         var nullVote = NullVoteCiphertext(election, contest);
 
-        foreach (bool allowAvx512 in new[] { true, false })
-        {
-            var result = new RangeProofChallenge(election.K, allowAvx512).RelationCiphertexts(
-                [contest.Choices[0], contest.Choices[1], contest.Field(SupplementalFieldKind.WriteInCount)],
-                contest.Field(SupplementalFieldKind.OvervoteIndicator),
-                contest.Field(SupplementalFieldKind.UndervoteIndicator),
-                contest.Field(SupplementalFieldKind.UndervoteDifferenceCount),
-                contest.Field(SupplementalFieldKind.NullVoteIndicator),
-                election.L);
+        var challenge = new RangeProofChallenge(election.K, allowAvx512: avx512);
+        Assert.Equal(avx512, challenge.UsesAvx512);
+        var result = challenge.RelationCiphertexts(
+            [contest.Choices[0], contest.Choices[1], contest.Field(SupplementalFieldKind.WriteInCount)],
+            contest.Field(SupplementalFieldKind.OvervoteIndicator),
+            contest.Field(SupplementalFieldKind.UndervoteIndicator),
+            contest.Field(SupplementalFieldKind.UndervoteDifferenceCount),
+            contest.Field(SupplementalFieldKind.NullVoteIndicator),
+            election.L);
 
-            Assert.Equal((limit.Alpha, limit.Beta), result.Limit);
-            Assert.Equal((difference.Alpha, difference.Beta), result.Difference!.Value);
-            Assert.Equal((nullVote.Alpha, nullVote.Beta), result.NullVote!.Value);
-        }
+        Assert.Equal((limit.Alpha, limit.Beta), result.Limit);
+        Assert.Equal((difference.Alpha, difference.Beta), result.Difference!.Value);
+        Assert.Equal((nullVote.Alpha, nullVote.Beta), result.NullVote!.Value);
     }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(3)]
+    public void RelationCiphertexts_MatchTheirDefinitions_OnTheScalarEngine(int selectionLimit) =>
+        AssertRelationCiphertextsMatchTheirDefinitions(selectionLimit, avx512: false);
+
+    /// <summary>Skipped where AVX-512 is unavailable (it would run the scalar engine again).</summary>
+    [Avx512Theory]
+    [InlineData(1)]
+    [InlineData(3)]
+    public void RelationCiphertexts_MatchTheirDefinitions_OnTheAvx512Engine(int selectionLimit) =>
+        AssertRelationCiphertextsMatchTheirDefinitions(selectionLimit, avx512: true);
 
     // --- Verification 6 over the supplemental fields (G22) -------------------------------------
 
@@ -745,7 +782,7 @@ public class SupplementalFieldVerificationTests
             int Value(SupplementalFieldKind kind) => Plaintext(contest.Field(kind), election.K);
             int total = Plaintext(contest.Choices[0], election.K) + Plaintext(contest.Choices[1], election.K) + Value(SupplementalFieldKind.WriteInCount);
             int limitValue = total + election.L * Value(SupplementalFieldKind.OvervoteIndicator) + Value(SupplementalFieldKind.UndervoteIndicator);
-            int nullValue = total + election.L * Value(SupplementalFieldKind.NullVoteIndicator);
+            int nullValue = total + election.L * Value(SupplementalFieldKind.OvervoteIndicator) + election.L * Value(SupplementalFieldKind.NullVoteIndicator);
 
             var reproved = WithContest(ballot, c => c with
             {
@@ -779,7 +816,7 @@ public class SupplementalFieldVerificationTests
         int total = Plaintext(contest.Choices[0], election.K) + Plaintext(contest.Choices[1], election.K) + Value(SupplementalFieldKind.WriteInCount);
         int limitValue = total + election.L * Value(SupplementalFieldKind.OvervoteIndicator) + Value(SupplementalFieldKind.UndervoteIndicator);
         int differenceValue = total + election.L * Value(SupplementalFieldKind.OvervoteIndicator) + Value(SupplementalFieldKind.UndervoteDifferenceCount);
-        int nullValue = total + election.L * Value(SupplementalFieldKind.NullVoteIndicator);
+        int nullValue = total + election.L * Value(SupplementalFieldKind.OvervoteIndicator) + election.L * Value(SupplementalFieldKind.NullVoteIndicator);
 
         var tamperedContest = contest with
         {
@@ -797,11 +834,32 @@ public class SupplementalFieldVerificationTests
         return tampered;
     }
 
+    /// <summary>
+    /// <paramref name="forged"/> with only its null-vote proof re-proved over S5b's relation
+    /// s + w + L*null, without the L*overvote term that user decision Q17 added: a valid proof of
+    /// a true statement, which only a verifier that includes the term rejects.
+    /// </summary>
+    private static EncryptedBallot WithoutOvervoteTermInNullVoteProof(Election election, EncryptedBallot forged) =>
+        WithContest(forged, c => c with
+        {
+            NullVoteProof = DeviceProof(
+                election,
+                forged,
+                NullVoteCiphertext(election, c, omit: SupplementalFieldKind.OvervoteIndicator),
+                Plaintext(c.Choices[0], election.K) + Plaintext(c.Choices[1], election.K)
+                    + Plaintext(c.Field(SupplementalFieldKind.WriteInCount), election.K)
+                    + election.L * Plaintext(c.Field(SupplementalFieldKind.NullVoteIndicator), election.K),
+                0,
+                election.L,
+                NullVotePrefix(election)),
+        });
+
     public static TheoryData<string> ForgeryCases() => new()
     {
         "overvote indicator set beside real selections",
         "null-vote indicator set beside a selection",
         "null-vote indicator set beside a write-in",
+        "null-vote indicator set on an overvote",
         "undervote difference ignores a selection",
         "undervote difference ignores the write-ins",
         "undervote difference L on an overvote",
@@ -810,6 +868,7 @@ public class SupplementalFieldVerificationTests
         "write-in count beside a full contest",
         "overvote indicator set beside real selections, proved without its term",
         "null-vote indicator set beside a selection, proved without its term",
+        "null-vote indicator set on an overvote, null-vote proof without the overvote term",
         "undervote indicator set on a full contest, proved without its term",
         "write-in count beside a full contest, proved without its term",
     };
@@ -828,9 +887,12 @@ public class SupplementalFieldVerificationTests
         {
             // (1) s + w + L*overvote + und = 2 + 2 > L.
             "overvote indicator set beside real selections" => ("Sum of challenge values", Forge(election, Encrypt(election, 1, 1), null, (SupplementalFieldKind.OvervoteIndicator, 1))),
-            // (3) s + w + L*null = 1 + 2 > L.
+            // (3) s + w + L*overvote + L*null = 1 + 0 + 2 > L.
             "null-vote indicator set beside a selection" => ("Null-vote proof", Forge(election, Encrypt(election, 1, 0), null, (SupplementalFieldKind.NullVoteIndicator, 1))),
             "null-vote indicator set beside a write-in" => ("Null-vote proof", Forge(election, Encrypt(election, 0, 0, 1), null, (SupplementalFieldKind.NullVoteIndicator, 1))),
+            // (3) on an overvote: 0 + L + L > L (Q17; p.39 and Q3: null is 0 on an overvote). Before
+            // Q17, (3) had no overvote term and this forgery verified. (1) and (2) give L.
+            "null-vote indicator set on an overvote" => ("Null-vote proof", Forge(election, Encrypt(election, 2, 1), null, (SupplementalFieldKind.NullVoteIndicator, 1))),
             // (2) s + w + L*overvote + u = 1 + 2 != L.
             "undervote difference ignores a selection" => ("Undervote difference", Forge(election, Encrypt(election, 1, 0), null, (SupplementalFieldKind.UndervoteDifferenceCount, 2))),
             "undervote difference ignores the write-ins" => ("Undervote difference", Forge(election, Encrypt(election, 1, 0, 1), null, (SupplementalFieldKind.UndervoteDifferenceCount, 1))),
@@ -844,6 +906,10 @@ public class SupplementalFieldVerificationTests
             // The same forgeries, each relation proved without the forged field's term.
             "overvote indicator set beside real selections, proved without its term" => ("Sum of challenge values", Forge(election, Encrypt(election, 1, 1), SupplementalFieldKind.OvervoteIndicator, (SupplementalFieldKind.OvervoteIndicator, 1))),
             "null-vote indicator set beside a selection, proved without its term" => ("Null-vote proof", Forge(election, Encrypt(election, 1, 0), SupplementalFieldKind.NullVoteIndicator, (SupplementalFieldKind.NullVoteIndicator, 1))),
+            // Only the null-vote proof leaves the overvote term out (Forge's omit would drop it
+            // from (1) too, which then fails first): 0 + L*null = L is a true statement, so only
+            // a verifier whose (3) includes L*overvote (Q17) rejects it.
+            "null-vote indicator set on an overvote, null-vote proof without the overvote term" => ("Null-vote proof", WithoutOvervoteTermInNullVoteProof(election, Forge(election, Encrypt(election, 2, 1), null, (SupplementalFieldKind.NullVoteIndicator, 1)))),
             "undervote indicator set on a full contest, proved without its term" => ("Sum of challenge values", Forge(election, Encrypt(election, 1, 1), SupplementalFieldKind.UndervoteIndicator, (SupplementalFieldKind.UndervoteIndicator, 1))),
             "write-in count beside a full contest, proved without its term" => ("Sum of challenge values", Forge(election, Encrypt(election, 2, 0), SupplementalFieldKind.WriteInCount, (SupplementalFieldKind.WriteInCount, 1))),
             _ => throw new ArgumentOutOfRangeException(nameof(forgery)),
@@ -859,7 +925,6 @@ public class SupplementalFieldVerificationTests
     {
         "undervote indicator 0 below the limit",
         "null-vote indicator 0 on a null vote",
-        "null-vote indicator 1 on an overvote",
         "null vote reported as an overvote",
     };
 
@@ -870,22 +935,18 @@ public class SupplementalFieldVerificationTests
         // The known gaps documented on AdherenceToVoteLimitsVerification, pinned so that the
         // documentation cannot drift from the code: a device that forges these values and re-proves
         // every relation passes Verifications 6 and 7. A case that starts failing here has been
-        // closed and moves to ForgeryCases.
+        // closed and moves to ForgeryCases, as "null-vote indicator 1 on an overvote" did with
+        // user decision Q17 ("null-vote indicator set on an overvote").
         var election = Build(selectionLimit: 2, optionSelectionLimit: 2);
         var tampered = forgery switch
         {
             // Q2 (no disjunctive proofs): (1) s + w + und = 1 + 0 is in 0..L.
             "undervote indicator 0 below the limit" => Forge(election, Encrypt(election, 1, 0), null, (SupplementalFieldKind.UndervoteIndicator, 0)),
-            // Q2: (3) s + w + L*null = 0 is in 0..L.
+            // Q2: (3) s + w + L*overvote + L*null = 0 is in 0..L.
             "null-vote indicator 0 on a null vote" => Forge(election, Encrypt(election, 0, 0), null, (SupplementalFieldKind.NullVoteIndicator, 0)),
-            // DECISION-DEPENDENT PIN (open S5b question C, option (a)): (3) has no overvote term, so
-            // on an overvote s + w + L*null = 0 + L is in 0..L although p.39 and Q3 say null is 0.
-            // If the user picks (b), (3) gains L*overvote (0 + L + L > L) and this case moves to
-            // ForgeryCases as a 7.D "Null-vote proof" failure.
-            "null-vote indicator 1 on an overvote" => Forge(election, Encrypt(election, 2, 1), null, (SupplementalFieldKind.NullVoteIndicator, 1)),
             // Inherent, as in the spec: the overvote indicator is only checked against s + w = 0, so
             // a null vote re-encoded as an encrypted overvote (overvote 1, everything else 0) gives
-            // (1) L, (2) L and (3) 0, all honest values for an overvote.
+            // (1) L, (2) L and (3) L, all honest values for an overvote.
             "null vote reported as an overvote" => Forge(
                 election,
                 Encrypt(election, 0, 0),
@@ -902,7 +963,6 @@ public class SupplementalFieldVerificationTests
         {
             "undervote indicator 0 below the limit" => (SupplementalFieldKind.UndervoteIndicator, 0),
             "null-vote indicator 0 on a null vote" => (SupplementalFieldKind.NullVoteIndicator, 0),
-            "null-vote indicator 1 on an overvote" => (SupplementalFieldKind.NullVoteIndicator, 1),
             _ => (SupplementalFieldKind.OvervoteIndicator, 1),
         };
         Assert.Equal(value, Plaintext(tampered.Contests[0].Field(kind), election.K));
