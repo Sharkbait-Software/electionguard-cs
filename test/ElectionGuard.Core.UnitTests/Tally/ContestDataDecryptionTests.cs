@@ -606,6 +606,7 @@ public class ContestDataDecryptionTests
         BallotStyleId = ballot.BallotStyleId,
         Contests = ballot.Contests.Select(c => c with { ContestData = data ?? c.ContestData }).ToList(),
         ConfirmationCode = ballot.ConfirmationCode,
+        EncryptedBallotNonce = ballot.EncryptedBallotNonce,
         Weight = ballot.Weight,
         Status = ballot.Status,
         DeviceId = ballot.DeviceId,

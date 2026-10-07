@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """ElectionGuard v2.1.0 hash-chain known-answer-test (KAT) oracle.
 
-Written from the ElectionGuard Design Specification v2.1.0 ONLY (sections 3.1-3.4, 3.6.2-3.6.6,
-4.1.4 and 5, and Verifications 10, 12 and 13), plus the user's recorded decisions Q5-Q7 and Q10 on spec
+Written from the ElectionGuard Design Specification v2.1.0 ONLY (sections 3.1-3.4, 3.6.2-3.6.7,
+4.1.4 and 5, and Verifications 10, 12, 13 and 14), plus the user's recorded decisions Q5-Q7, Q10 and Q20 on spec
 contradictions (docs/spec-compliance/2026-10-04-fix-progress.md), without reference to the C# implementation in this repository,
 so that its outputs can be used as independent expected values. Standard library only.
 
@@ -485,6 +485,68 @@ def contest_data_decryption_challenge(h_i, ind_c, c0, c1, c2, a, b_, beta):
     b1, layout = _layout(parts)
     assert len(b1) == 2117 + len(c1)
     return b1, H(h_i, b1), layout
+
+
+# ---------------------------------------------------------------------------------------------
+# §3.3.4 ballot nonce encryption (eqs. 34-38) and §3.6.7 its decryption (eqs. 107-111).
+# ---------------------------------------------------------------------------------------------
+
+# Eq. (36) Label and Context, §5.1.4 fixed-length form b(s, len(s)): raw UTF-8, no length prefix. The p.30 page
+# image has underscores ("ballot_nonce", "ballot_nonce_encrypt"); the PDF text extraction shows spaces. Unlike eq.
+# (66), the Context carries no index.
+BN_KDF_LABEL = "ballot_nonce".encode("utf-8")
+BN_KDF_CONTEXT = "ballot_nonce_encrypt".encode("utf-8")
+assert len(BN_KDF_LABEL) == 12 and len(BN_KDF_CONTEXT) == 20
+
+
+def ballot_nonce_secret_key(h_i, alpha_b, beta_b):
+    """Eq. (35): h = H(H_I; 0x22, alpha_B, beta_B); on decryption (p.52) h = H(H_I; 0x22, C_xiB,0, beta_B).
+    §5.5.3 table (p.75): B1 = 0x22 || b(alpha_B, 512) || b(beta_B, 512), len(B1) = 1025. No contest index."""
+    b1 = b"\x22" + b_p(alpha_b) + b_p(beta_b)
+    assert len(b1) == 1025
+    return b1, H(h_i, b1)
+
+
+def ballot_nonce_kdf_message():
+    """Eq. (36) HMAC message: 0x01 || Label || 0x00 || Context || 0x0100, read literally from the p.30 image:
+    a ONE-byte counter 0x01 and a TWO-byte output length 0x0100 = 256 bits, the same shape as eqs. (17)/(18)
+    (0x01/0x02 ... 0x0200) and footnote 34 ("counter in the first byte", "final two bytes"). This differs from
+    eq. (66), whose counter and length are 4 bytes each. Label = b("ballot_nonce", 12),
+    Context = b("ballot_nonce_encrypt", 20). Length 1 + 12 + 1 + 20 + 2 = 36."""
+    msg = b"\x01" + BN_KDF_LABEL + b"\x00" + BN_KDF_CONTEXT + b"\x01\x00"
+    assert len(msg) == 36
+    return msg
+
+
+def ballot_nonce_kdf_key(h):
+    """Eq. (36): k_1 = HMAC(h, msg). Returns (msg, k_1)."""
+    msg = ballot_nonce_kdf_message()
+    return msg, H(h, msg)
+
+
+def ballot_nonce_challenge(h_i, a_b, c0, c1):
+    """Eq. (38): c_B = H_q(H_I; 0x23, a_B, C_xiB,0, C_xiB,1).
+    §5.5.3 table (p.75): B1 = 0x23 || b(a_B, 512) || b(C_xiB,0, 512) || C_xiB,1, len(B1) = 1057."""
+    assert len(c1) == 32
+    parts = [(b"\x23", "0x23"), (b_p(a_b), "a_B"), (b_p(c0), "C_xiB,0"), (c1, "C_xiB,1")]
+    b1, layout = _layout(parts)
+    assert len(b1) == 1057
+    return b1, H(h_i, b1), layout
+
+
+def xor32(x, y):
+    assert len(x) == 32 and len(y) == 32
+    return bytes(a ^ b_ for a, b_ in zip(x, y))
+
+
+def small_dlog(base, target, bound=64):
+    """Eq. (109) follow-up: the small sigma with base^sigma = target (brute force; sigma is a small selection)."""
+    acc = 1
+    for s in range(bound + 1):
+        if acc == target:
+            return s
+        acc = acc * base % P
+    raise ValueError("no small discrete log")
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1201,6 +1263,260 @@ def build():
         cd_dec_summary.append({"ind_c": ind_c, "b_Lambda": e["b"], "U": U, "c_hex": hq(c), "v_hex": hq(v_resp),
                                "beta_hex": hp(beta)})
 
+    # --- §3.3.4 ballot nonce encryption, eqs. (34)-(38); §3.6.7 its decryption, eqs. (107)-(108) -----------
+    # Appended after every earlier family so existing vectors keep their positions.
+    # The encryption nonce xi_hat_B and the Schnorr nonce u_B are uniform random in Z_q per the spec (no
+    # derivation is defined), so they are fixed labelled inputs here. K_hat = g^7; the guardians' K_hat shares
+    # z_hat_i are the n=3,k=2 ones the contest data decryption vectors use (s_hat = 7).
+    sparse_id_b = int.from_bytes(bytes(range(0x81, 0xA1)), "big")
+    sparse_xi_b = int.from_bytes(bytes(range(0x21, 0x41)), "big")
+    H_I_sparse = selection_encryption_identifier_hash(H_E, sparse_id_b)[1]
+    H_I_q5 = his["id_B=q+5 (>= q, must not be reduced)"]
+    bn_ballots = {
+        "main_chain ballot": (int.from_bytes(bytes(range(1, 33)), "big"), H_I, xi_b_main),
+        "ballot id_B=q+5, xi_B=2^256-1 (>= q, not reduced)": (Q + 5, H_I_q5, 2**256 - 1),
+        "sparse ballot (ind_c 2 and 5)": (sparse_id_b, H_I_sparse, sparse_xi_b),
+    }
+    # (ballot, xi_hat_B, u_B, U)
+    bn_cases = [
+        ("main_chain ballot", 9001, 9101, [1, 3]),
+        ("main_chain ballot", Q - 1, 9102, [1, 2, 3]),
+        ("ballot id_B=q+5, xi_B=2^256-1 (>= q, not reduced)", 9003, Q - 2, [2, 3]),
+        ("sparse ballot (ind_c 2 and 5)", 9004, 9104, [1, 2]),
+    ]
+
+    def lbl(x):
+        return "q-1" if x == Q - 1 else "q-2" if x == Q - 2 else str(x)
+
+    bn_summary = []
+    bn_decrypted = {}  # ballot name -> xi_B recovered by the guardians (first case of that ballot)
+    for bname, xi_hat, u_b, U in bn_cases:
+        id_b, h_i_b, xi_b = bn_ballots[bname]
+        tag = f"{bname} xi_hat_B={lbl(xi_hat)}"
+        alpha_b, beta_b = pow(G, xi_hat, P), pow(K_hat, xi_hat, P)            # eq. (34)
+        b1_h, h_b = ballot_nonce_secret_key(h_i_b, alpha_b, beta_b)          # eq. (35)
+        msg, k1 = ballot_nonce_kdf_key(h_b)                                  # eq. (36)
+        C0, C1 = alpha_b, xor32(b(xi_b, 32), k1)                             # eq. (37)
+        a_b = pow(G, u_b, P)
+        b1_c, raw_c, layout_c = ballot_nonce_challenge(h_i_b, a_b, C0, C1)  # eq. (38)
+        c_b = int.from_bytes(raw_c, "big") % Q
+        v_b = (u_b - c_b * xi_hat) % Q
+        assert pow(G, v_b, P) * pow(C0, c_b, P) % P == a_b
+        common = {"H_I_hex": hx(h_i_b), "id_B_hex": hq(id_b), "K_hat": "g^7", "K_hat_hex": hp(K_hat),
+                  "xi_hat_B_hex": hq(xi_hat), "alpha_B_hex": hp(alpha_b), "beta_B_hex": hp(beta_b)}
+        vectors.append(vec("ballot_nonce_secret_key", "(35) h = H(H_I; 0x22, alpha_B, beta_B), "
+                           "(alpha_B, beta_B) = (g^xi_hat_B, K_hat^xi_hat_B) (34)",
+                           f"ballot nonce h {tag}", "H_I", h_i_b, b1_h, h_b,
+                           dict(common, derivation=f"H_I = eq. (32) with id_B; alpha_B = g^xi_hat_B, beta_B = "
+                                                   f"K_hat^xi_hat_B mod p, K_hat = g^7, xi_hat_B = {lbl(xi_hat)} (fixed; "
+                                                   f"the spec draws it uniformly from Z_q)"),
+                           1025, notes="§5.5.3 table (p.75): B1 = 0x22 || b(alpha_B, 512) || b(beta_B, 512), "
+                                       "len(B1) = 1025, B0 = H_I; matches eq. (35). No contest or option index."))
+        vectors.append(vec("ballot_nonce_kdf_key",
+                           "(36) k_1 = HMAC(h, 0x01 || Label || 0x00 || Context || 0x0100), "
+                           "Label = b(\"ballot_nonce\", 12), Context = b(\"ballot_nonce_encrypt\", 20)",
+                           f"ballot nonce k_1 {tag}", "h", h_b, msg, k1,
+                           {"h_hex": hx(h_b), "Label_hex": hx(BN_KDF_LABEL), "Context_hex": hx(BN_KDF_CONTEXT),
+                            "derivation": "h = the ballot_nonce_secret_key vector with the same name suffix"},
+                           None,
+                           notes="Not in the §5.5 tables (an HMAC, not a domain-separated H call). The message is "
+                                 "always the same 36 bytes: one-byte counter 0x01, Label (12), 0x00, Context (20), "
+                                 "two-byte length 0x0100 = 256 bits, read literally from p.30 (the shape of eqs. "
+                                 "17/18, footnote 34). Unlike eq. (66) the counter and length are NOT 4-byte fields "
+                                 "and the Context has no index. Underscores per the p.30 page image."))
+        v = vec("ballot_nonce_encryption_challenge",
+                "(38) c_B = H_q(H_I; 0x23, a_B, C_xiB,0, C_xiB,1), C_xiB,0 = g^xi_hat_B, "
+                "C_xiB,1 = b(xi_B, 32) xor k_1 (37), C_xiB,2 = (c_B, v_B), v_B = (u_B - c_B*xi_hat_B) mod q",
+                f"ballot nonce C {tag}", "H_I", h_i_b, b1_c, raw_c,
+                dict(common, xi_B_hex=hq(xi_b), xi_B_ge_q=xi_b >= Q, h_hex=hx(h_b), k_1_hex=hx(k1),
+                     u_B_hex=hq(u_b), a_B_hex=hp(a_b),
+                     derivation=f"h = eq. (35), k_1 = eq. (36); xi_B is a 256-bit value encoded b(xi_B, 32), never "
+                                f"reduced mod q; a_B = g^u_B with u_B = {lbl(u_b)} fixed"),
+                1057, hq_out=True,
+                notes="§5.5.3 table (p.75): B1 = 0x23 || b(a_B, 512) || b(C_xiB,0, 512) || C_xiB,1, len(B1) = 1057 "
+                      "= 1 + 512 + 512 + 32, B0 = H_I; matches eq. (38). ciphertext gives C0, C1 and C2 = (c_B, v_B); "
+                      "C2_hex is b(c_B, 32) || b(v_B, 32) (Q20 order). C_xiB is hashed nowhere else (not in eqs. 70 "
+                      "or 71), so the C2 byte order is serialization only. The script checks g^v_B * C0^c_B = a_B.")
+        v["ciphertext"] = {"C0_hex": hp(C0), "C1_hex": hx(C1), "c_hex": hq(c_b), "v_hex": hq(v_b),
+                           "C2_hex": hx(b_c2(c_b, v_b))}
+        v["b1_layout"] = layout_c
+        vectors.append(v)
+
+        # §3.6.7 p.52: each guardian checks the Schnorr proof, then eqs. (107), (108), (35), (36), xi_B = C1 xor k1.
+        a_chk = pow(G, v_b, P) * pow(C0, c_b, P) % P
+        assert ballot_nonce_challenge(h_i_b, a_chk, C0, C1)[1] == raw_c, "p.52 Schnorr check of C_xiB,2"
+        w = {i: lagrange_coefficient(i, U) for i in U}
+        m_i = {i: pow(C0, z_hat[i], P) for i in U}                          # eq. (107)
+        beta_dec = 1
+        for i in U:                                                         # eq. (108)
+            beta_dec = beta_dec * pow(m_i[i], w[i], P) % P
+        assert beta_dec == beta_b == pow(K_hat, xi_hat, P), "beta_B = prod m_i^w_i must equal K_hat^xi_hat_B"
+        b1_hd, h_dec = ballot_nonce_secret_key(h_i_b, C0, beta_dec)
+        assert h_dec == h_b
+        k1_dec = ballot_nonce_kdf_key(h_dec)[1]
+        xi_b_dec = int.from_bytes(xor32(C1, k1_dec), "big")
+        assert xi_b_dec == xi_b, "decrypted ballot nonce must equal xi_B"
+        bn_decrypted.setdefault(bname, xi_b_dec)
+        vectors.append(vec("ballot_nonce_decryption_secret_key",
+                           "(107) m_i = C_xiB,0^z_hat_i, (108) beta_B = prod m_i^w_i, h = H(H_I; 0x22, C_xiB,0, beta_B) "
+                           "(35), k_1 (36), xi_B = C_xiB,1 xor k_1",
+                           f"ballot nonce decryption h {tag} U={U}", "H_I", h_i_b, b1_hd, h_dec,
+                           {"H_I_hex": hx(h_i_b), "U": U, "C0_hex": hp(C0), "C1_hex": hx(C1),
+                            "C2_hex": hx(b_c2(c_b, v_b)),
+                            "guardians": [{"i": i, "w_i_hex": hq(w[i]), "z_hat_i_hex": hq(z_hat[i]),
+                                           "m_i_hex": hp(m_i[i])} for i in U],
+                            "beta_B_hex": hp(beta_dec),
+                            "decryption": {"k_1_hex": hx(k1_dec), "xi_B_hex": hq(xi_b_dec)},
+                            "derivation": "C_xiB = the ballot_nonce_encryption_challenge vector with the same name "
+                                          "suffix; z_hat_i = the n=3,k=2 K_hat shares (contest_data.z_hat_i); "
+                                          "w_i per eq. (85) over U"},
+                           1025,
+                           notes="Same B1 layout as eq. (35) (table p.75, len 1025) with (C_xiB,0, beta_B) in place of "
+                                 "(alpha_B, beta_B); the script asserts beta_B = K_hat^xi_hat_B, that h equals the "
+                                 "encryption-side h, and that C1 xor k_1 = b(xi_B, 32). The spec defines NO proof of "
+                                 "correct decryption for the ballot nonce (no commitment or challenge hash, no §5.5.4 "
+                                 "row) and says xi_B should not be published; the released xi_{i,j} / xi are checked "
+                                 "by Verification 13 instead."))
+        bn_summary.append({"ballot": bname, "H_I_hex": hx(h_i_b), "xi_B_hex": hq(xi_b), "xi_hat_B_hex": hq(xi_hat),
+                           "U": U, "C0_hex": hp(C0), "C1_hex": hx(C1), "c_B_hex": hq(c_b), "v_B_hex": hq(v_b),
+                           "beta_B_hex": hp(beta_dec)})
+
+    # --- §3.6.7 decryption with released nonces (eqs. 109-111) and Verification 13 ---------------------------
+    # From the guardians' decrypted xi_B, the released nonces are xi_{i,j} (eq. 33) and xi (eq. 64); the ballot
+    # nonce itself is not released. Two challenged ballots:
+    #   main_chain ballot: contests 1, 2, 3 with contest data cd[1..3] (the ballot whose chi and H_C are the
+    #     earlier contest_hash_with_contest_data / confirmation_code vectors; Verification 13 must reproduce them).
+    #   sparse ballot: contests ind_c = 2 (3 options, no contest data) and ind_c = 5 (1 option + contest data,
+    #     b_Lambda = 2); positions 1, 2 differ from ind_c, so a consumer that hashes the position fails.
+    ch_ballots = []
+    # Recorded ciphertexts of the main ballot (what the device produced): the earlier vectors' values.
+    main_rec = {"name": "main_chain ballot", "H_I": H_I, "contests": {}, "B_C": bc_none,
+                "B_C_desc": "no chaining (73): 0x00000000 || main_chain.H_DI", "H_C_expected": hc_cd}
+    for l, votes in cd_contests.items():
+        e = cd[l]
+        main_rec["contests"][l] = {
+            "votes": votes,
+            "cts": [(pow(G, nonces[(l, j)], P), pow(K, s_ + nonces[(l, j)], P)) for j, s_ in enumerate(votes, 1)],
+            "data": {"C0": e["C0"], "C1": e["C1"], "C2": (e["c"], e["v"]), "D": e["D"], "b": e["b"], "s": e["s"]},
+            "chi_expected": chis_cd[l]}
+    ch_ballots.append(main_rec)
+
+    # Sparse ballot: encrypt it here (eqs. 31, 33, 64-69) under its own H_I and xi_B.
+    sp_rec = {"name": "sparse ballot (ind_c 2 and 5)", "H_I": H_I_sparse, "contests": {},
+              "B_C": b_c_simple(h0), "B_C_desc": "simple chaining (76): 0x00000001 || H_0 (chain_init vector)"}
+    for l, votes, data in ((2, [0, 1, 0], None), (5, [1], ("Write-in: Ada Lovelace (Countess)", 2, 5105))):
+        cts = []
+        for j, s_ in enumerate(votes, 1):
+            xi_lj = int.from_bytes(encryption_nonce(H_I_sparse, l, j, sparse_xi_b)[1], "big") % Q
+            cts.append((pow(G, xi_lj, P), pow(K, s_ + xi_lj, P)))
+        rec = {"votes": votes, "cts": cts, "data": None}
+        if data:
+            s_, b_lambda, u_s = data
+            D = encode_contest_data_string(s_, b_lambda)
+            xi = int.from_bytes(contest_data_nonce(H_I_sparse, l, sparse_xi_b)[1], "big") % Q
+            alpha, beta = pow(G, xi, P), pow(K_hat, xi, P)
+            h = contest_data_secret_key(H_I_sparse, l, alpha, beta)[1]
+            keys = [k_ for _, k_ in contest_data_kdf_keys(h, l, b_lambda)]
+            C0_, C1_ = alpha, xor_blocks(D, keys)
+            c_s = int.from_bytes(contest_data_challenge(H_I_sparse, l, pow(G, u_s, P), C0_, C1_)[1], "big") % Q
+            v_s = (u_s - c_s * xi) % Q
+            rec["data"] = {"C0": C0_, "C1": C1_, "C2": (c_s, v_s), "D": D, "b": b_lambda, "s": s_, "u": u_s}
+        sp_rec["contests"][l] = rec
+    ch_ballots.append(sp_rec)
+
+    v13_summary = []
+    for rec in ch_ballots:
+        bname, h_i_b = rec["name"], rec["H_I"]
+        xi_b_dec = bn_decrypted[bname]          # from the ballot nonce decryption above
+        released, chis_v13 = [], []
+        for l in sorted(rec["contests"]):        # manifest order = ascending ind_c
+            con = rec["contests"][l]
+            cts13, sel = [], []
+            for j, s_ in enumerate(con["votes"], 1):
+                xi_lj = int.from_bytes(encryption_nonce(h_i_b, l, j, xi_b_dec)[1], "big") % Q   # eq. (33)
+                a13, b13 = pow(G, xi_lj, P), pow(K, s_ + xi_lj, P)                             # (13.1), (13.2)
+                assert (a13, b13) == con["cts"][j - 1], "13.1/13.2 must reproduce the recorded encryption"
+                K_sigma = b13 * pow(pow(K, xi_lj, P), -1, P) % P                                # eq. (109)
+                assert small_dlog(K, K_sigma) == s_
+                cts13.append((a13, b13))
+                sel.append({"ind_o": j, "xi_hex": hq(xi_lj), "sigma": s_, "alpha_hex": hp(a13), "beta_hex": hp(b13),
+                            "K_sigma_hex": hp(K_sigma)})
+            rel = {"ind_c": l, "selections": sel}
+            d = con["data"]
+            if d is None:
+                b1, layout = _layout([(b"\x28", "0x28"), (b_small(l), "ind_c")]
+                                     + [x for j, (a_, bb) in enumerate(cts13, 1)
+                                        for x in ((b_p(a_), f"alpha_{j}"), (b_p(bb), f"beta_{j}"))])
+                chi = H(h_i_b, b1)
+                assert (b1, chi) == contest_hash(h_i_b, l, cts13)
+                tl = None
+                cnote = ("No contest data on this contest: eq. (70) without C0, C1, C2, len(B1) = 5 + 2m*512 (the "
+                         "table prints only the with-contest-data length).")
+            else:
+                xi = int.from_bytes(contest_data_nonce(h_i_b, l, xi_b_dec)[1], "big") % Q    # eq. (64)
+                alpha, beta = pow(G, xi, P), pow(K_hat, xi, P)                               # (13.4), (13.5) / (110)
+                assert alpha == d["C0"]
+                b1_h, h = contest_data_secret_key(h_i_b, l, alpha, beta)                     # (13.6)
+                kdf = contest_data_kdf_keys(h, l, d["b"])                                    # (13.7), 1-based (Q6)
+                keys = [k_ for _, k_ in kdf]
+                assert xor_blocks(d["D"], keys) == d["C1"], "13.A"
+                assert xor_blocks(d["C1"], keys) == d["D"], "eq. (111)"
+                rel["contest_data_xi_hex"] = hq(xi)
+                vectors.append(vec("challenged_ballot_contest_data_secret_key",
+                                   "Verification (13.4)-(13.6): alpha = g^xi, beta = K_hat^xi, "
+                                   "h = H(H_I; 0x26, ind_c(Lambda), alpha, beta) [eq. (65)]",
+                                   f"V13 h {bname} ind_c={l}", "H_I", h_i_b, b1_h, h,
+                                   {"H_I_hex": hx(h_i_b), "ind_c": l, "released_xi_hex": hq(xi),
+                                    "alpha_hex": hp(alpha), "beta_hex": hp(beta),
+                                    "derivation": "xi = eq. (64) from the decrypted xi_B (released, not xi_B itself)"},
+                                   1029, notes="§5.5.3 table (p.76) row for eq. (65): len(B1) = 1029."))
+                for i, (msg, k_i) in enumerate(kdf, 1):
+                    vectors.append(vec("challenged_ballot_contest_data_kdf_key",
+                                       "Verification (13.7) k_l = HMAC(h, b(l, 4) || Label || 0x00 || Context || "
+                                       "b(b_Lambda * 256, 4)) [eq. (66)], l 1-based (Q6)",
+                                       f"V13 k_{i} {bname} ind_c={l} b_Lambda={d['b']}", "h", h, msg, k_i,
+                                       {"h_hex": hx(h), "l": i, "ind_c": l, "b_Lambda": d["b"]}, None,
+                                       notes="13.7 prints 0 <= l < b_Lambda; user decision Q6 makes the counter "
+                                             "1-based (1 <= l <= b_Lambda) as in eqs. (66), (104) and 12.4. 38-byte "
+                                             "message; not a §5.5 table entry."))
+                b1, chi, layout = contest_hash_with_data(h_i_b, l, cts13, d["C0"], d["C1"], d["C2"])
+                tl = 69 + (2 * len(cts13) + 1) * 512 + 32 * d["b"]
+                cnote = ("§5.5.3 table (p.76) eq. (70): len(B1) = 69 + (2m + 1)*512 + 32*b_Lambda; C2 = b(c, 32) || "
+                         "b(v, 32) (Q20).")
+                rel["contest_data"] = {"C0_hex": hp(d["C0"]), "C1_hex": hx(d["C1"]), "C2_hex": hx(b_c2(*d["C2"])),
+                                       "b_Lambda": d["b"], "D_hex": hx(d["D"]), "contest_data_string": d["s"],
+                                       "k_hex": [hx(k_) for k_ in keys]}
+            if "chi_expected" in con:
+                assert chi == con["chi_expected"], "13.3 must reproduce the ballot's contest hash"
+            chis_v13.append(chi)
+            vv = vec("challenged_ballot_contest_hash",
+                     "Verification (13.3) chi_i = H(H_I; 0x28, ind_c(Lambda_i), alpha_i,1, beta_i,1, ..., C0, C1, C2) "
+                     "[eq. (70)], (alpha, beta) recomputed by (13.1), (13.2)",
+                     f"V13 chi {bname} ind_c={l}", "H_I", h_i_b, b1, chi,
+                     {"H_I_hex": hx(h_i_b), "ind_c": l, "position_on_ballot": len(chis_v13),
+                      "released": rel,
+                      "derivation": "xi_{i,j} = eq. (33) and xi = eq. (64) from the guardians' decrypted xi_B "
+                                    "(ballot_nonce_decryption_secret_key); alpha = g^xi_{i,j}, beta = K^(sigma + xi_{i,j}), "
+                                    "K = g^5"},
+                     tl, notes=cnote + " The field after 0x28 is ind_c(Lambda_i) (13.3), i.e. eq. (70)'s l, not the "
+                                       "contest's position on the ballot.")
+            vv["b1_layout"] = layout
+            vectors.append(vv)
+        b1, hc = confirmation_code(h_i_b, chis_v13, rec["B_C"])                               # (13.B)
+        if "H_C_expected" in rec:
+            assert hc == rec["H_C_expected"], "13.B must reproduce the ballot's confirmation code"
+        vectors.append(vec("challenged_ballot_confirmation_code",
+                           "Verification (13.B) H_C = H(H_I; 0x29, chi_1, ..., chi_mB, B_C) [eq. (71)]",
+                           f"V13 H_C {bname}", "H_I", h_i_b, b1, hc,
+                           {"H_I_hex": hx(h_i_b), "contest_hashes_hex": [hx(c_) for c_ in chis_v13],
+                            "B_C_hex": hx(rec["B_C"]), "B_C": rec["B_C_desc"],
+                            "derivation": "contest hashes = this ballot's challenged_ballot_contest_hash vectors, in "
+                                          "manifest (ascending ind_c) order"},
+                           37 + 32 * len(chis_v13)))
+        v13_summary.append({"ballot": bname, "H_I_hex": hx(h_i_b), "H_C_hex": hx(hc),
+                            "contests": sorted(rec["contests"]),
+                            "reproduces_earlier_vectors": "H_C_expected" in rec})
+
     # The Q7 helper's rejection boundary (not spec; recorded, not a hash vector).
     cd_rejections = []
     for b_lambda, s in ((1, full1 + "!"), (3, full3 + "x"), (1, "Write-in: Grace Hopper (US)é")):
@@ -1253,6 +1569,23 @@ def build():
                                     "q-63), ahat_{i,1} = 100i + 15; s_hat = 7",
             "z_hat_i": [{"i": i, "hex": hq(z_hat[i])} for i in sorted(z_hat)],
             "decryption_proofs": cd_dec_summary,
+        },
+        "challenged_ballots": {
+            "election": "main_chain (H_E = main_chain.H_E_hex, K = g^5, K_hat = g^7); guardian K_hat shares = "
+                        "contest_data.z_hat_i",
+            "ballot_nonce_kdf": {"Label_hex": hx(BN_KDF_LABEL), "Label": "ballot_nonce",
+                                 "Context_hex": hx(BN_KDF_CONTEXT), "Context": "ballot_nonce_encrypt",
+                                 "message_hex": hx(ballot_nonce_kdf_message()),
+                                 "message": "0x01 || Label || 0x00 || Context || 0x0100 (36 bytes; 1-byte counter, "
+                                            "2-byte bit length, as eqs. 17/18)"},
+            "C2_encoding": "b(c_B, 32) || b(v_B, 32) (Q20 order); C_xiB is not hashed into any contest hash or "
+                           "confirmation code",
+            "sparse_ballot": {"id_B_hex": hq(sparse_id_b), "H_I_hex": hx(H_I_sparse), "xi_B_hex": hq(sparse_xi_b)},
+            "ballot_nonce_encryptions": bn_summary,
+            "no_decryption_proof": "§3.6.7 defines no NIZK proof (no commitment/challenge hash, no §5.5.4 row) for the "
+                                   "decryption of the ballot nonce; correctness rests on Verification 13 over the "
+                                   "released nonces. Verification 14 computes no hash.",
+            "verification_13": v13_summary,
         },
     }
     return doc

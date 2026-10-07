@@ -154,6 +154,7 @@ public class CanonicalOrderTests
         BallotStyleId = ballot.BallotStyleId,
         Contests = contests,
         ConfirmationCode = confirmationCode,
+        EncryptedBallotNonce = ballot.EncryptedBallotNonce,
         Weight = ballot.Weight,
         Status = ballot.Status,
         DeviceId = ballot.DeviceId,

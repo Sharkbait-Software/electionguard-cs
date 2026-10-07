@@ -122,6 +122,7 @@ public class ProtobufEncryptedBallotSerializerTests
             BallotStyleId = realBallot.BallotStyleId,
             DeviceId = realBallot.DeviceId,
             ConfirmationCode = realBallot.ConfirmationCode,
+            EncryptedBallotNonce = realBallot.EncryptedBallotNonce,
             Weight = realBallot.Weight,
             Status = realBallot.Status,
             Contests = new List<EncryptedContest> { contestWithNoChoices },
@@ -178,6 +179,12 @@ public class ProtobufEncryptedBallotSerializerTests
         // plan, since ChainingField itself is a transient input to BallotEncryptor.Encrypt and is
         // not a stored property of EncryptedBallot.
         Assert.Equal((byte[])original.ConfirmationCode, dto.ConfirmationCode);
+        // The encrypted ballot nonce C_ξB (§3.3.4, protobuf ballot field 10).
+        Assert.NotNull(dto.EncryptedBallotNonce);
+        Assert.Equal(original.EncryptedBallotNonce.C0.ToByteArray(), dto.EncryptedBallotNonce!.C0);
+        Assert.Equal(original.EncryptedBallotNonce.C1, dto.EncryptedBallotNonce.C1);
+        Assert.Equal((byte[])original.EncryptedBallotNonce.Challenge, dto.EncryptedBallotNonce.Challenge);
+        Assert.Equal((byte[])original.EncryptedBallotNonce.Response, dto.EncryptedBallotNonce.Response);
 
         var originalContest = original.Contests.Single();
         var dtoContest = dto.Contests.Single();

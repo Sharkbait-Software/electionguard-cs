@@ -182,6 +182,14 @@ public partial class KnownAnswerTests
             "contest_hash_with_contest_data",
             "contest_data_decryption_commitment_hash",
             "contest_data_decryption_challenge",
+            "ballot_nonce_secret_key",
+            "ballot_nonce_kdf_key",
+            "ballot_nonce_encryption_challenge",
+            "ballot_nonce_decryption_secret_key",
+            "challenged_ballot_contest_data_secret_key",
+            "challenged_ballot_contest_data_kdf_key",
+            "challenged_ballot_contest_hash",
+            "challenged_ballot_confirmation_code",
         };
 
         var families = AllVectors.Select(x => x.GetProperty("family").GetString()!).ToHashSet();

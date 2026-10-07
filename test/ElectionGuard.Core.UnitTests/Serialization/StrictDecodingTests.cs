@@ -124,7 +124,7 @@ public class StrictDecodingTests
 
     /// <summary>
     /// A ballot that has every strictly decoded site, contest data included: the encryptor emits
-    /// <see cref="EncryptedData"/> only for a contest that has some.
+    /// <see cref="EncryptedContestData"/> only for a contest that has some.
     /// </summary>
     private static readonly Lazy<EncryptedBallot> Ballot = new(() =>
     {
@@ -138,12 +138,12 @@ public class StrictDecodingTests
     });
 
     /// <summary>Each non-canonical encoding, applied to a ballot's alpha, a response, or id_B.</summary>
-    public static TheoryData<string> JsonTamperings() => new() { "alpha padded to 513 bytes", "alpha = p", "response = q", "response padded to 33 bytes", "id_B of 31 bytes", "contest data C0 = p" };
+    public static TheoryData<string> JsonTamperings() => new() { "alpha padded to 513 bytes", "alpha = p", "response = q", "response padded to 33 bytes", "id_B of 31 bytes", "contest data C0 = p", "ballot nonce C0 = p" };
 
     private static byte[] Tamper(string tampering, byte[] original) => tampering switch
     {
         "alpha padded to 513 bytes" or "response padded to 33 bytes" => [0, .. original],
-        "alpha = p" or "contest data C0 = p" => Encode(EGParameters.P, 512),
+        "alpha = p" or "contest data C0 = p" or "ballot nonce C0 = p" => Encode(EGParameters.P, 512),
         "response = q" => Encode(EGParameters.Q, 32),
         "id_B of 31 bytes" => original[1..],
         _ => throw new ArgumentOutOfRangeException(nameof(tampering)),
@@ -167,13 +167,14 @@ public class StrictDecodingTests
             "id_B of 31 bytes" => json,
             "alpha padded to 513 bytes" or "alpha = p" => json["contests"]![0]!["choices"]![0]!,
             "contest data C0 = p" => json["contests"]![0]!["contestData"]!,
+            "ballot nonce C0 = p" => json["encryptedBallotNonce"]!,
             _ => json["contests"]![0]!["choices"]![0]!["proof"]![0]!,
         };
         string property = tampering switch
         {
             "id_B of 31 bytes" => "selectionEncryptionIdentifier",
             "alpha padded to 513 bytes" or "alpha = p" => "alpha",
-            "contest data C0 = p" => "c0",
+            "contest data C0 = p" or "ballot nonce C0 = p" => "c0",
             _ => "v",
         };
         byte[] bytes = Convert.FromBase64String(owner[property]!.GetValue<string>());
@@ -246,6 +247,22 @@ public class StrictDecodingTests
         ConfirmationCode = dto.ConfirmationCode,
         Weight = dto.Weight,
         Status = dto.Status,
+        EncryptedBallotNonce = dto.EncryptedBallotNonce,
+    };
+
+    /// <summary>The ballot with its encrypted ballot nonce C_ξB replaced by <paramref name="change"/>'s result.</summary>
+    private static ProtobufEncryptedBallot WithBallotNonce(ProtobufEncryptedBallot dto, Func<ProtobufEncryptedData, ProtobufEncryptedData?> change) => new()
+    {
+        Id = dto.Id,
+        SelectionEncryptionIdentifier = dto.SelectionEncryptionIdentifier,
+        SelectionEncryptionIdentifierHash = dto.SelectionEncryptionIdentifierHash,
+        BallotStyleId = dto.BallotStyleId,
+        DeviceId = dto.DeviceId,
+        Contests = dto.Contests,
+        ConfirmationCode = dto.ConfirmationCode,
+        Weight = dto.Weight,
+        Status = dto.Status,
+        EncryptedBallotNonce = change(dto.EncryptedBallotNonce!),
     };
 
     private static ProtobufEncryptedData WithContestData(ProtobufEncryptedData data, byte[]? challenge = null, byte[]? response = null, byte[]? c0 = null, Func<byte[], byte[]?>? c1 = null) => new()
@@ -283,6 +300,16 @@ public class StrictDecodingTests
             ["undervote difference proof response = q"] = dto => WithFirstContest(dto, c => c with { UndervoteDifferenceProof = WithFirstProof(c.UndervoteDifferenceProof!, p => p with { Response = NotBelowQ }) }),
             ["null-vote proof challenge = q"] = dto => WithFirstContest(dto, c => c with { NullVoteProof = WithFirstProof(c.NullVoteProof!, p => p with { Challenge = NotBelowQ }) }),
             ["null-vote proof response = q"] = dto => WithFirstContest(dto, c => c with { NullVoteProof = WithFirstProof(c.NullVoteProof!, p => p with { Response = NotBelowQ }) }),
+            // S7: the encrypted ballot nonce C_ξB (§3.3.4) is required; C_ξB,0 is an element of Z_p,
+            // decoded strictly, C_ξB,1 exactly 32 bytes (eq. 37), c_B and v_B canonical in Z_q.
+            ["ballot nonce missing"] = dto => WithBallotNonce(dto, _ => null),
+            ["ballot nonce C0 = p"] = dto => WithBallotNonce(dto, n => WithContestData(n, c0: NotBelowP)),
+            ["ballot nonce C0 padded to 513 bytes"] = dto => WithBallotNonce(dto, n => WithContestData(n, c0: [0, .. n.C0])),
+            ["ballot nonce C1 of 31 bytes"] = dto => WithBallotNonce(dto, n => WithContestData(n, c1: x => x[1..])),
+            ["ballot nonce C1 of 33 bytes"] = dto => WithBallotNonce(dto, n => WithContestData(n, c1: x => [.. x, 0])),
+            ["ballot nonce C1 missing"] = dto => WithBallotNonce(dto, n => WithContestData(n, c1: _ => null)),
+            ["ballot nonce challenge = q"] = dto => WithBallotNonce(dto, n => WithContestData(n, challenge: NotBelowQ)),
+            ["ballot nonce response = q"] = dto => WithBallotNonce(dto, n => WithContestData(n, response: NotBelowQ)),
             ["supplemental field alpha padded to 513 bytes"] = dto => WithFirstContest(dto, c => c with
             {
                 SupplementalFields = [c.SupplementalFields![0] with { Alpha = [0, .. c.SupplementalFields[0].Alpha] }, .. c.SupplementalFields.Skip(1)],
@@ -346,6 +373,11 @@ public class StrictDecodingTests
 
         using var tampered = new MemoryStream();
         ProtoBuf.Serializer.Serialize(tampered, ProtobufSites[site](ReadDto(original)));
+        if (site == "ballot nonce missing")
+        {
+            Assert.Null(ReadDto(tampered).EncryptedBallotNonce);
+        }
+
         if (site == "id_B missing")
         {
             // What the decoder is handed for a field absent from the wire: null, not an empty array.

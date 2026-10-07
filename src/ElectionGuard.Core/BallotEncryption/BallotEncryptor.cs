@@ -32,6 +32,13 @@ public class BallotEncryptor
     internal Func<int, IntegerModQ>? ContestDataProofNonceForTesting { get; set; }
 
     /// <summary>
+    /// Test seam: supplies ξ-hat_B and u_B of the ballot nonce encryption (eqs. 34, 38) in place of
+    /// fresh random values. Lets the known-answer tests reproduce the oracle's C_ξB. Null outside
+    /// tests.
+    /// </summary>
+    internal Func<(IntegerModQ EncryptionNonce, IntegerModQ ProofNonce)>? BallotNonceEncryptionNoncesForTesting { get; set; }
+
+    /// <summary>
     /// Opt in to the precomputed power tables of Note 3.5.
     ///
     /// The note observes that every exponentiation performed while encrypting and proving ballot
@@ -84,7 +91,16 @@ public class BallotEncryptor
 
         var selectionEncryptionIdentifierHash = new SelectionEncryptionIdentifierHash(_encryptionRecord.ExtendedBaseHash, selectionEncryptionIdentifier);
 
-        var encryptedBallotNonce = BallotNonceEncryption.Encrypt(ballotNonce, selectionEncryptionIdentifierHash, _encryptionRecord.ElectionPublicKeys.OtherBallotDataEncryptionKey);
+        // §3.3.4: "every ElectionGuard ballot contains an encryption of the ballot nonce" to K-hat,
+        // which is how a challenged ballot is opened (§3.6.7). It is not hashed into any contest
+        // hash or the confirmation code (eqs. 70, 71).
+        var testNonces = BallotNonceEncryptionNoncesForTesting?.Invoke();
+        var encryptedBallotNonce = BallotNonceEncryption.Encrypt(
+            ballotNonce,
+            selectionEncryptionIdentifierHash,
+            _encryptionRecord.ElectionPublicKeys.OtherBallotDataEncryptionKey,
+            testNonces?.EncryptionNonce,
+            testNonces?.ProofNonce);
 
         // §3.4.2 eq. (71): the contest hashes enter the confirmation code in the order of the
         // contests in the manifest, whatever order the plaintext ballot lists them in. The encrypted
@@ -117,6 +133,7 @@ public class BallotEncryptor
             SelectionEncryptionIdentifierHash = selectionEncryptionIdentifierHash,
             Contests = encryptedContests,
             ConfirmationCode = confirmationCode,
+            EncryptedBallotNonce = encryptedBallotNonce,
             Weight = 1,
         };
     }
@@ -627,16 +644,4 @@ public class BallotEncryptor
             Response = x.response,
         }).ToArray();
     }
-}
-
-/// <summary>
-/// A hashed ElGamal ciphertext (C_0, C_1, C_2 = (c, v)) under K-hat, as the ballot nonce encryption
-/// of §3.3.4 produces. Contest data has its own type, <see cref="EncryptedContestData"/>.
-/// </summary>
-public class EncryptedData
-{
-    public required byte[] C0 { get; init; }
-    public required byte[] C1 { get; init; }
-    public required IntegerModQ Challenge { get; init; }
-    public required IntegerModQ Response { get; init; }
 }

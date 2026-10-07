@@ -131,6 +131,7 @@ public class BallotStructureTests
         BallotStyleId = ballotStyleId ?? ballot.BallotStyleId,
         Contests = contests ?? ballot.Contests,
         ConfirmationCode = confirmationCode ?? ballot.ConfirmationCode,
+        EncryptedBallotNonce = ballot.EncryptedBallotNonce,
         Weight = ballot.Weight,
         Status = ballot.Status,
         DeviceId = ballot.DeviceId,
@@ -168,6 +169,34 @@ public class BallotStructureTests
         ["contest data C1 one block too long"] = b => With(b, [A(b), B(b) with { ContestData = WithC1(B(b).ContestData!, [.. B(b).ContestData!.C1, .. new byte[32]]) }]),
         ["contest data C1 one byte short"] = b => With(b, [A(b), B(b) with { ContestData = WithC1(B(b).ContestData!, B(b).ContestData!.C1[1..]) }]),
         ["contest data C1 null"] = b => With(b, [A(b), B(b) with { ContestData = WithC1(B(b).ContestData!, null!) }]),
+        // S7 (G17, §3.3.4): every ballot carries the encrypted ballot nonce C_ξB, its C_ξB,1 exactly
+        // 32 bytes (eq. 37).
+        ["missing encrypted ballot nonce"] = b => WithBallotNonce(b, null!),
+        ["ballot nonce C1 one byte short"] = b => WithBallotNonce(b, WithNonceC1(b.EncryptedBallotNonce, b.EncryptedBallotNonce.C1[1..])),
+        ["ballot nonce C1 one byte long"] = b => WithBallotNonce(b, WithNonceC1(b.EncryptedBallotNonce, [.. b.EncryptedBallotNonce.C1, 0])),
+        ["ballot nonce C1 null"] = b => WithBallotNonce(b, WithNonceC1(b.EncryptedBallotNonce, null!)),
+    };
+
+    private static EncryptedBallot WithBallotNonce(EncryptedBallot ballot, EncryptedBallotNonce nonce) => new()
+    {
+        Id = ballot.Id,
+        SelectionEncryptionIdentifier = ballot.SelectionEncryptionIdentifier,
+        SelectionEncryptionIdentifierHash = ballot.SelectionEncryptionIdentifierHash,
+        BallotStyleId = ballot.BallotStyleId,
+        Contests = ballot.Contests,
+        ConfirmationCode = ballot.ConfirmationCode,
+        EncryptedBallotNonce = nonce,
+        Weight = ballot.Weight,
+        Status = ballot.Status,
+        DeviceId = ballot.DeviceId,
+    };
+
+    private static EncryptedBallotNonce WithNonceC1(EncryptedBallotNonce nonce, byte[] c1) => new()
+    {
+        C0 = nonce.C0,
+        C1 = c1,
+        Challenge = nonce.Challenge,
+        Response = nonce.Response,
     };
 
     private static EncryptedContestData WithC1(EncryptedContestData data, byte[] c1) => new()

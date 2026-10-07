@@ -123,6 +123,13 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
             ConfirmationCode = encryptedBallot.ConfirmationCode,
             Weight = encryptedBallot.Weight,
             Status = encryptedBallot.Status,
+            EncryptedBallotNonce = new ProtobufEncryptedData
+            {
+                C0 = encryptedBallot.EncryptedBallotNonce.C0.ToByteArray(),
+                C1 = encryptedBallot.EncryptedBallotNonce.C1,
+                Challenge = encryptedBallot.EncryptedBallotNonce.Challenge,
+                Response = encryptedBallot.EncryptedBallotNonce.Response,
+            },
         };
 
         Serializer.Serialize(destination, protobufEncryptedBallot);
@@ -202,11 +209,38 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
                 ContestHash = new ContestHash(c.ContestHash),
             }).ToList(),
             ConfirmationCode = new ConfirmationCode(protobufBallot.ConfirmationCode),
+            EncryptedBallotNonce = ReadBallotNonce(protobufBallot.EncryptedBallotNonce),
             Weight = protobufBallot.Weight,
             Status = protobufBallot.Status,
         };
 
         return encryptedBallot;
+    }
+
+    /// <summary>
+    /// The encrypted ballot nonce C_ξB (§3.3.4), which every ballot carries: C_ξB,0 a canonical
+    /// element below p, C_ξB,1 exactly 32 bytes (eq. 37), c_B and v_B canonical in Z_q. Whether C_ξB,0
+    /// is in Z_p^r is checked where it is used, before any guardian exponentiates with it.
+    /// </summary>
+    private static EncryptedBallotNonce ReadBallotNonce(ProtobufEncryptedData? nonce)
+    {
+        if (nonce is null)
+        {
+            throw new NonCanonicalEncodingException("The ballot has no encrypted ballot nonce C_ξB; every ballot carries one (§3.3.4).");
+        }
+
+        if (nonce.C1 is not { Length: BallotNonceEncryption.NonceBytes })
+        {
+            throw new NonCanonicalEncodingException($"C_ξB,1 of the encrypted ballot nonce is {BallotNonceEncryption.NonceBytes} bytes (eq. 37); got {nonce.C1?.Length ?? 0}.");
+        }
+
+        return new EncryptedBallotNonce
+        {
+            C0 = IntegerModP.FromCanonicalBytes(nonce.C0),
+            C1 = nonce.C1,
+            Challenge = IntegerModQ.FromCanonicalBytes(nonce.Challenge),
+            Response = IntegerModQ.FromCanonicalBytes(nonce.Response),
+        };
     }
 
     /// <summary>
@@ -255,6 +289,14 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
         /// </summary>
         [ProtoMember(9)]
         public BallotStatus Status { get; init; }
+
+        /// <summary>
+        /// <see cref="EncryptedBallot.EncryptedBallotNonce"/> (§3.3.4). Not marked required, so that a
+        /// document without it decodes far enough to be refused with a
+        /// <see cref="NonCanonicalEncodingException"/>.
+        /// </summary>
+        [ProtoMember(10)]
+        public ProtobufEncryptedData? EncryptedBallotNonce { get; init; }
     }
 
     [ProtoContract]
@@ -347,6 +389,10 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
         public byte[]? EncryptionNonce { get; init; }
     }
 
+    /// <summary>
+    /// A hashed ElGamal ciphertext (C_0, C_1, C_2 = (c, v)) under K-hat: a contest data field
+    /// (§3.3.10) or the encrypted ballot nonce (§3.3.4).
+    /// </summary>
     [ProtoContract]
     public class ProtobufEncryptedData
     {

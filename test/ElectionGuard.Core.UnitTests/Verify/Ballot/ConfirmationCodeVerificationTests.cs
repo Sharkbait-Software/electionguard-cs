@@ -37,6 +37,7 @@ public class ConfirmationCodeVerificationTests
             BallotStyleId = ballot.BallotStyleId,
             Contests = contests ?? ballot.Contests,
             ConfirmationCode = confirmationCode ?? ballot.ConfirmationCode,
+            EncryptedBallotNonce = ballot.EncryptedBallotNonce,
             Weight = ballot.Weight,
             Status = ballot.Status,
             DeviceId = ballot.DeviceId,

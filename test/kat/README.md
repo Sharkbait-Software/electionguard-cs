@@ -2,8 +2,8 @@
 
 `eg_kat.py` is an independent reference implementation of the ElectionGuard v2.1.0 hash chain,
 used as a known-answer-test oracle for `ElectionGuard.Core`. It was written from the
-specification text only (sections 3.1-3.4, 3.6.2-3.6.6, 4.1.4 and 5, and Verifications 10, 12 and 13, including the section 5.5
-domain-separation tables) and the user's recorded decisions on spec contradictions (Q5, Q6, Q7 and Q10 in
+specification text only (sections 3.1-3.4, 3.6.2-3.6.7, 4.1.4 and 5, and Verifications 10, 12, 13 and 14, including the section 5.5
+domain-separation tables) and the user's recorded decisions on spec contradictions (Q5, Q6, Q7, Q10 and Q20 in
 `docs/spec-compliance/2026-10-04-fix-progress.md`), without reading the C# source or its existing test expectations, so its outputs are not
 shaped by any encoding bug in the C# code.
 
@@ -47,6 +47,14 @@ This rewrites `test/kat/vectors.json` and prints H_P for n = 3, k = 2.
 | `contest_hash_with_contest_data` | (70) chi_l with C0, C1, C2, len(B1) = 69 + (2m + 1) * 512 + 32 * b_Lambda |
 | `contest_data_decryption_commitment_hash` | (99) d_i = H(H_I; 0x32, ind_c, i, C0, C1, C2, a_i, b_i, m_i, U), len(B1) = 2125 + 32 * b_Lambda + 4 * #U |
 | `contest_data_decryption_challenge` | (101) c = H_q(H_I; 0x33, ind_c, C0, C1, C2, a, b, beta), len(B1) = 2117 + 32 * b_Lambda (Verification 12.B) |
+| `ballot_nonce_secret_key` | (35) h = H(H_I; 0x22, alpha_B, beta_B), (alpha_B, beta_B) = (g^xi-hat_B, K-hat^xi-hat_B) (34), len(B1) = 1025 |
+| `ballot_nonce_kdf_key` | (36) k_1 = HMAC(h, 0x01 \|\| "ballot_nonce" \|\| 0x00 \|\| "ballot_nonce_encrypt" \|\| 0x0100), message 36 bytes |
+| `ballot_nonce_encryption_challenge` | (37), (38) C0 = alpha_B, C1 = b(xi_B, 32) xor k_1, C2 = (c_B, v_B), c_B = H_q(H_I; 0x23, a_B, C0, C1), len(B1) = 1057 |
+| `ballot_nonce_decryption_secret_key` | (107), (108) m_i = C0^z-hat_i, beta_B = prod m_i^w_i, then h = H(H_I; 0x22, C0, beta_B), k_1 and xi_B = C1 xor k_1, len(B1) = 1025 |
+| `challenged_ballot_contest_data_secret_key` | Verification 13.4-13.6: h = H(H_I; 0x26, ind_c, g^xi, K-hat^xi) from the released contest data nonce xi, len(B1) = 1029 |
+| `challenged_ballot_contest_data_kdf_key` | Verification 13.7: k_l by eq. (66), l 1-based (Q6) |
+| `challenged_ballot_contest_hash` | Verification 13.1-13.3: chi from (alpha, beta) recomputed with the released xi_{i,j} (eq. 33), with or without contest data |
+| `challenged_ballot_confirmation_code` | Verification 13.B: H_C = H(H_I; 0x29, chi_1, ..., chi_mB, B_C) |
 
 ## Vector format
 
@@ -102,3 +110,38 @@ the n = 3, k = 2 `guardian_record_hash` vector commits to (s-hat = 7). The scrip
 equals K-hat^xi, that the decryption-side h = H(H_I; 0x26, ind_c, C0, beta) equals the encryption-side h of eq.
 (65), that Verification 12.1-12.2 recompute exactly a and b, that 12.A-12.C hold, and that the per-guardian
 relations hold. A `confirmation_code` vector over the three contest hashes with contest data is also appended.
+
+### Ballot nonce and challenged ballots (sections 3.3.4 and 3.6.7, Verifications 13 and 14)
+
+These families are appended after all earlier families; the top-level `challenged_ballots` key (after
+`contest_data`) summarizes them. The ballot nonce is encrypted to K-hat = g^7 and decrypted by the n = 3, k = 2
+guardians' K-hat shares (`contest_data.z_hat_i`). Four cases cover the `main_chain` ballot twice (xi-hat_B = 9001
+with U = {1, 3}, and xi-hat_B = q - 1 with U = {1, 2, 3}), the ballot with id_B = q + 5 and xi_B = 2^256 - 1 (at
+least q, so it must be encoded as a 256-bit value and never reduced), and a sparse ballot whose contests have
+ind_c = 2 and 5. The spec draws xi-hat_B and u_B uniformly from Z_q and defines no derivation for them, so they are
+fixed inputs. For each case the script checks g^v_B * C0^c_B = a_B and the p.52 guardian check, that
+beta_B = prod m_i^w_i = K-hat^xi-hat_B, that the decryption-side h equals the encryption-side h, and that
+C1 xor k_1 = b(xi_B, 32).
+
+Encoding choices to know about:
+
+- Eq. (36) is read literally from the p.30 page image: a one-byte counter 0x01 and a two-byte length 0x0100
+  (256 bits), the shape of eqs. (17) and (18) and footnote 34. This is not the 4-byte form of eq. (66). Label and
+  Context are the raw UTF-8 bytes of `ballot_nonce` (12) and `ballot_nonce_encrypt` (20), with underscores as on
+  the page image and no length prefix. The Context carries no index. The message is always the same 36 bytes.
+- `ciphertext.C2_hex` is b(c_B, 32) || b(v_B, 32) (Q20 order). C_xiB is not hashed into any contest hash or
+  confirmation code, so for the ballot nonce this order matters only for serialization.
+- The spec defines no proof of correct decryption for the ballot nonce: there is no commitment or challenge hash and
+  no section 5.5.4 row. Section 3.6.7 says xi_B should not be published. Only the released nonces xi_{i,j} (eq. 33)
+  and xi (eq. 64) are published, and Verification 13 checks them. The only proof involved is the guardians' check of
+  the eq. (38) Schnorr proof before they decrypt, and no numbered verification covers that check.
+
+The Verification 13 vectors start from the guardians' decrypted xi_B. They derive the released nonces, recompute
+(13.1) and (13.2) (and assert they equal the ballot's recorded ciphertexts), recover sigma by eq. (109), recompute
+(13.4) to (13.7) with the KDF counter 1-based (Q6; 13.7's 0 <= l < b_Lambda is an erratum), check (13.A) and
+eq. (111), and emit chi (13.3) and H_C (13.B). For the `main_chain` ballot the script asserts that the results equal
+the earlier `contest_hash_with_contest_data` and `confirmation_code` vectors. The sparse ballot uses simple chaining
+(B_C = 0x00000001 || H_0). Its contest ind_c = 2 has no contest data, so its chi is eq. (70) without C0, C1 and C2
+and has no printed table length. Its contest ind_c = 5 has contest data with b_Lambda = 2. In (13.3) the field after
+0x28 is ind_c(Lambda_i), which is eq. (70)'s l and not the contest's position on the ballot; the sparse ballot makes
+the two differ. Verification 14 compares labels and selection ranges and computes no hash, so it has no vectors.

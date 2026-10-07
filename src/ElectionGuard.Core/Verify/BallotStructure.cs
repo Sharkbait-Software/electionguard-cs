@@ -10,7 +10,8 @@ namespace ElectionGuard.Core.Verify;
 /// lists exactly the manifest's options for that contest, each once, and exactly the supplemental
 /// fields the manifest declares for it (§3.3.9), each once; and it carries an encrypted contest data
 /// field exactly where the manifest declares contest data for the contest, with C_1 of exactly
-/// 32·b_Λ bytes (§3.3.10).
+/// 32·b_Λ bytes (§3.3.10); and it carries the encrypted ballot nonce C_ξB, with C_ξB,1 of exactly
+/// 32 bytes (§3.3.4).
 ///
 /// The spec has no lettered sub-check for this. It is implicit in its index-keyed model: one
 /// ciphertext per (contest index, option index) (§3.1.3 p.17; §3.4 "unique contest index"), and
@@ -137,7 +138,35 @@ public static class BallotStructure
             }
         }
 
-        return MissingStyleContest(ballot.Id, style, manifestContests, inStyle, onBallot);
+        if (MissingStyleContest(ballot.Id, style, manifestContests, inStyle, onBallot) is string missingContest)
+        {
+            return missingContest;
+        }
+
+        return BallotNonceViolation(ballot);
+    }
+
+    /// <summary>
+    /// §3.3.4: "every ElectionGuard ballot contains an encryption of the ballot nonce", C_ξB, whose
+    /// C_ξB,1 is b(ξ_B, 32) ⊕ k_1, exactly 32 bytes (eq. 37). It is the only way a challenged ballot
+    /// is opened (§3.6.7); a ballot without it could never be audited. Neither the protobuf decoder
+    /// (which refuses a missing field) nor the JSON one (which refuses a missing property) yields
+    /// one without it; a JSON document that writes null does.
+    /// </summary>
+    private static string? BallotNonceViolation(EncryptedBallot ballot)
+    {
+        var nonce = ballot.EncryptedBallotNonce;
+        if (nonce is null)
+        {
+            return $"Ballot {ballot.Id} has no encrypted ballot nonce C_ξB; every ballot carries one (§3.3.4).";
+        }
+
+        if (nonce.C1 is not { Length: BallotNonceEncryption.NonceBytes })
+        {
+            return $"Ballot {ballot.Id} has an encrypted ballot nonce whose C_ξB,1 is {nonce.C1?.Length ?? 0} bytes; it is exactly {BallotNonceEncryption.NonceBytes} (eq. 37).";
+        }
+
+        return null;
     }
 
     /// <summary>

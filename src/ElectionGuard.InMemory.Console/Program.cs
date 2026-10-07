@@ -148,6 +148,21 @@ try
         //}
     });
 
+    // Cast or challenge (§3.6.7, §3.7): a voter who challenges a ballot has it opened to check that the
+    // device encrypted what they chose, and then votes again. The first ballot is encrypted a second
+    // time, as a separate ballot with a fresh id_B and ballot nonce, and that copy is challenged: it is
+    // never tallied, so the tally still counts the three cast ballots.
+    var challengedSource = ballots.OrderBy(x => x, StringComparer.Ordinal).First();
+    var challengedPlaintext = JsonSerializer.Deserialize<Ballot>(File.ReadAllBytes(challengedSource), jsonOptions)!;
+    challengedPlaintext = challengedPlaintext with { Id = $"{challengedPlaintext.Id}-challenged" };
+    var challengedBallot = new BallotEncryptor(encryptionRecord, deviceId, deviceHash).Encrypt(challengedPlaintext, null);
+    challengedBallot.RecordStatus(BallotStatus.Challenged);
+    encryptedBallots.Add(challengedBallot);
+    using (var jsonFileStream = File.Create(Path.Combine(outputDirectory, "encrypted-json-ballots", $"{challengedPlaintext.Id}.json")))
+    {
+        jsonBallotSerializer.Serialize(jsonFileStream, challengedBallot);
+    }
+
     //BallotEncryptor ballotEncryptor = new BallotEncryptor(encryptionRecord, deviceId, deviceHash);
     //var ballot = JsonSerializer.Deserialize<Ballot>(File.ReadAllBytes("../../../../../test/data/famous-names/ballots/1.json"), jsonOptions)!;
     //var encryptedBallot = ballotEncryptor.Encrypt(ballot, null);
@@ -265,7 +280,7 @@ try
     // mixnet when the ballots are cast (§3.6.6 p.49); here every field of every ballot is decrypted.
     var contestDataDecryptionVerification = new ContestDataDecryptionVerification();
     var decryptedContestData = new List<object>();
-    foreach (var encryptedBallot in encryptedBallots.OrderBy(x => x.Id, StringComparer.Ordinal))
+    foreach (var encryptedBallot in encryptedBallots.Where(x => x.Status == BallotStatus.Cast).OrderBy(x => x.Id, StringComparer.Ordinal))
     {
         foreach (var contest in encryptedBallot.Contests.Where(x => x.ContestData is not null))
         {
@@ -295,6 +310,37 @@ try
     }
 
     File.WriteAllBytes(Path.Combine(outputDirectory, "contest-data.json"), JsonSerializer.SerializeToUtf8Bytes(decryptedContestData, tallyJsonOptions));
+
+    // Challenged ballots (§3.6.7). Each guardian checks the ballot's encrypted nonce C_ξB (C_ξB,0 in
+    // Z_p^r and the eq. (38) Schnorr proof) and sends m_i = C_ξB,0^ẑ_i; the administrator combines them
+    // into ξ_B, derives every encryption nonce ξ_{i,j} (eq. 33) and contest data nonce ξ (eq. 64), and
+    // publishes those with the plaintext selections and contest data, never ξ_B itself. Verification
+    // 13 recomputes the ballot's ciphertexts and confirmation code from them, and Verification 14
+    // checks the labels and selection ranges against the manifest.
+    var challengedBallotDecryptionVerification = new ChallengedBallotDecryptionVerification();
+    var challengedBallotWellFormednessVerification = new ChallengedBallotWellFormednessVerification();
+    var decryptedChallengedBallots = new List<DecryptedChallengedBallot>();
+    foreach (var encryptedBallot in encryptedBallots.Where(x => x.Status == BallotStatus.Challenged).OrderBy(x => x.Id, StringComparer.Ordinal))
+    {
+        var decrypted = tallyAdmin.DecryptChallengedBallot(tallyGuardians, encryptedBallot, encryptionRecord);
+
+        // Verification 13
+        challengedBallotDecryptionVerification.Verify(encryptionRecord, encryptedBallot, decrypted, deviceHash, null);
+
+        // Verification 14
+        challengedBallotWellFormednessVerification.Verify(manifest, encryptedBallot, decrypted);
+
+        foreach (var contest in decrypted.Contests)
+        {
+            var selections = string.Join(", ", contest.Choices.Select(x => $"{x.Id}={x.Value}"));
+            var text = contest.ContestData?.DecodeText();
+            Console.WriteLine($"Challenged ballot {decrypted.BallotId}, contest {contest.ContestId}: {selections}{(string.IsNullOrEmpty(text) ? "" : $", contest data \"{text}\"")}.");
+        }
+
+        decryptedChallengedBallots.Add(decrypted);
+    }
+
+    File.WriteAllBytes(Path.Combine(outputDirectory, "challenged-ballots.json"), JsonSerializer.SerializeToUtf8Bytes(decryptedChallengedBallots, tallyJsonOptions));
 
     Console.WriteLine("Done.");
 }

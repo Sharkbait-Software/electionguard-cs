@@ -15,7 +15,7 @@ public record PreEncryptedBallot
     public required SelectionEncryptionIdentifierHash SelectionEncryptionIdentifierHash { get; init; }
 
     /// <summary>§3.3.4 the ballot nonce encrypted to the other-ballot-data encryption key K-hat.</summary>
-    public required EncryptedData EncryptedBallotNonce { get; init; }
+    public required EncryptedBallotNonce EncryptedBallotNonce { get; init; }
 
     /// <summary>The contests of the ballot style in increasing contest index order.</summary>
     public required List<PreEncryptedContest> Contests { get; init; }

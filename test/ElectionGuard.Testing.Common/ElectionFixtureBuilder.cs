@@ -324,6 +324,19 @@ public static class ElectionFixtureBuilder
     }
 
     /// <summary>
+    /// A well-shaped but meaningless encrypted ballot nonce (C_ξB,0 = 1, C_ξB,1 = 32 zero bytes,
+    /// c = v = 0) for hand-built ballots whose tests never decrypt the nonce. Every ballot carries the
+    /// field (§3.3.4); this one would fail the guardians' eq. (38) check.
+    /// </summary>
+    public static EncryptedBallotNonce PlaceholderBallotNonce => new()
+    {
+        C0 = 1,
+        C1 = new byte[BallotNonceEncryption.NonceBytes],
+        Challenge = 0,
+        Response = 0,
+    };
+
+    /// <summary>
     /// Encrypts a ballot and records it as submitted with <paramref name="status"/> (cast, by
     /// default), as Program.cs does. Pass previousConfirmationCode to chain from a prior ballot on
     /// the same device (ChainingMode.Simple); pass null for the first ballot. Pass

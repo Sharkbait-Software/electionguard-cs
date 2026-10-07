@@ -12,6 +12,15 @@ public class EncryptedBallot
     public required ConfirmationCode ConfirmationCode { get; init; }
 
     /// <summary>
+    /// The encrypted ballot nonce C_ξB (§3.3.4, eqs. 34-38): "every ElectionGuard ballot contains an
+    /// encryption of the ballot nonce" to the ballot data encryption key K-hat. The guardians decrypt
+    /// it only for a challenged ballot (§3.6.7), and derive from ξ_B the encryption nonces they
+    /// release. It is not an input to any contest hash or to the confirmation code (eqs. 70, 71).
+    /// <see cref="Verify.BallotStructure"/> requires it, with C_ξB,1 of exactly 32 bytes.
+    /// </summary>
+    public required EncryptedBallotNonce EncryptedBallotNonce { get; init; }
+
+    /// <summary>
     /// The ballot weight W of eq. (80): a small positive integer. The encryptor writes 1. A weight
     /// below 1 is decoded as given and rejected when the ballot is tallied, and so by
     /// Verification 9 (sub-section "9.structure"); a protobuf ballot that leaves the field off the
@@ -74,7 +83,10 @@ public enum BallotStatus
     /// <summary>Cast: included in the tally (Verification 9 "all cast ballots").</summary>
     Cast = 1,
 
-    /// <summary>Challenged (spoiled for audit): never tallied; decrypted and published instead (§3.6.7).</summary>
+    /// <summary>
+    /// Challenged (spoiled for audit): never tallied; decrypted and published instead (§3.6.7). Only
+    /// a challenged ballot's nonce is decrypted (<see cref="Tally.TallyGuardian.DecryptBallotNonce"/>).
+    /// </summary>
     Challenged = 2,
 }
 

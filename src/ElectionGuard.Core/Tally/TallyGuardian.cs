@@ -40,6 +40,11 @@ namespace ElectionGuard.Core.Tally;
 /// decryption in progress, and a second call throws. Two responses with one u_i to two different
 /// challenges would give away the key share.
 ///
+/// A challenged ballot is opened differently (§3.6.7): the guardian checks the ballot's encrypted
+/// nonce C_ξB (membership of C_ξB,0 and the eq. (38) Schnorr proof) and sends m_i = C_ξB,0^{ẑ_i}
+/// alone (<see cref="DecryptBallotNonce"/>); the administrator recovers ξ_B and releases the
+/// encryption nonces derived from it (<see cref="TallyAdmin.CombineChallengedBallot"/>).
+///
 /// A guardian works on one decryption at a time, a tally's or a contest data field's. Either commit
 /// step starts a new one and discards any unfinished one, which is safe: nothing is ever responded
 /// with an old u_i. The reveal and respond steps of one kind refuse a decryption of the other kind.
@@ -69,7 +74,8 @@ public class TallyGuardian
     /// Test seam: replaces this guardian's M_i for an option, given (ind_c, ind_o, M_i), before it is
     /// hashed into d_i and sent: a dishonest guardian that is consistent about its wrong share, such
     /// as M_i·K^(-δ/w_i), which would shift the count by δ if nothing checked the proof. For a
-    /// contest data field it is given (ind_c, 0, m_i). Null outside tests.
+    /// contest data field it is given (ind_c, 0, m_i), and for a ballot nonce (0, 0, m_i). Null
+    /// outside tests.
     /// </summary>
     internal Func<int, int, IntegerModP, IntegerModP>? PartialDecryptionTamperForTesting { get; set; }
 
@@ -228,6 +234,48 @@ public class TallyGuardian
         };
     }
 
+    /// <summary>
+    /// §3.6.7 p.52: this guardian's partial decryption of a challenged ballot's encrypted nonce,
+    /// m_i = C_ξB,0^{ẑ_i} mod p (eq. 107), with its ballot data encryption key share ẑ_i. First it
+    /// requires the ballot to be recorded as challenged, well formed and keyed with
+    /// H_I = H(H_E; 0x20, id_B) (an <see cref="ArgumentException"/> otherwise: decrypting a cast
+    /// ballot's nonce would reveal its votes); then that C_ξB,0 is in Z_p^r (a library hardening the
+    /// spec does not state; see S6) and that the Schnorr proof C_ξB,2 holds (eq. 38), and "only if"
+    /// both do it computes m_i (a <see cref="TallyDecryptionException"/> naming no guardian
+    /// otherwise). It is a single message: §3.6.7 defines no proof of correct decryption here, and
+    /// m_i does not depend on who else takes part. It does not touch a tally or contest data
+    /// decryption in progress.
+    ///
+    /// Trust boundary (the spec is silent): the status, like everything else checked here, is read
+    /// from the ballot object the caller hands in, and <see cref="EncryptedBallot.Status"/> can be
+    /// set by an initializer. A copy of a cast ballot (same id_B, H_I, contests, confirmation code
+    /// and C_ξB) under a new string <see cref="EncryptedBallot.Id"/> and marked challenged passes
+    /// every check, including the eq. (38) proof, which binds H_I and not the string id; k such m_i
+    /// give ξ_B and with it every vote of the cast ballot, and Verification 5.A (unique id_B) only
+    /// notices afterwards. In-process the caller is the holder of the record. A guardian in a
+    /// distributed deployment must refuse when the published record holds any cast ballot with the
+    /// same id_B (or H_I, or C_ξB,0); matching by <see cref="EncryptedBallot.Id"/> is not enough.
+    /// </summary>
+    public BallotNoncePartialDecryption DecryptBallotNonce(EncryptedBallot ballot, EncryptionRecord encryptionRecord)
+    {
+        var statement = ChallengedBallotStatement.For(encryptionRecord, ballot);
+        statement.RequireDecryptable($"guardian {_index.Index}");
+
+        // ẑ_i is secret and a full-width element of Z_q: the constant-time path.
+        var partialDecryption = MontgomeryModP.PowModP(statement.Nonce.C0, _shares.OtherBallotDataEncryptionKeyShare);
+        if (PartialDecryptionTamperForTesting is { } tamper)
+        {
+            partialDecryption = tamper(0, 0, partialDecryption);
+        }
+
+        return new BallotNoncePartialDecryption
+        {
+            GuardianIndex = _index,
+            BallotId = ballot.Id,
+            Mi = partialDecryption,
+        };
+    }
+
     internal static VerifiableDecryption.ReceivedCommitment[] ReadContestDataCommitments(ContestDataStatement statement, IEnumerable<ContestDataPartialDecryption> messages, GuardianIndex[] participants)
     {
         const string round = "contest data round-1 (m_i, d_i)";
@@ -367,9 +415,10 @@ public class TallyGuardian
 }
 
 /// <summary>
-/// The administrator's side of verifiable decryption (§3.6.4-§3.6.6): mediating the guardians'
+/// The administrator's side of verifiable decryption (§3.6.4-§3.6.7): mediating the guardians'
 /// messages, combining them into M, T and the proof (c, v) and recovering each count t for a tally,
-/// or into β, the proof (c, v) and the data D for a contest data field.
+/// into β, the proof (c, v) and the data D for a contest data field, or, for a challenged ballot,
+/// into ξ_B and from it the released encryption nonces, selections and contest data.
 /// </summary>
 public class TallyAdmin
 {
@@ -622,6 +671,169 @@ public class TallyAdmin
             Response = response,
             Data = ContestDataEncryption.Decrypt(statement.SelectionEncryptionIdentifierHash, statement.ContestIndex, statement.Blocks, statement.Data, beta),
         };
+    }
+
+    /// <summary>
+    /// Has each of <paramref name="guardians"/> (U, at least k of them) partially decrypt the
+    /// encrypted nonce of the challenged <paramref name="ballot"/> (§3.6.7, eq. 107) and combines the
+    /// results with <see cref="CombineChallengedBallot"/>.
+    /// </summary>
+    public DecryptedChallengedBallot DecryptChallengedBallot(IReadOnlyList<TallyGuardian> guardians, EncryptedBallot ballot, EncryptionRecord encryptionRecord)
+    {
+        var partialDecryptions = guardians.Select(x => x.DecryptBallotNonce(ballot, encryptionRecord)).ToList();
+        return CombineChallengedBallot(ballot, encryptionRecord, partialDecryptions);
+    }
+
+    /// <summary>
+    /// §3.6.7: opens the challenged <paramref name="ballot"/> from the guardians' partial
+    /// decryptions of its encrypted nonce, and returns what is published: every field's σ and
+    /// ξ_{i,j}, and every contest data field's ξ and D. In order:
+    /// <list type="number">
+    /// <item>The ballot must be recorded as challenged, well formed and keyed with
+    /// H_I = H(H_E; 0x20, id_B) (<see cref="ArgumentException"/>), and C_ξB,0 must be in Z_p^r and
+    /// the Schnorr proof C_ξB,2 must hold (eq. 38), as the guardians required; otherwise the ballot is
+    /// at fault and no guardian is named.</item>
+    /// <item>The senders must be a quorum, each with exactly one message, for this ballot; no m_j may
+    /// be 0.</item>
+    /// <item>β_B = ∏ m_j^{w_j} (eq. 108), h = H(H_I; 0x22, C_ξB,0, β_B) (eq. 35), k_1 (eq. 36) and
+    /// ξ_B = C_ξB,1 ⊕ k_1. ξ_B is not returned (§3.6.7: it "should not be published").</item>
+    /// <item>For every verifiable field (options and supplemental fields), ξ_{i,j} (eq. 33); the
+    /// field's α must be g^ξ_{i,j}, and σ is the value in [0, the field's range bound] with
+    /// β = K^{σ + ξ_{i,j}} (eq. 109, the small discrete logarithm).</item>
+    /// <item>For every contest data field, ξ (eq. 64); C_0 must be g^ξ, and D follows from
+    /// β = K-hat^ξ (eq. 110), h (eq. 65) and the keys of eq. (66) (eq. 111).</item>
+    /// </list>
+    /// A nonce that does not reproduce the ballot's ciphertexts throws
+    /// <see cref="TallyDecryptionException"/> naming no guardian: either a guardian sent a wrong m_i
+    /// or the device encrypted a wrong ξ_B (p.53), and with no proof of correct decryption defined
+    /// for m_i (§3.6.7) the two cannot be told apart. Nothing is published unless every released
+    /// value reproduces the ballot, so Verification 13 accepts what this returns.
+    /// </summary>
+    public DecryptedChallengedBallot CombineChallengedBallot(
+        EncryptedBallot ballot,
+        EncryptionRecord encryptionRecord,
+        IReadOnlyCollection<BallotNoncePartialDecryption> partialDecryptions)
+    {
+        var statement = ChallengedBallotStatement.For(encryptionRecord, ballot);
+        statement.RequireDecryptable("the administrator");
+
+        // Distinct senders: a guardian that sent two messages is named by InParticipantOrder.
+        var participants = TallyDecryptionHashes.RequireQuorum(partialDecryptions.Select(x => x.GuardianIndex).Distinct());
+        var received = VerifiableDecryption.InParticipantOrder(partialDecryptions, x => x.GuardianIndex, participants, "ballot nonce (m_i)");
+        foreach (var message in received)
+        {
+            if (message.BallotId != ballot.Id)
+            {
+                throw new TallyDecryptionException(message.GuardianIndex, $"Guardian {message.GuardianIndex.Index}'s ballot nonce message is for ballot {message.BallotId}, not for ballot {ballot.Id}.");
+            }
+
+            // A zero m_j has no inverse and makes β_B zero; only a corrupt share can be zero once
+            // C_ξB,0 is known to be in Z_p^r.
+            if (message.Mi == 0)
+            {
+                throw new TallyDecryptionException(message.GuardianIndex, $"Challenged ballot {ballot.Id} did not decrypt: guardian {message.GuardianIndex.Index}'s partial decryption m_i of its nonce is 0.");
+            }
+        }
+
+        // β_B = ∏ m_j^{w_j} (eq. 108). β_B yields ξ_B, which is secret: the constant-time path.
+        IntegerModP betaB = 1;
+        foreach (var message in received)
+        {
+            betaB *= MontgomeryModP.PowModP(message.Mi, TallyDecryptionHashes.LagrangeCoefficient(message.GuardianIndex, participants));
+        }
+
+        var ballotNonce = BallotNonceEncryption.Decrypt(statement.SelectionEncryptionIdentifierHash, statement.Nonce, betaB);
+        try
+        {
+            return Open(statement, encryptionRecord, ballotNonce);
+        }
+        finally
+        {
+            Array.Clear(ballotNonce.ToByteArray());
+        }
+    }
+
+    /// <summary>Steps 4 and 5 of <see cref="CombineChallengedBallot"/>, from the decrypted ξ_B.</summary>
+    private static DecryptedChallengedBallot Open(ChallengedBallotStatement statement, EncryptionRecord encryptionRecord, BallotNonce ballotNonce)
+    {
+        var ballot = statement.Ballot;
+        var selectionHash = statement.SelectionEncryptionIdentifierHash;
+        var voteEncryptionKey = encryptionRecord.ElectionPublicKeys.VoteEncryptionKey;
+        var contests = new List<DecryptedChallengedContest>(ballot.Contests.Count);
+        foreach (var contest in ballot.Contests)
+        {
+            // BallotStructure has required exactly the manifest's options and declared fields, each
+            // once, and the contest data field exactly where it is declared.
+            var manifestContest = encryptionRecord.Manifest.Contests.Single(x => x.Id == contest.Id);
+
+            var choices = manifestContest.Choices
+                .Select(option => OpenField(option, manifestContest.RangeBound(option), contest.Choices.Single(x => x.ChoiceId == option.Id)))
+                .ToList();
+            var fields = manifestContest.SupplementalFields
+                .Select(field => OpenField(field, manifestContest.RangeBound(field), contest.SupplementalFields.Single(x => x.FieldId == field.Id)))
+                .ToList();
+
+            DecryptedChallengedContestData? contestData = null;
+            if (contest.ContestData is { } encryptedData)
+            {
+                // Eq. (64); then (110), (65), (66) and (111). ξ is about to be published.
+                var xi = ContestDataEncryption.Nonce(selectionHash, manifestContest.Index, ballotNonce);
+                var alpha = MontgomeryModP.PowModP(EGParameters.G, xi);
+                if (alpha != encryptedData.C0)
+                {
+                    throw Inconsistent($"contest {contest.Id}'s contest data nonce ξ (eq. 64) does not reproduce C_0 = g^ξ");
+                }
+
+                var beta = MontgomeryModP.PowModP(encryptionRecord.ElectionPublicKeys.OtherBallotDataEncryptionKey, xi);
+                var secretKey = ContestDataEncryption.SecretKey(selectionHash, manifestContest.Index, alpha, beta);
+                contestData = new DecryptedChallengedContestData
+                {
+                    EncryptionNonce = xi,
+                    Data = ContestDataEncryption.Apply(secretKey, manifestContest.Index, manifestContest.ContestDataBlocks, encryptedData.C1),
+                };
+            }
+
+            contests.Add(new DecryptedChallengedContest
+            {
+                ContestId = contest.Id,
+                Choices = choices,
+                SupplementalFields = fields,
+                ContestData = contestData,
+            });
+
+            DecryptedChallengedField OpenField(Choice field, int bound, EncryptedValueWithProofs encrypted)
+            {
+                // Eq. (33), then (109). ξ_{i,j} and σ are about to be published.
+                IntegerModQ xi = new EncryptionNonce(selectionHash, ballotNonce, manifestContest.Index, field.Index);
+                if (MontgomeryModP.PowModP(EGParameters.G, xi) != encrypted.Alpha)
+                {
+                    throw Inconsistent($"contest {contest.Id}, field {field.Id}'s nonce ξ_{{i,j}} (eq. 33) does not reproduce α = g^ξ");
+                }
+
+                // K^ξ·K^σ = β for the one σ in [0, bound]: a few multiplications by K.
+                var candidate = MontgomeryModP.PowModP(voteEncryptionKey, xi);
+                for (int sigma = 0; sigma <= bound; sigma++)
+                {
+                    if (candidate == encrypted.Beta)
+                    {
+                        return new DecryptedChallengedField { Id = field.Id, Value = sigma, EncryptionNonce = xi };
+                    }
+
+                    candidate *= voteEncryptionKey;
+                }
+
+                throw Inconsistent($"contest {contest.Id}, field {field.Id}'s β is not K^(σ + ξ) for any σ in [0, {bound}] (eq. 109)");
+            }
+        }
+
+        return new DecryptedChallengedBallot
+        {
+            BallotId = ballot.Id,
+            Contests = contests,
+        };
+
+        TallyDecryptionException Inconsistent(string what) => new(null,
+            $"Challenged ballot {ballot.Id} did not decrypt consistently: {what}. Either a guardian's partial decryption m_i of the ballot nonce is wrong or the ballot's C_ξB does not encrypt the nonce its selections were encrypted with (§3.6.7 p.53); §3.6.7 defines no proof of correct decryption for m_i, so no guardian can be named. Nothing is published.");
     }
 
     /// <summary>

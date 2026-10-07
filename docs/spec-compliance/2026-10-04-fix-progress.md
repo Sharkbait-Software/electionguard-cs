@@ -153,8 +153,60 @@ User answers (2026-10-04):
   - No egperf contest data phase (the harness streams and discards ballots; see carry-overs).
 - **Q20 (S6) Byte layout of b(C2, 64) in eqs (70), (99) and (101), answered 2026-10-06:** "c then v": b(c,32) ∥ b(v,32).
   The §5.5 tables do not say how the 64 bytes split. S6 already uses this order, and so does the KAT oracle.
+- **S7 decisions, answered 2026-10-07:**
+  - **Q21 (S7a), attribution proof for the challenged-ballot nonce shares:** "No, keep as built". Guardians send m_i
+    alone, as the spec defines. A wrong share is detected but the guardian is not named.
+  - **Q22 (S7b), partial decryption for risk-limiting audits:** "Not yet". Only whole contests may be left out,
+    until an audit workflow is designed.
+  - **Q23 (S7c), label for the V13 hardening check g^ξ = C0:** "Report as 13.A".
+  - **Q24 (S7d), fallback when nonce decryption fails:** "None for now". Fail closed.
 - **Cadence:** "Keep going". After each stage: commit, update this tracker, push, start the next stage. Stop only
   for a new spec contradiction or question.
+- **S7 design and API choices** (2026-10-06; implementer choices, none changes bytes the spec fixes; the first two are
+  also listed as open questions in the S7 log entry):
+  - **No proof for the ballot nonce decryption.** §3.6.7 defines none (no commitment or challenge hash, no §5.5.4
+    row; the KAT oracle agrees), and ξ_B is never published, so β_B cannot be either. The guardians send m_i alone
+    (eq. 107), one message, and the administrator combines (eq. 108), recovers ξ_B and publishes nothing unless
+    every derived nonce reproduces the ballot's ciphertexts. A wrong m_i is detected but not attributed. The S4/S6
+    three-round engine is not reused: running it would invent domain-separation bytes, and every guardian would
+    compute β_B, so would learn ξ_B (every selection, even ones an RLA release withholds).
+  - **Verification 14.B** reads "on the uncast pre-encrypted ballot" (the wording of 19.B). It is applied to the
+    decrypted challenged ballot, as the Verification 14 preamble describes. A partial (RLA) decryption, which 13.B
+    accepts, therefore fails 14.B.
+  - **RLA granularity is the contest (S7 review round 2).** §3.6.7 p.52-53 also allows releasing "the desired subset of
+    encryption nonces" within a contest, with the verifier using the ballot's given selection encryptions for the
+    rest. Verification 13 as lettered recomputes every field of a decrypted contest ("For all 1≤j≤m_i"), and its RLA
+    paragraph names only contests that "have not been decrypted". So V13 accepts a contest left out, but a decrypted
+    contest that omits a field, or omits its contest data, fails `"13.structure"`. The V13 class remarks and CLAUDE.md
+    say so. This belongs to open question Q-S7b, the RLA case as a whole.
+  - **Trust boundary of the guardian's status check (S7 review round 2; spec-silent, documentation only).** Every
+    check in `ChallengedBallotStatement.For` and `TallyGuardian.DecryptBallotNonce` reads the ballot object the caller
+    hands in, and `EncryptedBallot.Status` has an `init` accessor. A cast ballot copied exactly (same id_B, H_I,
+    contests, confirmation code and C_ξB) under a new string `Id` and marked `Challenged` passes all of them,
+    including the eq. (38) proof, which binds H_I and not the string id. k such m_i give ξ_B, and with it every vote
+    on the cast ballot. Verification 5.A (unique id_B) flags the duplicate only after the votes are out. In-process
+    the caller holds the record. A distributed guardian must refuse when the published record holds any cast ballot
+    with the same id_B (or H_I, or C_ξB,0); matching on `Id` is not enough. No overload was added: nothing would call
+    it, and `EncryptionRecord` carries no ballot set (see the carry-over).
+  - **14.E/14.F:** 14.E bounds an option by R and a supplemental field by its range bound (§3.3.9; Q2). 14.F sums
+    the options and the write-in count (Q13: write-ins count toward the limit "exactly like selections"); the
+    indicators and the undervote difference are not selections.
+  - **Only a challenged ballot's nonce is decrypted.** Guardians and the administrator refuse any other status
+    (`ArgumentException`), and Verifications 13 and 14 fail such a ballot as `"13.structure"`/`"14.structure"`.
+  - **C_ξB,0 must be in Z_p^r** before any guardian raises it to ẑ_i (the S6 hardening, same shape; spec-silent).
+  - **Verification 13.A requires α = g^ξ_i to equal the ballot's C_0** (S7 review round 1; library hardening of a
+    spec gap, no bytes change; listed as open question Q-S7c for confirmation). The spec's 13.4-13.A never compares
+    α with C_0, and χ_i (13.3) hashes the ballot's own (C_0, C_1, C_2), so without it a publisher could release any
+    ξ' with D' = C_1 ⊕ k(ξ') and pass V13 and V14. Reported as `"13.A"` (13.4's α is the α of eq. 65, which is
+    C_0), with a message naming C_0. The administrator already made the same check before publishing.
+  - **Model:** `EncryptedBallotNonce` (C_0 as `IntegerModP`) replaces `EncryptedData` (also on
+    `PreEncryptedBallot`). `EncryptedBallot.EncryptedBallotNonce` is required: protobuf field 10, JSON
+    `encryptedBallotNonce`; `BallotStructure` requires it with a 32-byte C_1. The published record is
+    `DecryptedChallengedBallot` (per contest: options and supplemental fields as (label, σ, ξ_{i,j}), and contest data
+    as (ξ, D)), with no ξ_B, no indices (V13/V14 take them from the manifest) and no proof.
+  - **Console:** the first ballot is encrypted a second time as `<id>-challenged` (fresh id_B and ξ_B) and challenged,
+    as a voter would before casting, so the three cast ballots still tally 0-0: 3. Contest data is decrypted (§3.6.6)
+    only for cast ballots; a challenged ballot's is released by §3.6.7.
 
 ## Stages
 
@@ -166,8 +218,8 @@ User answers (2026-10-04):
 | S4 Tally soundness | G2, G27, G28, G20, G21, G30, G38, G16 | — | done | c549325 |
 | S5 Supplemental fields redesign (with S5b: user follow-up decisions Q11-Q16) | G3, G8, G22, G29, G10 | — | done | 27e75e2 (+ S5b f8a0699, S5c) |
 | S5c Null-vote relation gains the overvote term (Q17) | G22 (Q17 follow-up) | S5b | done | 567e7a6 |
-| S6 Contest data | G11, G32 | after S4 | done | see next commit |
-| S7 Ballot nonce and challenged ballots | G17, G18 | after S4 | todo | |
+| S6 Contest data | G11, G32 | after S4 | done | e6d7be0 |
+| S7 Ballot nonce and challenged ballots | G17, G18 | after S4 | done | see next commit |
 | S8 Chain closing | G19, G37 | — | todo | |
 | S9 Pre-encrypted recording tool | G31 | after S5, S7 | todo | |
 | S10 Record metadata | G40 (G39 won't fix, per Q9); S2 carry-overs: bind the parsed `Manifest` to `ManifestFile` (S2 review R1), record JSON round trip; S4 carry-overs: a `DecryptedTally` record serializer, and a tally loaded from a record must carry or recompute each option's `MaximumCount` (S4 review R1) | — | todo | |
@@ -306,7 +358,386 @@ One test literal was re-pinned: `BallotEncryptorTests.Encrypt_WriteInCounter_Pro
 `manifestHash` changed (every scenario); the console's `tally.json` counts are unchanged and it now also writes
 `contest-data.json`.
 
+S7: no existing hash, nonce, ciphertext, contest hash, confirmation code or KAT value moved (every pre-S7 family
+passed before and after). C_ξB was already computed with the spec's bytes and is not hashed into eq. (70) or (71).
+What changed: every encrypted ballot now carries `encryptedBallotNonce` (JSON) / field 10 (protobuf), so serialized
+ballots grow (smoke: JSON about 20.1 -> 20.9 KB, protobuf 11,824 -> 12,444 bytes). The eight new families are pinned
+only by `KnownAnswerTests.ChallengedBallots.cs`; no test holds a literal. No test was re-pinned. The console's
+`tally.json` counts are unchanged; it also writes `challenged-ballots.json`.
+
+S7 review round 1: no pinned value moved and no test was re-pinned. The gate was green before any test edit. V13
+gains one comparison (13.A: g^ξ = C_0), and an honest record never meets it.
+
+S7 review round 2: no pinned value moved and no test was re-pinned. The library changed only in doc comments; the
+round adds tests.
+
 ## Log
+
+### 2026-10-06 — S7 review round 2 (G18: RLA granularity, guardian trust boundary, perf check, V13/V14 test gaps)
+Worktree changes only; nothing staged or committed. Five minor findings. Two are accepted and resolved in
+documentation, one is answered with a measurement, and two are accepted as new tests. No library behavior changed.
+
+**Spec: V13 rejects a selection-level partial release. Accepted, documented as option (a).** §3.6.7 p.52 lets a
+publication be "restricted to the desired subset of encryption nonces". p.53 has the verifier use the given
+selection encryptions where nonces are not available. Verification 13 as lettered (p.54, p.92) recomputes every
+field of a decrypted contest ("For all 1≤j≤m_i"), and its RLA paragraph speaks only of contests that "have not been
+decrypted". So the code follows the lettered text, and a decrypted contest must release every field, plus its
+contest data where it carries any. Option (b) would loosen what V13 accepts, a verification-semantics change the spec
+does not settle, so it was not built. The V13 class remarks now say that the partial release works at contest
+granularity only, and why. CLAUDE.md's V13 line says the same. New S7 design choice "RLA granularity is the contest".
+Q-S7b is widened to cover it (below).
+
+**Code: a cast ballot copied under a new string id passes every guardian check. Accepted, documentation and
+carry-over.** Confirmed by reading: `ChallengedBallotStatement.For` checks `Status`, `BallotStructure` and the
+recomputed H_I. `RequireDecryptable` checks C_ξB,0 membership and the eq. (38) proof, which binds H_I and not
+`ballot.Id`. `EncryptedBallot.Status` has an `init` accessor (EncryptedBallot.cs). An exact copy with a new `Id` and
+`Status = Challenged` passes all of these, and k m_i then give ξ_B and every vote on the cast ballot. V5.A flags the
+duplicate id_B only afterwards. The remarks on `TallyGuardian.DecryptBallotNonce` and `ChallengedBallotStatement.For`
+now state that a distributed guardian must refuse when the published record holds any cast ballot with the same id_B
+(or H_I, or C_ξB,0), and that matching on `Id` is not enough. CLAUDE.md's `DecryptBallotNonce` sentence and the S7
+carry-over say the same. New S7 design choice "Trust boundary of the guardian's status check". No overload was added,
+because nothing in-process would call it. Its shape is recorded as a carry-over: a set of the cast ballots' id_B (or
+C_ξB,0) values, and a refusal on a match.
+
+**Code: round 1's perf claim was not measured. Accepted, measured.** Round 1 attributed the smoke wall-time rise to
+machine load without a `compare` or `--repeat`. This round ran `--repeat 5` on smoke three ways (machine sethpc2023,
+32 cores, server GC, Release):
+- Candidate group d0adc6be (`20261007T015536Z-c04d5c`) against round 0's single S7 run `20261007T010213Z-a46335`,
+  whose encrypt and verify code is byte-identical: exit 0.
+  - EncryptBallots 0.243 -> 0.239 ms (-1.6%), allocation -0.44%.
+  - VerifyBallots 0.995 -> 1.074 ms (+7.9%, under the 15% informational tolerance), allocation -9.9%.
+  - Peak heap +12.5% `OVER TOLERANCE` (informational).
+- The same group against the S6 run `20261006T031405Z-a89c53`: exit 0.
+  - EncryptBallots 0.246 -> 0.239 ms (-2.9%), allocation -3.5%.
+  - VerifyBallots 0.966 -> 1.074 ms (+11.1%), allocation -10.0%.
+  - Both baselines are single cold runs. The candidate is the median of five runs in one process, of which runs 2-5
+    are warm (dkg 63 ms against 146), hence the lower allocation.
+- To separate load from code, a fresh S6 baseline was taken under the same load. A detached worktree of HEAD
+  (`e6d7be0`, the S6 commit) was created at `.tmp-head-baseline` inside this worktree, run `--repeat 5` (group
+  d501efad), its five records copied into this worktree's `perf/results/sethpc2023.jsonl`, and the worktree removed.
+  S6 code now verifies at 1.046-1.091 ms/ballot, the same as S7's 1.040-1.098, so the machine is slower today. Then S7
+  was run `--repeat 5` again right after (group 47eac1db). `compare --baseline 20261007T015703Z-223538` (S6, group
+  d501efad), exit 0 for both S7 groups:
+
+| Phase | S6 (HEAD, same load) | S7 group 47eac1db | S7 group d0adc6be |
+|---|---|---|---|
+| EncryptBallots ms/ballot | 0.232 | 0.239 (+3.1%) | 0.239 (+3.0%) |
+| EncryptBallots alloc B/ballot | 178,587 | 173,123 (-3.1%) | 173,051 (-3.1%) |
+| VerifyBallots ms/ballot | 1.060 | 1.080 (+1.9%) | 1.074 (+1.3%) |
+| VerifyBallots alloc B/ballot | 11,664 | 11,663 (-0.01%) | 11,673 (+0.08%) |
+
+Note for later compares: group d501efad holds S6 code, but its records carry the same `gitCommit` (`e6d7be0`) as the
+S7 worktree runs. Only the group id tells them apart. `perf/results/` is gitignored.
+
+Under the same load S7 verifies within 2% of S6, allocates the same, and encrypts with 3% less allocation. The
+encrypt wall-time difference sits inside each group's own spread (S6 0.219-0.237, S7 0.211-0.253). No allocation
+metric breached the 2% gate. DecryptTally showed +16% `OVER TOLERANCE` (informational, 0.013 -> 0.016 ms/ballot) in
+one of the two comparisons; it is a 3 ms phase that S7 does not touch, and it was +2% in the other.
+
+**Tests: V14's unknown-style branch had no test. Accepted.** `Copy` takes a `ballotStyleId`. New
+`Verification14_BallotStyleNotInTheManifest_Fails14Structure` asserts `"14.structure"` and the message. V14 does not
+run `BallotStructure`, so the lookup is its own check.
+
+**Tests: V13 null/unknown branches had no tests. Accepted.** New `Verification13Tampers` rows: "no option list", "no
+supplemental field list", "null option entry" and "unknown option label" -> `"13.structure"`; "contest data D null" ->
+`"13.A"`, also asserting the `C_1 is not D XOR` message, so that the two 13.A causes stay distinguished.
+
+Mutation check (applied together, then reverted with Edit, which updates the timestamps; the rebuilt DLL was
+confirmed newer than the source):
+- `released!.Count` in place of `released is null || released.Count`.
+- `x!.Id` in place of `x?.Id`.
+- The V14 `?? throw` removed.
+
+Four new tests failed: "null option entry", "no option list", "no supplemental field list" and the V14 style test.
+The "unknown option label" and "D null" rows share their throw sites with rows that were already tested, and they
+pin those messages.
+
+Gate before any test edit (doc comments, CLAUDE.md and tracker design choices in; no test touched):
+- Build: `0 Warning(s)`, `0 Error(s)`.
+- Tests: `Passed!  - Failed:     0, Passed:   226, Skipped:     0, Total:   226` (Perf);
+  `Passed!  - Failed:     0, Passed:  1554, Skipped:     0, Total:  1554` (Core). No test failed, so nothing needed
+  re-pinning.
+- Smoke: `correctness passed`.
+  - dkg 152 ms; `EncryptBallots     261       0.261       165.7`; `VerifyBallots      1,102     1.102       12.3`.
+  - Tally 9, VerifyTally 4, DecryptTally 36, VerifyDecryption 8 ms.
+  - `tallyVerification: ran`, `decryptionVerification: ran`.
+- Console: `Challenged ballot 0-challenged, contest 0: 0-0=1, 0-1=0, contest data "Write-in: Ada Lovelace".`, then
+  `Done.`, then the expected ReadKey `InvalidOperationException`. `tally.json` (21:50:15) has 0-0: 3, 0-1: 0 and every
+  field 0.
+
+Re-pinned: nothing.
+
+Gate after:
+- Build: `0 Warning(s)`, `0 Error(s)`.
+- Tests: Core `Passed: 1560, Total: 1560` (+6); Perf `Passed: 226, Total: 226`.
+- Smoke `--repeat 5` ×2 (groups d0adc6be and 47eac1db), every run `correctness passed`:
+  - EncryptBallots 0.211-0.259 ms/ballot, 165.0-165.8 MB.
+  - VerifyBallots 1.040-1.098 ms/ballot, 11.1-12.4 MB.
+- Console: the same lines. `tally.json` and `challenged-ballots.json` were rewritten at 21:54:56, with 0-0: 3, 0-1: 0
+  and every field 0.
+
+Open question widened (no new question):
+- **Q-S7b (RLA partial decryption):**
+  - (a) As built: V13 accepts whole contests left out, and requires every field of a decrypted contest. V14.B
+    applies to the decrypted ballot, so any partial decryption fails 14.B.
+  - (b) Support RLA as p.52-53 describe it. V13 would let a decrypted contest omit fields, using the ballot's own
+    (α, β) for those in χ_i, and skip 13.4-13.A when ξ_i is withheld (duplicates and unknown labels still
+    `"13.structure"`). V14.B would check against the encrypted ballot, and 14.C-14.F only what was released.
+  - Recommendation: (a) until an audit flow is specified.
+
+Carry-overs (in addition to S7's and round 1's): a guardian-side check against the published record's cast ballots,
+matching on id_B, H_I or C_ξB,0 (an overload taking that set), for a distributed deployment.
+
+### 2026-10-06 — S7 review round 1 (G18: V13 contest data binding, challenged-ballot fallback, test gaps)
+Worktree changes only; nothing staged or committed. Six findings. Two major findings are accepted and fixed in the
+library, and they are the same gap reported by three lenses. Three minor test findings are accepted. One minor
+finding is recorded as an open question and a carry-over, not built.
+
+**Major (spec, code and tests lenses): V13 did not bind the released contest data nonce to the ballot. Accepted, fixed.**
+`ChallengedBallotDecryptionVerification` recomputed α = g^ξ_i and β = K-hat^ξ_i (13.4/13.5) and checked only
+C_1 = D ⊕ k (13.A). The contest hash χ_i (13.3) hashes the ballot's own (C_0, C_1, C_2), not α, so 13.B never sees
+ξ_i. A publisher could release any ξ' together with D' = C_1 ⊕ k(ξ'), and both V13 and V14 accepted it: forged
+write-in text on a challenged ballot. The spec's 13.4-13.A has no α = C_0 step (pp.54, 92), so this is a spec gap. It
+is not a wrong formula. The selections need no such check, because their recomputed (α_{i,j}, β_{i,j}) enter χ_i.
+- Fix: before 13.A's D check, V13 requires g^ξ_i = the ballot's C_0 and fails `"13.A"` with a message naming C_0.
+  13.A is the label because 13.4's α is the α of eq. (65), which for the ballot's ciphertext is C_0. This is library
+  hardening, like S6's C_0 membership check; see the S7 design choices and open question Q-S7c. The cost is one
+  comparison, since α was already computed. An honest record never meets it: `TallyAdmin.CombineChallengedBallot`
+  already refuses to publish a ξ that does not reproduce C_0.
+- Tests:
+  - `Verification13_ContestDataForgedUnderAnotherNonce_Fails13A` builds the consistent forgery (ξ' = ξ + 1, D' from
+    k(ξ')). It first asserts that D' decrypts C_1 under ξ', so the old 13.A holds by construction, then asserts
+    `"13.A"` and the C_0 message.
+  - The existing tamper rows now tell the two 13.A causes apart by message: "wrong contest data ξ" fails on C_0,
+    while "tampered D" and "D one block short" fail on `C_1 is not D XOR`.
+  - Mutation check (run, then reverted): with the comparison disabled, both tests fail.
+- The admin branch "contest data nonce ξ (eq. 64) does not reproduce C_0" had no test, because the "another nonce"
+  test fails at the first option's α. New `CombineChallengedBallot_ContestDataEncryptedUnderAnotherNonce_PublishesNothing`
+  uses honest selections with contest data encrypted under another ballot nonce. It asserts that no guardian is named
+  and checks that exact message.
+
+**Minor (tests): no partly decrypted ballot with contests of both kinds. Accepted.** A new shared fixture
+`TwoOfThreeContests` has a three-contest manifest. Its ballot style lists contests 1 and 3, so the ballot's second
+contest has ind_c 3 at position 2. Contest 1 carries contest data and contest 3 carries none. The ballot is opened by
+guardians 1 and 2. `Manifest.Validate` requires each contest index to equal its list position, so non-contiguous
+ind_c can only come from a ballot style. New tests:
+- `Verification13And14_BallotStyleSkippingAContest_AcceptTheFullDecryption`.
+- `Verification13_OnlyOneOfTwoContestsDecrypted_VerifiesAndCatchesAWrongValue`, run for each contest. V13 accepts
+  the partial decryption, and a wrong σ in the decrypted contest fails 13.B. Keying a hash by ballot position, or
+  ordering the mixed hashes wrongly, would fail the honest case.
+
+**Minor (tests): untested failure branches. Accepted.**
+- V13: `"no contest list"` and `"null contest entry"` (13.structure rows), plus
+  `Verification13_ContestDataReleasedForAContestWithout_Fails13Structure` on the two-contest fixture.
+- V14: `"undervote difference L + 1"` (14.E), and `"no contest list"`, `"null contest entry"`, `"no option list"`,
+  `"no supplemental field list"`, `"null option entry"` and `"null supplemental field entry"` (14.structure).
+
+**Minor (spec): no fallback when the nonce route fails. Not built; recorded as Q-S7d and a carry-over.** §3.6.7
+p.51 makes the nonce route the efficient alternative to decrypting "with their shares of the election secret key".
+p.53 expects nonces that "may only reflect that the ballot nonce encryption was incorrect". So a device that
+encrypted a wrong ξ_B, or a guardian that sends a wrong m_i (which cannot be named, Q-S7a), leaves a challenged ballot
+that `CombineChallengedBallot` refuses and that nothing else can open. Each option is a design choice the spec does
+not settle:
+- Falling back to §3.6.5-style per-selection verifiable decryption needs a single-ballot statement path (S4's
+  `EncryptedTally` skips challenged ballots) and a published record that Verifications 13/14 do not describe.
+- Retrying other k-subsets helps only against a bad m_i, and only when more than k guardians are available.
+
+Gate before any test edit (V13 fix in; no test or doc touched):
+- Build: `0 Warning(s)`, `0 Error(s)`.
+- Tests: Perf `Passed: 226, Total: 226`; Core `Passed: 1539, Total: 1539`. No test failed, so nothing needed
+  re-pinning.
+- Smoke: `correctness passed`.
+  - Timings: dkg 146 ms; EncryptBallots 0.265 ms/ballot, 165.7 MB; VerifyBallots 1.098 ms/ballot, 12.3 MB; Tally 9,
+    VerifyTally 4, DecryptTally 37, VerifyDecryption 8 ms.
+  - Notes: `tallyVerification: ran`, `decryptionVerification: ran`.
+- Console: `Challenged ballot 0-challenged, contest 0: 0-0=1, 0-1=0, contest data "Write-in: Ada Lovelace".`, then
+  `Done.`, then the expected ReadKey exception. `tally.json` (21:23:54) has 0-0: 3, 0-1: 0 and every field 0.
+
+Re-pinned: nothing.
+
+Gate after:
+- Build: `0 Warning(s)`, `0 Error(s)`.
+- Tests: Core `Passed: 1554, Total: 1554` (+15); Perf `Passed: 226, Total: 226`.
+- Smoke ×2, each `correctness passed`: EncryptBallots 0.279 / 0.263 ms/ballot, 165.6-165.8 MB; VerifyBallots
+  1.125 / 1.051 ms/ballot, 12.4 MB; DecryptTally 37-45 ms.
+- Console: same lines as before. `tally.json` and `challenged-ballots.json` were rewritten at 21:32:03, with 0-0: 3,
+  0-1: 0 and every field 0.
+- Note: the first after-gate run of smoke, console and tests used a stale build that still held the mutation-check
+  edit. Restoring the file with Copy-Item kept its old timestamp, so the incremental build skipped it. The two
+  mutation-sensitive tests failed in that run. After touching the file and rebuilding, the numbers above are from
+  the correct build.
+
+Perf: no hot path changed. V13 is not in egperf, and the only library change is one comparison in it. The smoke wall
+times are 5-10% above S7's runs (0.230-0.247 and 0.995-1.046 ms/ballot) on identical encrypt and verify code, and
+allocation is unchanged. That is machine load, not this change.
+
+Open questions added (for the user; both implemented or left as described):
+- **Q-S7c (13.A hardening):** (a) as built, the α = C_0 comparison reports as `"13.A"`; (b) give it its own documented
+  sub-section label (for example `"13.structure"` or a new `"13.A0"`); (c) remove it and follow the spec's letters
+  exactly, which leaves the forgery open. Recommendation: (a).
+- **Q-S7d (no fallback):** (a) as built, nothing is published and the ballot stays unopened; (b) fall back to a
+  per-selection verifiable decryption (S4 engine, 0x30/0x31 hashes) of the challenged ballot's ciphertexts, and
+  define how V13/V14 check it; (c) have the administrator retry other k-subsets of the received m_i before giving up.
+  Recommendation: (a) for now, with (c) as a cheap later addition and (b) only once an audit flow is specified.
+
+Carry-overs (in addition to S7's): the Q-S7d fallback.
+
+### 2026-10-06 — S7 (ballot nonce and challenged ballots: G17, G18)
+Worktree changes only; nothing staged or committed. The KAT oracle (`test/kat/*`) was extended by the orchestrator
+before this stage with eight families (`ballot_nonce_*` ×4, `challenged_ballot_*` ×4) and a `challenged_ballots`
+summary; this stage makes them pass through the library. All eight passed on the first run, with no library fix
+needed for any byte.
+
+**G17 (encrypted ballot nonce, §3.3.4 eqs. 34-38):**
+- Checked against p.30 (page text and the KAT oracle's 300 dpi reading). The old `BallotNonceEncryption` already
+  produced the spec's bytes: h = H(H_I; 0x22, α_B, β_B), k_1 = HMAC(h, 0x01 ‖ "ballot_nonce" ‖ 0x00 ‖
+  "ballot_nonce_encrypt" ‖ 0x0100) (one-byte counter, two-byte length, not eq. 66's form), C_1 = b(ξ_B, 32) ⊕ k_1,
+  c_B = H_q(H_I; 0x23, a_B, C_0, C_1) (len 1057, §5.5.3 p.75). It was rewritten as a public static class with the
+  shared pieces (`SecretKey`, `EncryptionKey`, `ProofChallenge`, `ProofHolds`, `Encrypt` with optional ξ-hat_B/u_B,
+  `Decrypt`), on pooled buffers, clearing β_B's buffer and h after use.
+- Not a confirmation code input: eq. (71) hashes only χ_1..χ_m and B_C, and eq. (70) only the selection and contest
+  data ciphertexts. Confirmed by `Encrypt_TheEncryptedBallotNonceIsNotAnInputToTheConfirmationCode` and the KAT (the
+  ballot encrypted with the oracle's ξ-hat_B has the 13.B vector's H_C).
+- `EncryptedBallot.EncryptedBallotNonce` (required; new `EncryptedBallotNonce` type with C_0 as `IntegerModP`,
+  replacing `EncryptedData`, also on `PreEncryptedBallot`). The encryptor stores the C_ξB it already computed. JSON:
+  `encryptedBallotNonce` (required property; C_0 through the strict converter). Protobuf: ballot field 10, reusing the
+  `ProtobufEncryptedData` DTO; the decoder refuses a missing field, C_1 not exactly 32 bytes, and non-canonical
+  C_0/c_B/v_B (`NonCanonicalEncodingException`). `BallotStructure` requires the field with a 32-byte C_1 (so
+  6/7/8/9.structure). Test seam `BallotEncryptor.BallotNonceEncryptionNoncesForTesting`.
+
+**G18 (challenged ballots, §3.6.7 eqs. 107-111, Verifications 13 and 14):**
+- `TallyGuardian.DecryptBallotNonce(ballot, record)`: requires status `Challenged`, `BallotStructure` and
+  H_I = H(H_E; 0x20, id_B) (`ArgumentException`), then C_ξB,0 in Z_p^r (the S6 carry-over) and the eq. (38) proof
+  (`TallyDecryptionException`, no guardian named), then m_i = C_ξB,0^{ẑ_i} through `MontgomeryModP.PowModP`. One
+  message (`BallotNoncePartialDecryption`); it does not touch a tally or contest data session. The tamper seam is
+  called with (0, 0, m_i).
+- `TallyAdmin.DecryptChallengedBallot`/`CombineChallengedBallot`: the same ballot checks; a quorum of distinct
+  senders, one message each, for this ballot (else the sender is named), no zero m_j (named); β_B = ∏ m_j^{w_j}
+  (eq. 108, constant-time), ξ_B (eq. 35/36); for each verifiable field ξ_{i,j} (eq. 33), α must equal g^ξ, σ found in
+  [0, range bound] by K^ξ·K^σ = β (eq. 109; a few multiplications); for each contest data field ξ (eq. 64),
+  C_0 = g^ξ, D by eqs. (110), (65), (66), (111). Any mismatch throws naming no guardian ("did not decrypt
+  consistently"): with no proof for m_i, a wrong share and a wrong C_ξB look the same (p.53). ξ_B's bytes are cleared
+  after use and never returned.
+- Published record `DecryptedChallengedBallot` (§3.7 "the selections made on the ballot, the plaintext
+  representation ..., decryption nonces"): per contest the options and supplemental fields as `DecryptedChallengedField`
+  (label, σ, ξ_{i,j}) in manifest order, and `DecryptedChallengedContestData` (ξ, D, `DecodeText()`).
+- `ChallengedBallotDecryptionVerification` = Verification 13: `"13.structure"` (other ballot, not challenged,
+  `BallotStructure`, H_I, decrypted contest not on the ballot or listed twice, not exactly one release per option and
+  declared field, contest data released where none is carried or the reverse), then per contest 13.1/13.2
+  (α = g^ξ, β = K^{σ+ξ}), 13.3 (χ through `ContestHash`, keyed by ind_c, with the ballot's own C_0, C_1, C_2),
+  13.4-13.7/13.A (with α = g^ξ, β = K-hat^ξ, KDF counter 1-based per Q6), then 13.B (H_C over the χ in contest-index
+  order, B_C from the device hash and previous code as in V8). A contest left out (the RLA case) enters 13.B with its
+  χ recomputed from the encrypted ballot.
+- `ChallengedBallotWellFormednessVerification` = Verification 14: `"14.structure"` (other ballot, not challenged,
+  unknown style, null/repeated entries), 14.A-14.D (labels against the style and the manifest, supplemental fields
+  like options), then 14.E (σ in 0..R, or the field's bound) and 14.F (options + write-in count <= L, Q13).
+- Console: the first ballot is encrypted again as `0-challenged` and challenged; V5-V8 and V11.D cover all four
+  ballots, V9 and the tally the three cast ones; the challenged one is decrypted by all three guardians and checked by
+  V13 and V14; output `challenged-ballots.json` (and `encrypted-json-ballots\0-challenged.json`) in
+  `C:\temp\eg\data\1`. No input file there changed, so no .bak was made. Contest data decryption now covers cast
+  ballots only (all three, as before).
+- egperf: no challenged phase (see carry-overs).
+
+Gate before re-pinning (code and the console in; the test project only compile-fixed: `EncryptedBallotNonce`
+copied into the 11 hand-built ballot clones, `ElectionFixtureBuilder.PlaceholderBallotNonce` on 4 synthetic ballots,
+and `new IntegerModP(data.C0)` -> `data.C0` in `BallotPreEncryptorTests`, which no longer compiled; no assertion
+touched):
+- Build: `0 Warning(s)`, `0 Error(s)`.
+- Smoke: `correctness passed`. dkg 140 ms; EncryptBallots 245 ms, 0.245 ms/ballot, 165.7 MB; VerifyBallots 1,034 ms,
+  1.034 ms/ballot, 12.4 MB; Tally 9, VerifyTally 4, DecryptTally 34, VerifyDecryption 8 ms; `tallyVerification: ran`,
+  `decryptionVerification: ran`.
+- Console: `Ballot 0, contest 0: contest data "Write-in: Ada Lovelace".`, `Challenged ballot 0-challenged, contest 0:
+  0-0=1, 0-1=0, contest data "Write-in: Ada Lovelace".`, `Done.`, then the expected ReadKey `InvalidOperationException`;
+  `tally.json` rewritten at 20:48 with 0-0: 3, 0-1: 0, every supplemental field 0.
+- Tests: Perf `Passed: 226, Total: 226`; Core `Failed: 1, Passed: 1417, Total: 1418`. The failure was
+  `KnownAnswerTests.EveryVectorFamilyIsCheckedOrExplicitlyUnsupported` (the eight new oracle families were not yet
+  checked), which the new KAT tests close by design.
+
+Re-pinned: nothing. No existing expectation moved. One test helper was corrected:
+`StrictDecodingTests.WithIdentifier` rebuilt the protobuf DTO without the new nonce, so its two id_B cases would have
+failed on the missing nonce instead of on id_B; it now copies it.
+
+New tests (Core 1418 -> 1539):
+- KAT (`KnownAnswerTests.ChallengedBallots.cs`, 37): `BallotNonceSecretKey_Eq35` (4), `BallotNonceKdfKey_Eq36` (4;
+  the 36-byte message), `BallotNonceEncryption_Eq34To38` (4, incl. ξ_B = 2^256 - 1 and ξ-hat_B = q - 1: C_0, C_1, c, v,
+  the proof, h, k_1, decryption), `BallotNonceDecryption_Eq107And108` (4: each m_i through the guardian, w_i, β_B, h,
+  k_1, ξ_B), `ChallengedBallotContestDataSecretKey_Verification13_4To13_6` (4), `..._KdfKey_Verification13_7` (7),
+  `ChallengedBallotContestHash_Verification13_1To13_3` (5, incl. the sparse ballot's ind_c 2 and 5 and a contest
+  without contest data), `ChallengedBallotConfirmationCode_Verification13B` (2, no and simple chaining), the oracle's
+  two ballots end to end through guardians, administrator, V13 and V14 (every released ξ, σ, contest data ξ and D
+  equal to the oracle's; ξ_B not among them), and the main-chain ballot through `BallotEncryptor` (its C_ξB equals the
+  oracle's, its H_C the 13.B vector's; challenged, opened, V8/V13/V14 accept).
+- `ChallengedBallotDecryptionTests` (56): every quorum opens a ballot and V13/V14 accept; released nonces are
+  exactly eqs. (33)/(64) and the published JSON does not contain ξ_B; an overvote opens as the neutralized contest;
+  C_ξB is not a confirmation code input; refusals: cast/not-submitted ballot (guardian and administrator), malformed
+  ballot or foreign H_I, a broken eq. (38) proof (response, challenge, C_1, C_0; guardian and administrator), a
+  non-member C_ξB,0 with a valid forged proof (zero; negated with an even c_B); a wrong m_i and a C_ξB of another nonce
+  publish nothing and name no guardian; a zero m_i, a message for another ballot and a repeated message name the
+  guardian; no quorum; V13: 15 tampers (wrong σ of an option or field, wrong or swapped ξ_{i,j} -> 13.B; wrong
+  contest data ξ, tampered or short D, D and σ both -> 13.A; other ballot, contest not on the ballot or twice, option
+  missing or twice, field missing, contest data missing -> 13.structure), a cast ballot (13/14.structure), malformed
+  ballot or foreign H_I, another device (13.B), a partial decryption (V13 accepts, 14.B fails); V14: 15 tampers
+  (14.A, 14.B, 14.C ×2, 14.D ×2, 14.E ×4, 14.F ×2 incl. the Q13 write-in case, 14.structure ×3) and indicators and
+  the undervote difference not counted as selections.
+- `EncryptedBallotNonceSerializationTests` (3): JSON and protobuf round trips keep C_ξB and its proof; JSON with the
+  property missing (`JsonException`) or null (decodes, then `"6.structure"`).
+- `StrictDecodingTests`: JSON `ballot nonce C0 = p`; protobuf: nonce missing, C_0 = p, C_0 of 513 bytes, C_1 of 31
+  and 33 bytes, C_1 missing, c_B = q, v_B = q.
+- `BallotStructureTests`: four shapes × V6/7/8/9 (nonce missing; C_1 one byte short, one byte long, null).
+- `ProtobufEncryptedBallotSerializerTests.SerializedDto_NonListFields_RoundTripCorrectly_WhenInspectedDirectly`
+  (which claims every ballot-level field) also asserts the DTO's C_ξB parts. No new test case.
+- Mutation check (run, then reverted): with the C_ξB,0 membership check disabled, both forged-C_0 cases fail.
+
+Gate after:
+- Build: `0 Warning(s)`, `0 Error(s)`.
+- Smoke ×3, each `correctness passed`: dkg 141-142 ms; EncryptBallots 0.247 / 0.243 / 0.230 ms/ballot,
+  165.6-165.8 MB; VerifyBallots 1.030 / 0.995 / 1.046 ms/ballot, 12.4 MB; Tally 8-9; VerifyTally 4; DecryptTally
+  34-35; VerifyDecryption 8-9 ms.
+- Console: as before re-pinning (`Challenged ballot 0-challenged, contest 0: 0-0=1, 0-1=0, contest data "Write-in:
+  Ada Lovelace".`, `Done.`, the expected ReadKey exception); `tally.json`, `contest-data.json` and
+  `challenged-ballots.json` rewritten at 21:03:13; counts 0-0: 3, 0-1: 0, fields 0; `contest-data.json` holds
+  ballots 0, 1, 2.
+- Tests: Core `Passed: 1539, Total: 1539`; Perf `Passed: 226, Total: 226`.
+
+Perf against S6 (same machine; `compare --baseline 20261006T031405Z-a89c53 --candidate 20261007T010213Z-a46335`):
+
+| Phase | S6 | S7 |
+|---|---|---|
+| EncryptBallots | 0.237-0.246 ms, 179.2 KB/ballot | 0.230-0.247 ms, 173.8 KB/ballot (-3.1%) |
+| VerifyBallots | 0.965-0.996 ms, 12.96 KB/ballot | 0.995-1.046 ms, 12.96 KB/ballot (-0.07%) |
+
+Encryption did the C_ξB work before S7 and threw it away; it now keeps it and builds its hashes in pooled buffers,
+hence 3% less allocation. Verification allocates the same; its only new work is a null and length check of C_ξB in
+`BallotStructure`, so the 3-5% wall-time difference is run-to-run noise. `compare` flagged VerifyTally (+4.7%) and
+VerifyDecryption (+3.6%) allocation as REGRESSION: about 50 and 7 bytes per ballot on paths S7 does not touch, and the
+four S7 runs alone spread 1,001-1,087 and 183-193 bytes (the cold-run variance in memory). Serialized ballot: JSON
+about 20.1 KB -> 20.9 KB, protobuf 11,824 -> 12,444 bytes (C_ξB). The scenario and manifest hashes did not change, so
+S6 records remain comparable.
+
+Open questions for the user (implemented as the recommended option; neither changes bytes the spec defines):
+1. **Ballot nonce decryption has no proof (§3.6.7).** (a) As built: m_i alone; a wrong share is detected (nothing
+   published) but not attributed. (b) Add an unpublished per-guardian Chaum-Pedersen proof that
+   log_g(K-hat_i) = log_{C_ξB,0}(m_i), with an invented domain separator, so that the administrator can name the
+   guardian. Recommendation: (a), since the spec defines no such proof and (b) invents interoperable bytes. Note that
+   the S4/S6 three-round engine would also give every guardian β_B, so ξ_B.
+2. **Verification 14.B on a partial (RLA) decryption.** (a) As built: 14.B applies to the decrypted ballot, so a
+   decryption that leaves out contests fails 14.B although 13.B accepts it. (b) Check 14.B against the encrypted
+   ballot (which `BallotStructure` already ties to the style) and 14.C-14.F only for the contests decrypted.
+   Recommendation: (a) until the RLA flow is specified; the library decrypts every contest.
+
+Carry-overs:
+- No egperf challenged-ballot phase: the runner streams and discards ballots, so a phase needs retained ballots plus
+  a `PhaseSettings` flag, CLI override, result-schema key and report support. Its cost per challenged ballot is about
+  2k full-width exponentiations for k guardians (k checks of the proof, k m_i) plus the administrator's 2 + k, then
+  3 per verifiable field (α, K^ξ, and V13's α, β) and 4 per contest data field. Unit tests, the KAT and the console
+  exercise the path.
+- A `DecryptedChallengedBallot` record serializer (with the S4/S6 record serializer carry-overs, S10).
+- S9 (pre-encrypted recording tool, G31) will reuse `BallotNonceEncryption` and `CombineChallengedBallot`'s
+  derivations for uncast pre-encrypted ballots (Verification 19).
+- Trust boundary (spec-silent): a guardian refuses a ballot whose `Status` is not `Challenged`, but it reads the
+  status from the ballot object the administrator hands it. In-process that is the record; in a distributed
+  deployment a guardian should check the status against the published record, not the administrator's copy.
+  (Sharpened in S7 review round 2: the match must be on id_B, H_I or C_ξB,0, not on the string `Id`.)
 
 ### 2026-10-05 — S6 review round 2 (G32: administrator zero-share and misaddressed-message tests)
 One finding (tests lens, minor), accepted. Tests only; no library code, interoperable byte or pinned value
@@ -342,7 +773,7 @@ Gate (Release), after the change; no test failed at any point, so nothing was re
 - Tests: Core 1418/1418 (was 1411; +1 zero-share, +6 misaddressed), Perf 226/226.
 
 Carry-overs: unchanged from round 1. These are the C2 byte-order question (pending the user), the S7 nonce-decryption
-membership check, and no egperf contest-data phase.
+membership check (done in S7: `ChallengedBallotStatement.RequireDecryptable`), and no egperf contest-data phase.
 
 ### 2026-10-05 — S6 review round 1 (G32: C_0 subgroup membership; G11/G32 test gaps)
 Five findings (two major, three minor), all accepted. Worktree changes only; nothing staged or committed. No
@@ -397,6 +828,7 @@ Gate (no pinned expectation broke, so there was nothing to re-pin):
 
 Carry-over for S7: §3.6.7's decryption of the ballot nonce (Verifications 13.6/13.7) has the same C_0 shape and
 the same Schnorr gate, so it needs the same membership check before any guardian exponentiates with its share.
+(Done in S7: guardians and the administrator require C_ξB,0 in Z_p^r before the eq. (38) proof.)
 
 ### 2026-10-05 — S6 (contest data: G11, G32)
 Worktree changes only; nothing staged or committed. The KAT oracle (`test/kat/*`) was extended by the orchestrator

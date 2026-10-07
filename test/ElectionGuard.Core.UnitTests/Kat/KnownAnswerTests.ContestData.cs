@@ -7,6 +7,7 @@ using ElectionGuard.Core.Verify;
 using ElectionGuard.Core.Verify.Tally;
 using System.Numerics;
 using System.Text.Json;
+using ElectionGuard.Testing.Common;
 
 namespace ElectionGuard.Core.UnitTests.Kat;
 
@@ -437,6 +438,7 @@ public partial class KnownAnswerTests
             DeviceId = "kat-device",
             Weight = 1,
             ConfirmationCode = new ConfirmationCode(new byte[32]),
+            EncryptedBallotNonce = ElectionFixtureBuilder.PlaceholderBallotNonce,
             Contests =
             [
                 new EncryptedContest

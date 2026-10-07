@@ -202,7 +202,7 @@ public class BallotPreEncryptorTests
 
         // §3.3.4: c = Hq(HI; 0x23, a, C0, C1) with a = g^v * C0^c.
         var data = ballot.EncryptedBallotNonce;
-        var c0 = new IntegerModP(data.C0);
+        var c0 = data.C0;
         var commitment = IntegerModP.PowModP(EGParameters.G, data.Response) * IntegerModP.PowModP(c0, data.Challenge);
         var expectedChallenge = EGHash.HashModQ(ballot.SelectionEncryptionIdentifierHash, [0x23], commitment, data.C0, data.C1);
         Assert.Equal(expectedChallenge, data.Challenge);
