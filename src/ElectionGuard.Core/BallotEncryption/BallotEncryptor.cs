@@ -71,6 +71,31 @@ public class BallotEncryptor
             encryptionRecord.ElectionPublicKeys.OtherBallotDataEncryptionKey.ToBigInteger());
     }
 
+    /// <summary>
+    /// Encrypts <paramref name="ballot"/> as the next ballot of the device's <paramref name="chain"/>
+    /// (§3.4.4): it chains from <see cref="DeviceChain.PreviousConfirmationCode"/> and is appended to
+    /// the chain before it is returned. The chain must be this encryptor's device. Under simple
+    /// chaining, calls on one chain must not overlap: each ballot depends on the one before it.
+    /// </summary>
+    public EncryptedBallot EncryptNext(Ballot ballot, DeviceChain chain)
+    {
+        ArgumentNullException.ThrowIfNull(chain);
+        if (!string.Equals(chain.DeviceId, _deviceId, StringComparison.Ordinal) || chain.DeviceInformationHash != _deviceHash)
+        {
+            throw new ArgumentException($"The chain is device {chain.DeviceId}'s; this encryptor encrypts for device {_deviceId} with its own device information hash.", nameof(chain));
+        }
+
+        var encrypted = Encrypt(ballot, chain.PreviousConfirmationCode);
+        chain.Append(encrypted);
+        return encrypted;
+    }
+
+    /// <summary>
+    /// Encrypts <paramref name="ballot"/>. Under simple chaining, <paramref name="previousConfirmationCode"/>
+    /// is the confirmation code of the device's previous ballot, or null for its first ballot (which
+    /// then chains from H_0, eq. 74); under no chaining it is ignored. A <see cref="DeviceChain"/>
+    /// keeps track of it and produces the device's record when the election ends.
+    /// </summary>
     public EncryptedBallot Encrypt(Ballot ballot, ConfirmationCode? previousConfirmationCode)
     {
         return Encrypt(
@@ -133,6 +158,7 @@ public class BallotEncryptor
             SelectionEncryptionIdentifierHash = selectionEncryptionIdentifierHash,
             Contests = encryptedContests,
             ConfirmationCode = confirmationCode,
+            ChainingField = chainingField,
             EncryptedBallotNonce = encryptedBallotNonce,
             Weight = 1,
         };

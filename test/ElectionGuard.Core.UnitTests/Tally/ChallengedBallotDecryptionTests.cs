@@ -102,6 +102,7 @@ public class ChallengedBallotDecryptionTests
         Contests = contests ?? ballot.Contests,
         ConfirmationCode = ballot.ConfirmationCode,
         EncryptedBallotNonce = nonce ?? ballot.EncryptedBallotNonce,
+        ChainingField = ballot.ChainingField,
         Weight = ballot.Weight,
         Status = status ?? ballot.Status,
         DeviceId = ballot.DeviceId,
@@ -635,6 +636,41 @@ public class ChallengedBallotDecryptionTests
         var exception = Assert.Throws<VerificationFailedException>(() => new ChallengedBallotDecryptionVerification().Verify(election.Record, ballot, decrypted, otherDevice, null));
 
         Assert.Equal("13.B", exception.SubSection);
+    }
+
+    /// <summary>
+    /// S8: the overload without a device hash or previous code computes 13.B over the chaining field
+    /// the ballot carries ("B_C is the chaining field for ballot B"); whether that field is right for
+    /// the ballot's device and chain position is Verification 8.D/8.E. A ballot whose stored field
+    /// is not the one it was hashed with fails 13.B.
+    /// </summary>
+    [Fact]
+    public void Verification13_OverTheBallotsOwnChainingField()
+    {
+        var election = Shared.Value;
+        var (ballot, decrypted) = Opened.Value;
+        var verification = new ChallengedBallotDecryptionVerification();
+
+        Assert.Null(Record.Exception(() => verification.Verify(election.Record, ballot, decrypted)));
+
+        byte[] field = ((byte[])ballot.ChainingField).ToArray();
+        field[^1] ^= 0x01;
+        var tampered = new EncryptedBallot
+        {
+            Id = ballot.Id,
+            SelectionEncryptionIdentifier = ballot.SelectionEncryptionIdentifier,
+            SelectionEncryptionIdentifierHash = ballot.SelectionEncryptionIdentifierHash,
+            BallotStyleId = ballot.BallotStyleId,
+            Contests = ballot.Contests,
+            ConfirmationCode = ballot.ConfirmationCode,
+            EncryptedBallotNonce = ballot.EncryptedBallotNonce,
+            ChainingField = ChainingField.FromCanonicalBytes(field),
+            Weight = ballot.Weight,
+            Status = ballot.Status,
+            DeviceId = ballot.DeviceId,
+        };
+
+        Assert.Equal("13.B", Assert.Throws<VerificationFailedException>(() => verification.Verify(election.Record, tampered, decrypted)).SubSection);
     }
 
     /// <summary>

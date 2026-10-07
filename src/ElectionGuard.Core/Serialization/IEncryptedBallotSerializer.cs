@@ -31,6 +31,7 @@ public class JsonEncryptedBallotSerializer : IEncryptedBallotSerializer
                 new SelectionEncryptionIdentifierJsonConverter(),
                 new SelectionEncryptionIdentifierHashJsonConverter(),
                 new VotingDeviceInformationHashJsonConverter(),
+                new ChainingFieldJsonConverter(),
             }
         };
 
@@ -52,6 +53,7 @@ public class JsonEncryptedBallotSerializer : IEncryptedBallotSerializer
                 new SelectionEncryptionIdentifierJsonConverter(),
                 new SelectionEncryptionIdentifierHashJsonConverter(),
                 new VotingDeviceInformationHashJsonConverter(),
+                new ChainingFieldJsonConverter(),
             }
         };
 
@@ -121,6 +123,7 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
                 ContestHash = c.ContestHash,
             }).ToList(),
             ConfirmationCode = encryptedBallot.ConfirmationCode,
+            ChainingField = encryptedBallot.ChainingField,
             Weight = encryptedBallot.Weight,
             Status = encryptedBallot.Status,
             EncryptedBallotNonce = new ProtobufEncryptedData
@@ -209,6 +212,7 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
                 ContestHash = new ContestHash(c.ContestHash),
             }).ToList(),
             ConfirmationCode = new ConfirmationCode(protobufBallot.ConfirmationCode),
+            ChainingField = ChainingField.FromCanonicalBytes(protobufBallot.ChainingField),
             EncryptedBallotNonce = ReadBallotNonce(protobufBallot.EncryptedBallotNonce),
             Weight = protobufBallot.Weight,
             Status = protobufBallot.Status,
@@ -297,6 +301,14 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
         /// </summary>
         [ProtoMember(10)]
         public ProtobufEncryptedData? EncryptedBallotNonce { get; init; }
+
+        /// <summary>
+        /// <see cref="EncryptedBallot.ChainingField"/> (§3.4.4), the 36-byte B_C. Not marked required,
+        /// so that a document without it decodes far enough to be refused with a
+        /// <see cref="NonCanonicalEncodingException"/>.
+        /// </summary>
+        [ProtoMember(11)]
+        public byte[]? ChainingField { get; init; }
     }
 
     [ProtoContract]

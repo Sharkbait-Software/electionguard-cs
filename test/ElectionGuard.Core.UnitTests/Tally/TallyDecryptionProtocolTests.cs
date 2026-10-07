@@ -67,6 +67,7 @@ internal sealed class TallyDecryptionElection
         Contests = ballot.Contests,
         ConfirmationCode = ballot.ConfirmationCode,
         EncryptedBallotNonce = ballot.EncryptedBallotNonce,
+        ChainingField = ballot.ChainingField,
         Weight = weight,
         Status = status ?? ballot.Status,
         DeviceId = ballot.DeviceId,
@@ -324,6 +325,7 @@ public class TallyDecryptionProtocolTests
             SelectionEncryptionIdentifier = new SelectionEncryptionIdentifier(new byte[] { 0x02 }),
             SelectionEncryptionIdentifierHash = new SelectionEncryptionIdentifierHash(new byte[] { 0x03 }),
             EncryptedBallotNonce = ElectionFixtureBuilder.PlaceholderBallotNonce,
+            ChainingField = ElectionFixtureBuilder.PlaceholderChainingField,
             BallotStyleId = "ballot-style-1",
             Contests =
             [

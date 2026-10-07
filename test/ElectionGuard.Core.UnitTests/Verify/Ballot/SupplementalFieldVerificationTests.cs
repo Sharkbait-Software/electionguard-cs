@@ -119,6 +119,7 @@ public class SupplementalFieldVerificationTests
         Contests = [change(ballot.Contests[0]), .. ballot.Contests.Skip(1)],
         ConfirmationCode = ballot.ConfirmationCode,
         EncryptedBallotNonce = ballot.EncryptedBallotNonce,
+        ChainingField = ballot.ChainingField,
         Weight = ballot.Weight,
         Status = ballot.Status,
         DeviceId = ballot.DeviceId,

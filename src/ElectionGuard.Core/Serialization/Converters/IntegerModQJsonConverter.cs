@@ -161,3 +161,25 @@ public class VotingDeviceInformationHashJsonConverter : JsonConverter<VotingDevi
         writer.WriteStringValue(hexString);
     }
 }
+public class ChainingFieldJsonConverter : JsonConverter<ChainingField>
+{
+    public override ChainingField Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        string? hexString = reader.GetString();
+        if (hexString == null)
+        {
+            throw new JsonException("Hex string is null");
+        }
+
+        // Strict: exactly 36 bytes, the mode identifier and a 32-byte hash (§3.4.4).
+        byte[] bytes = Convert.FromBase64String(hexString);
+        return ChainingField.FromCanonicalBytes(bytes);
+    }
+
+    public override void Write(Utf8JsonWriter writer, ChainingField value, JsonSerializerOptions options)
+    {
+        byte[] bytes = value;
+        string hexString = Convert.ToBase64String(bytes);
+        writer.WriteStringValue(hexString);
+    }
+}

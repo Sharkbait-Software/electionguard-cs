@@ -1,4 +1,4 @@
-using ElectionGuard.Core.BallotEncryption;
+﻿using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.Models;
 using ElectionGuard.Core.PreEncryption;
 
@@ -11,7 +11,7 @@ namespace ElectionGuard.Core.Verify;
 /// fields the manifest declares for it (§3.3.9), each once; and it carries an encrypted contest data
 /// field exactly where the manifest declares contest data for the contest, with C_1 of exactly
 /// 32·b_Λ bytes (§3.3.10); and it carries the encrypted ballot nonce C_ξB, with C_ξB,1 of exactly
-/// 32 bytes (§3.3.4).
+/// 32 bytes (§3.3.4), and its 36-byte chaining field B_C (§3.4.4).
 ///
 /// The spec has no lettered sub-check for this. It is implicit in its index-keyed model: one
 /// ciphertext per (contest index, option index) (§3.1.3 p.17; §3.4 "unique contest index"), and
@@ -143,7 +143,19 @@ public static class BallotStructure
             return missingContest;
         }
 
-        return BallotNonceViolation(ballot);
+        return BallotNonceViolation(ballot) ?? ChainingFieldViolation(ballot.Id, ballot.ChainingField);
+    }
+
+    /// <summary>
+    /// The ballot carries the 36-byte chaining field B_C its confirmation code was computed with
+    /// (§3.4.4; eqs. 71, 116). Both decoders refuse any other length; a default (empty) value only
+    /// comes from code that built the ballot without one, and would otherwise be hashed as no B_C.
+    /// </summary>
+    private static string? ChainingFieldViolation(string ballotId, ChainingField chainingField)
+    {
+        return chainingField.IsWellFormed
+            ? null
+            : $"Ballot {ballotId} has a chaining field of {((byte[])chainingField)?.Length ?? 0} bytes; B_C is exactly {ChainingField.ByteLength} (§3.4.4).";
     }
 
     /// <summary>
@@ -336,7 +348,8 @@ public static class BallotStructure
             }
         }
 
-        return MissingStyleContest(ballot.Id, style, manifestContests, inStyle, onBallot);
+        return MissingStyleContest(ballot.Id, style, manifestContests, inStyle, onBallot)
+            ?? ChainingFieldViolation(ballot.Id, ballot.ChainingField);
     }
 
     private static BallotStyle? FindBallotStyle(Manifest manifest, string ballotStyleId)

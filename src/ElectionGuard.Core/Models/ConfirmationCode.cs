@@ -87,11 +87,23 @@ public struct ConfirmationCode : IEquatable<ConfirmationCode>
 
     public bool Equals(ConfirmationCode other)
     {
-        return _value.SequenceEqual(other._value);
+        return (_value ?? []).AsSpan().SequenceEqual(other._value ?? []);
     }
 
+    /// <summary>
+    /// Over the bytes, consistent with <see cref="Equals(ConfirmationCode)"/>, so that a code decoded
+    /// from a record finds the ballot it names in a dictionary (a device's ordered list references
+    /// its ballots by confirmation code; see <see cref="DeviceChainRecord"/>).
+    /// </summary>
     public override int GetHashCode()
     {
-        return HashCode.Combine(_value);
+        var hash = new HashCode();
+        hash.AddBytes(_value ?? []);
+        return hash.ToHashCode();
+    }
+
+    public override string ToString()
+    {
+        return Convert.ToHexString(_value ?? []);
     }
 }

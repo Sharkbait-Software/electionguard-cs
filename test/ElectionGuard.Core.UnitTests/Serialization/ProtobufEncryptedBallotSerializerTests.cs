@@ -123,6 +123,7 @@ public class ProtobufEncryptedBallotSerializerTests
             DeviceId = realBallot.DeviceId,
             ConfirmationCode = realBallot.ConfirmationCode,
             EncryptedBallotNonce = realBallot.EncryptedBallotNonce,
+            ChainingField = realBallot.ChainingField,
             Weight = realBallot.Weight,
             Status = realBallot.Status,
             Contests = new List<EncryptedContest> { contestWithNoChoices },
@@ -173,12 +174,10 @@ public class ProtobufEncryptedBallotSerializerTests
         // byte[] ProtoMember, so it survives correctly here.
         Assert.Equal((byte[])original.SelectionEncryptionIdentifier, dto.SelectionEncryptionIdentifier);
         Assert.Equal((byte[])original.SelectionEncryptionIdentifierHash, dto.SelectionEncryptionIdentifierHash);
-        // ConfirmationCode is the field that folds the (currently no-op, see
-        // BallotEncryptorTests.Encrypt_SecondBallotOnDevice_ChainingHasNoEffect...) ChainingField
-        // into the ballot -- asserting it here is how this phase covers "ChainingField" per the
-        // plan, since ChainingField itself is a transient input to BallotEncryptor.Encrypt and is
-        // not a stored property of EncryptedBallot.
+        // The confirmation code and, since S8 (G19/G37), the chaining field B_C it was hashed with
+        // (protobuf ballot field 11), which Verification 8.B recomputes it from.
         Assert.Equal((byte[])original.ConfirmationCode, dto.ConfirmationCode);
+        Assert.Equal((byte[])original.ChainingField, dto.ChainingField);
         // The encrypted ballot nonce C_ξB (§3.3.4, protobuf ballot field 10).
         Assert.NotNull(dto.EncryptedBallotNonce);
         Assert.Equal(original.EncryptedBallotNonce.C0.ToByteArray(), dto.EncryptedBallotNonce!.C0);

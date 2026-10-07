@@ -2,8 +2,8 @@
 
 `eg_kat.py` is an independent reference implementation of the ElectionGuard v2.1.0 hash chain,
 used as a known-answer-test oracle for `ElectionGuard.Core`. It was written from the
-specification text only (sections 3.1-3.4, 3.6.2-3.6.7, 4.1.4 and 5, and Verifications 10, 12, 13 and 14, including the section 5.5
-domain-separation tables) and the user's recorded decisions on spec contradictions (Q5, Q6, Q7, Q10 and Q20 in
+specification text only (sections 3.1-3.4, 3.6.2-3.6.7, 4.1.4 and 5, and Verifications 10, 12, 13, 14 and 16, including the section 5.5
+domain-separation tables) and the user's recorded decisions on spec contradictions (Q4, Q5, Q6, Q7, Q10 and Q20 in
 `docs/spec-compliance/2026-10-04-fix-progress.md`), without reading the C# source or its existing test expectations, so its outputs are not
 shaped by any encoding bug in the C# code.
 
@@ -55,6 +55,9 @@ This rewrites `test/kat/vectors.json` and prints H_P for n = 3, k = 2.
 | `challenged_ballot_contest_data_kdf_key` | Verification 13.7: k_l by eq. (66), l 1-based (Q6) |
 | `challenged_ballot_contest_hash` | Verification 13.1-13.3: chi from (alpha, beta) recomputed with the released xi_{i,j} (eq. 33), with or without contest data |
 | `challenged_ballot_confirmation_code` | Verification 13.B: H_C = H(H_I; 0x29, chi_1, ..., chi_mB, B_C) |
+| `preencrypted_confirmation_code` | (116) H_C = H(H_I; 0x42, chi_1, ..., chi_mB, B_C), B_C per 16.E (no chaining) and 16.F (j = 1, 2), len(B1) = 37 + 32 * m_B |
+| `preencrypted_chain_init` | (117) H_0 = H(H_E; 0x42, B_C,0), B_C,0 = 0x00000001 \|\| H_DI with the 0x43 H_DI of (119), len(B1) = 37 |
+| `preencrypted_chain_close_inner`, `preencrypted_chain_close` | (120) H(H_E; 0x44, H_l, B_C,0), body form (Q4), len(B1) = 69; (118) H-bar = H(H_E; 0x42, B-bar_C), len(B1) = 37 |
 
 ## Vector format
 
@@ -145,3 +148,25 @@ the earlier `contest_hash_with_contest_data` and `confirmation_code` vectors. Th
 and has no printed table length. Its contest ind_c = 5 has contest data with b_Lambda = 2. In (13.3) the field after
 0x28 is ind_c(Lambda_i), which is eq. (70)'s l and not the contest's position on the ballot; the sparse ballot makes
 the two differ. Verification 14 compares labels and selection ranges and computes no hash, so it has no vectors.
+
+### Pre-encrypted ballot chaining (section 4.1.4, Verification 16.E-16.H)
+
+These families are appended after all earlier families; the top-level `preencrypted_chain` key (after
+`challenged_ballots`) summarizes them. They run on the `main_chain` election and device string, with the
+pre-encrypted device hash H_DI of eq. (119) (separator 0x43, already the `preencrypted_device_info_hash` family).
+The chain is H_0 (117), H_1 on the `main_chain` ballot with two contests, H_2 on the id_B = q + 5 ballot with one
+contest, then the close (120)/(118) with H_l = H_2. A no-chaining H_C (B_C = 0x00000000 || H_DI, 16.E) is included.
+The contest hashes fed to eq. (116) are opaque labelled 32-byte stand-ins (bytes 0x50..0x6F, 0x70..0x8F, 0x90..0xAF):
+eqs. (113)-(115) (selection and contest hashes) are not covered by this oracle.
+
+Encoding choices to know about:
+
+- Eq. (120) uses the body form B1 = 0x44 || H_l || B_C,0 (user decision Q4). The section 5.5.5 table prints
+  B1 = 0x44 || 0x4C4F434B ('LOCK') || H_l || B_C,0, which is treated as an erratum. The same table row prints
+  len(B1) = 69, which only the body form satisfies (the LOCK layout is 73 bytes). The vector carries the LOCK-layout
+  B1 and hash under `lock_form_erratum` with `"expected": false`, so a consumer that followed the table can be
+  diagnosed.
+- The table row for (118), like the one for (77), prints no B0. H_E is used, per the equation.
+- The regular-ballot chain families `chain_init`, `chain_close_inner` and `chain_close` (eqs. 74, 78, 77; separators
+  0x29, 0x2B, 0x29; lengths 37, 69, 37) were rechecked against p.43, the section 5.5.3 table (p.76) and Verification
+  8.F/8.G and are unchanged.

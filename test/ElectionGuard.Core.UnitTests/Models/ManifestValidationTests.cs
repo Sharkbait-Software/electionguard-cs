@@ -170,6 +170,57 @@ public class ManifestValidationTests
     }
 
     /// <summary>
+    /// §3.4.4 p.42 specifies chaining modes 0x00000000 and 0x00000001 only; "other modes must be
+    /// uniquely identified by a 4-byte identifier and specified in the election manifest", and this
+    /// manifest model specifies none. A JSON manifest carrying chainingMode 2 deserializes (the enum
+    /// accepts any integer) but is refused, so neither an encryptor nor a verifier invents rules
+    /// for it (S8 review round 1).
+    /// </summary>
+    [Theory]
+    [InlineData(2)]
+    [InlineData(-1)]
+    public void Validate_UndefinedChainingMode_Throws(int mode)
+    {
+        var options = new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase };
+        var json = System.Text.Json.JsonSerializer.Serialize(Minimal(), options);
+        Assert.Contains("\"chainingMode\":0", json);
+        var read = System.Text.Json.JsonSerializer.Deserialize<Manifest>(json.Replace("\"chainingMode\":0", $"\"chainingMode\":{mode}"), options)!;
+        Assert.Equal((ChainingMode)mode, read.ChainingMode);
+
+        var exception = Assert.Throws<InvalidManifestException>(read.Validate);
+        Assert.Contains("chaining mode", exception.Message);
+
+        var guardianSet = ElectionFixtureBuilder.CreateGuardianSet();
+        var (_, manifestFile) = ElectionFixtureBuilder.CreateMinimalManifest();
+        Assert.Throws<InvalidManifestException>(() => ElectionFixtureBuilder.CreateEncryptionRecord(guardianSet, read, manifestFile));
+    }
+
+    [Theory]
+    [InlineData(ChainingMode.None)]
+    [InlineData(ChainingMode.Simple)]
+    public void Validate_SpecifiedChainingModes_DoNotThrow(ChainingMode mode)
+    {
+        Assert.Null(Record.Exception(ElectionFixtureBuilder.CreateMinimalManifest(chainingMode: mode).Manifest.Validate));
+    }
+
+    /// <summary>
+    /// The public <see cref="ChainingField"/> builders refuse an undefined mode too, rather than
+    /// writing its identifier ahead of a simple-chaining hash (eq. 76) whose B_C,0 and close
+    /// hard-code 0x00000001.
+    /// </summary>
+    [Fact]
+    public void ChainingField_UndefinedChainingMode_Throws()
+    {
+        var guardianSet = ElectionFixtureBuilder.CreateGuardianSet();
+        var (manifest, manifestFile) = ElectionFixtureBuilder.CreateMinimalManifest();
+        var record = ElectionFixtureBuilder.CreateEncryptionRecord(guardianSet, manifest, manifestFile).EncryptionRecord;
+        var deviceHash = new VotingDeviceInformationHash(record.ExtendedBaseHash, "device-1");
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => new ChainingField((ChainingMode)2, deviceHash, record.ExtendedBaseHash, null));
+        Assert.Throws<ArgumentOutOfRangeException>(() => ChainingField.ForPreEncryptedBallots((ChainingMode)2, deviceHash, record.ExtendedBaseHash, null));
+    }
+
+    /// <summary>
     /// A record's manifest validated on construction and then reordered in place is caught again
     /// by the ballot encryptors, which would otherwise bake the wrong indices into new ballots. The
     /// verifications deliberately do not re-validate per ballot (it costs O(manifest) per ballot);

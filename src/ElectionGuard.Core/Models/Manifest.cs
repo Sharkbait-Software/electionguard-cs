@@ -40,6 +40,15 @@ public record Manifest
             throw new InvalidManifestException($"Manifest {ElectionId} has no contest list.");
         }
 
+        // §3.4.4 p.42 specifies the no chaining (0x00000000) and simple chaining (0x00000001) modes;
+        // "other modes must be uniquely identified by a 4-byte identifier and specified in the
+        // election manifest". This manifest model specifies no other mode, so any other value (JSON
+        // accepts any integer for the enum) would get rules the spec never gave it.
+        if (ChainingMode is not (ChainingMode.None or ChainingMode.Simple))
+        {
+            throw new InvalidManifestException($"Manifest {ElectionId} has chaining mode {(int)ChainingMode}; only the no chaining mode 0x00000000 and the simple chaining mode 0x00000001 are specified (§3.4.4).");
+        }
+
         for (int position = 0; position < Contests.Count; position++)
         {
             var contest = Contests[position];

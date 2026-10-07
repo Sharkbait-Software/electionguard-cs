@@ -1,4 +1,4 @@
-using ElectionGuard.Core.Models;
+﻿using ElectionGuard.Core.Models;
 
 namespace ElectionGuard.Core.BallotEncryption;
 
@@ -10,6 +10,17 @@ public class EncryptedBallot
     public required string BallotStyleId { get; init; }
     public required List<EncryptedContest> Contests { get; init; }
     public required ConfirmationCode ConfirmationCode { get; init; }
+
+    /// <summary>
+    /// The chaining field B_C the confirmation code was computed with (§3.4.4; eq. 71): 36 bytes,
+    /// 0x00000000 || H_DI under no chaining (eq. 73), 0x00000001 || H_{j-1} for the j-th ballot on its
+    /// device under simple chaining (eq. 76). Verification 8.B recomputes H_C from it, and 8.D/8.E
+    /// compare it with the field the device and the ballot's place in its device's chain imply
+    /// (13.B: "B_C is the chaining field for ballot B"). It is not secret and adds no hash input.
+    /// <see cref="Verify.BallotStructure"/> requires it to be 36 bytes. JSON: <c>chainingField</c>;
+    /// protobuf: field 11.
+    /// </summary>
+    public required ChainingField ChainingField { get; init; }
 
     /// <summary>
     /// The encrypted ballot nonce C_ξB (§3.3.4, eqs. 34-38): "every ElectionGuard ballot contains an

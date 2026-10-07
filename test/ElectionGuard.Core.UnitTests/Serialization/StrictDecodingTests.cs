@@ -138,14 +138,15 @@ public class StrictDecodingTests
     });
 
     /// <summary>Each non-canonical encoding, applied to a ballot's alpha, a response, or id_B.</summary>
-    public static TheoryData<string> JsonTamperings() => new() { "alpha padded to 513 bytes", "alpha = p", "response = q", "response padded to 33 bytes", "id_B of 31 bytes", "contest data C0 = p", "ballot nonce C0 = p" };
+    public static TheoryData<string> JsonTamperings() => new() { "alpha padded to 513 bytes", "alpha = p", "response = q", "response padded to 33 bytes", "id_B of 31 bytes", "contest data C0 = p", "ballot nonce C0 = p", "chaining field of 35 bytes", "chaining field of 37 bytes" };
 
     private static byte[] Tamper(string tampering, byte[] original) => tampering switch
     {
         "alpha padded to 513 bytes" or "response padded to 33 bytes" => [0, .. original],
         "alpha = p" or "contest data C0 = p" or "ballot nonce C0 = p" => Encode(EGParameters.P, 512),
         "response = q" => Encode(EGParameters.Q, 32),
-        "id_B of 31 bytes" => original[1..],
+        "id_B of 31 bytes" or "chaining field of 35 bytes" => original[1..],
+        "chaining field of 37 bytes" => [.. original, 0],
         _ => throw new ArgumentOutOfRangeException(nameof(tampering)),
     };
 
@@ -164,7 +165,7 @@ public class StrictDecodingTests
 
         JsonNode owner = tampering switch
         {
-            "id_B of 31 bytes" => json,
+            "id_B of 31 bytes" or "chaining field of 35 bytes" or "chaining field of 37 bytes" => json,
             "alpha padded to 513 bytes" or "alpha = p" => json["contests"]![0]!["choices"]![0]!,
             "contest data C0 = p" => json["contests"]![0]!["contestData"]!,
             "ballot nonce C0 = p" => json["encryptedBallotNonce"]!,
@@ -173,6 +174,7 @@ public class StrictDecodingTests
         string property = tampering switch
         {
             "id_B of 31 bytes" => "selectionEncryptionIdentifier",
+            "chaining field of 35 bytes" or "chaining field of 37 bytes" => "chainingField",
             "alpha padded to 513 bytes" or "alpha = p" => "alpha",
             "contest data C0 = p" or "ballot nonce C0 = p" => "c0",
             _ => "v",
@@ -248,6 +250,23 @@ public class StrictDecodingTests
         Weight = dto.Weight,
         Status = dto.Status,
         EncryptedBallotNonce = dto.EncryptedBallotNonce,
+        ChainingField = dto.ChainingField,
+    };
+
+    /// <summary>The ballot with its chaining field B_C replaced by <paramref name="chainingField"/>.</summary>
+    private static ProtobufEncryptedBallot WithChainingField(ProtobufEncryptedBallot dto, byte[]? chainingField) => new()
+    {
+        Id = dto.Id,
+        SelectionEncryptionIdentifier = dto.SelectionEncryptionIdentifier,
+        SelectionEncryptionIdentifierHash = dto.SelectionEncryptionIdentifierHash,
+        BallotStyleId = dto.BallotStyleId,
+        DeviceId = dto.DeviceId,
+        Contests = dto.Contests,
+        ConfirmationCode = dto.ConfirmationCode,
+        Weight = dto.Weight,
+        Status = dto.Status,
+        EncryptedBallotNonce = dto.EncryptedBallotNonce,
+        ChainingField = chainingField,
     };
 
     /// <summary>The ballot with its encrypted ballot nonce C_ξB replaced by <paramref name="change"/>'s result.</summary>
@@ -263,6 +282,7 @@ public class StrictDecodingTests
         Weight = dto.Weight,
         Status = dto.Status,
         EncryptedBallotNonce = change(dto.EncryptedBallotNonce!),
+        ChainingField = dto.ChainingField,
     };
 
     private static ProtobufEncryptedData WithContestData(ProtobufEncryptedData data, byte[]? challenge = null, byte[]? response = null, byte[]? c0 = null, Func<byte[], byte[]?>? c1 = null) => new()
@@ -310,6 +330,10 @@ public class StrictDecodingTests
             ["ballot nonce C1 missing"] = dto => WithBallotNonce(dto, n => WithContestData(n, c1: _ => null)),
             ["ballot nonce challenge = q"] = dto => WithBallotNonce(dto, n => WithContestData(n, challenge: NotBelowQ)),
             ["ballot nonce response = q"] = dto => WithBallotNonce(dto, n => WithContestData(n, response: NotBelowQ)),
+            // S8: the chaining field B_C (§3.4.4) is required and exactly 36 bytes.
+            ["chaining field missing"] = dto => WithChainingField(dto, null),
+            ["chaining field of 35 bytes"] = dto => WithChainingField(dto, dto.ChainingField![1..]),
+            ["chaining field of 37 bytes"] = dto => WithChainingField(dto, [.. dto.ChainingField!, 0]),
             ["supplemental field alpha padded to 513 bytes"] = dto => WithFirstContest(dto, c => c with
             {
                 SupplementalFields = [c.SupplementalFields![0] with { Alpha = [0, .. c.SupplementalFields[0].Alpha] }, .. c.SupplementalFields.Skip(1)],
@@ -376,6 +400,11 @@ public class StrictDecodingTests
         if (site == "ballot nonce missing")
         {
             Assert.Null(ReadDto(tampered).EncryptedBallotNonce);
+        }
+
+        if (site == "chaining field missing")
+        {
+            Assert.Null(ReadDto(tampered).ChainingField);
         }
 
         if (site == "id_B missing")

@@ -203,6 +203,15 @@ covers the relations without the overvote term (there an overvoted contest's und
 count is L; user decision Q18 keeps that manifest valid). Run it after touching the overvote rule or the supplemental fields; the unit-level
 coverage is `ScenarioRunnerTests`' R > 1 theory in `ElectionGuard.Perf.UnitTests`.
 
+Every other committed manifest uses no chaining. The `chained` scenario (`test/data/single-contest-chained`,
+`smoke`'s manifest with `chainingMode` 1, 300 ballots) exercises simple chaining (§3.4.4): each ballot chains from
+the previous one's confirmation code, so encryption and ballot verification run serially (`parallelism:
+forced:1:chainingMode`), and after the last chunk the runner closes the device's chain (eqs. 77/78) and walks its
+record against the published ballots (Verification 8.C-8.G, billed to `VerifyBallots` without adding to its ballot
+count). That walk keeps one confirmation code and one (id, device, H_C, B_C) link per ballot, so it runs only under
+chaining; under no chaining every ballot's B_C is checked on its own (8.D). Its numbers measure the serial path, not
+the library's throughput.
+
 ## Why the harness streams
 
 An encrypted ballot is roughly 50 KB for a four-contest manifest, so a million of them would be

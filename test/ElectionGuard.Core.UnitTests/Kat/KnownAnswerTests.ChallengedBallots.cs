@@ -5,6 +5,7 @@ using ElectionGuard.Core.Models;
 using ElectionGuard.Core.Tally;
 using ElectionGuard.Core.Verify.Ballot;
 using ElectionGuard.Core.Verify.Tally;
+using ElectionGuard.Testing.Common;
 using System.Numerics;
 using System.Text.Json;
 
@@ -424,6 +425,7 @@ public partial class KnownAnswerTests
             DeviceId = "kat-device",
             Weight = 1,
             ConfirmationCode = new ConfirmationCode(new byte[32]),
+            ChainingField = ElectionFixtureBuilder.PlaceholderChainingField,
             EncryptedBallotNonce = nonce,
             Status = BallotStatus.Challenged,
             Contests =
@@ -497,6 +499,7 @@ public partial class KnownAnswerTests
             DeviceId = Root.GetProperty("main_chain").GetProperty("S_device").GetString()!,
             Weight = 1,
             ConfirmationCode = new ConfirmationCode(Convert.FromHexString(codeVector.GetProperty("expected_hex").GetString()!)),
+            ChainingField = chainingField,
             EncryptedBallotNonce = BallotNonceCiphertext(nonceEntry, "C0_hex", "C1_hex", "c_B_hex", "v_B_hex"),
             Status = BallotStatus.Challenged,
             Contests = contestVectors.Select(vector =>

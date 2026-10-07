@@ -424,6 +424,106 @@ public class ScenarioRunnerTests
     }
 
     /// <summary>
+    /// S8 (G37): under simple chaining a ballot hashed with the wrong previous confirmation code is
+    /// rejected even though its own confirmation code is consistent with the chaining field it
+    /// carries (8.B passes): the 6th ballot is re-chained from the 4th ballot's code. The per-ballot
+    /// 8.E check of the serial chained verification catches it, before the device walk runs.
+    /// </summary>
+    [Fact]
+    public void Run_ChainedManifest_FailsABallotChainedFromTheWrongPreviousCode()
+    {
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest(chainingMode: ChainingMode.Simple);
+        var codes = new List<ConfirmationCode>();
+        var runner = new ScenarioRunner(Scenario(ballotCount: 8, chunkSize: 4, ballotVerification: true), manifest)
+        {
+            EncryptedBallotHookForTesting = (index, ballot) =>
+            {
+                codes.Add(ballot.ConfirmationCode);
+                if (index != 5)
+                {
+                    return ballot;
+                }
+
+                var field = ChainingField.FromCanonicalBytes([0, 0, 0, 1, .. (byte[])codes[3]]);
+                return new EncryptedBallot
+                {
+                    Id = ballot.Id,
+                    SelectionEncryptionIdentifier = ballot.SelectionEncryptionIdentifier,
+                    SelectionEncryptionIdentifierHash = ballot.SelectionEncryptionIdentifierHash,
+                    BallotStyleId = ballot.BallotStyleId,
+                    Contests = ballot.Contests,
+                    ConfirmationCode = new ConfirmationCode(ballot.SelectionEncryptionIdentifierHash, ballot.Contests.Select(x => x.ContestHash).ToList(), field),
+                    ChainingField = field,
+                    EncryptedBallotNonce = ballot.EncryptedBallotNonce,
+                    Weight = ballot.Weight,
+                    Status = ballot.Status,
+                    DeviceId = ballot.DeviceId,
+                };
+            },
+        };
+
+        var outcome = runner.Run();
+
+        Assert.Equal(CorrectnessStatus.Error, outcome.Correctness.Status);
+        Assert.Contains("VerificationFailedException", outcome.Notes["error"], StringComparison.Ordinal);
+        Assert.Contains("B_C,j = 0x00000001 || H_(j-1)", outcome.Notes["error"], StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// S8 review round 1: the once-per-device Verification 8 walk runs after the last chunk, over the
+    /// closed device record and every ballot's chain link. Only it checks the record's H_0 (8.F), its
+    /// chain close (8.G) and that it lists exactly the device's ballots (structure), so tampering
+    /// with the record alone fails the run with the walk's own message.
+    /// </summary>
+    [Theory]
+    [InlineData("closing hash", "The closing hash recorded for device")]
+    [InlineData("initial hash", "The initial hash code H_0 recorded for device")]
+    [InlineData("last ballot dropped from the list", "is not in its ordered list of ballots")]
+    public void Run_ChainedManifest_WalksTheClosedDeviceRecord(string variant, string expectedMessage)
+    {
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest(chainingMode: ChainingMode.Simple);
+        var runner = new ScenarioRunner(Scenario(ballotCount: 8, chunkSize: 4, ballotVerification: true), manifest)
+        {
+            DeviceChainRecordHookForTesting = record =>
+            {
+                byte[] hash = ((byte[])record.ClosingHash!.Value).ToArray();
+                hash[0] ^= 0x80;
+                return variant switch
+                {
+                    "closing hash" => record with { ClosingHash = new ConfirmationCode(hash) },
+                    "initial hash" => record with { InitialHash = record.ConfirmationCodes[0] },
+                    _ => record with { ConfirmationCodes = [.. record.ConfirmationCodes.Take(record.ConfirmationCodes.Count - 1)] },
+                };
+            },
+        };
+
+        var outcome = runner.Run();
+
+        Assert.Equal(CorrectnessStatus.Error, outcome.Correctness.Status);
+        Assert.Contains("VerificationFailedException", outcome.Notes["error"], StringComparison.Ordinal);
+        Assert.Contains(expectedMessage, outcome.Notes["error"], StringComparison.Ordinal);
+    }
+
+    /// <summary>An untampered run closes the chain over every ballot and passes the walk.</summary>
+    [Fact]
+    public void Run_ChainedManifest_ClosesTheDeviceChainOverEveryBallot()
+    {
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest(chainingMode: ChainingMode.Simple);
+        DeviceChainRecord? walked = null;
+        var runner = new ScenarioRunner(Scenario(ballotCount: 8, chunkSize: 4, ballotVerification: true), manifest)
+        {
+            DeviceChainRecordHookForTesting = record => walked = record,
+        };
+
+        var outcome = runner.Run();
+
+        Assert.Equal(CorrectnessStatus.Passed, outcome.Correctness.Status);
+        Assert.NotNull(walked);
+        Assert.Equal(8, walked.ConfirmationCodes.Count);
+        Assert.NotNull(walked.ClosingHash);
+    }
+
+    /// <summary>
     /// A failed run is data. An exception out of the measured work used to discard every
     /// measurement taken before it -- no record, no timings, not even the DKG figure, which the
     /// throw cannot possibly have invalidated.

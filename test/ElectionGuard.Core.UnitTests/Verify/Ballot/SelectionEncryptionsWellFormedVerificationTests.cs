@@ -38,6 +38,7 @@ public class SelectionEncryptionsWellFormedVerificationTests
             Contests = contests,
             ConfirmationCode = ballot.ConfirmationCode,
             EncryptedBallotNonce = ballot.EncryptedBallotNonce,
+            ChainingField = ballot.ChainingField,
             Weight = ballot.Weight,
             Status = ballot.Status,
             DeviceId = ballot.DeviceId,

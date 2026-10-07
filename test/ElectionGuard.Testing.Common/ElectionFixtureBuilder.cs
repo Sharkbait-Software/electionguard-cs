@@ -337,6 +337,13 @@ public static class ElectionFixtureBuilder
     };
 
     /// <summary>
+    /// A well-shaped but meaningless chaining field B_C (36 zero bytes: the no-chaining identifier
+    /// and a zero hash) for hand-built ballots whose tests never check a confirmation code. Every
+    /// ballot carries the field (§3.4.4); this one would fail Verification 8.B and 8.D.
+    /// </summary>
+    public static ChainingField PlaceholderChainingField => ChainingField.FromCanonicalBytes(new byte[ChainingField.ByteLength]);
+
+    /// <summary>
     /// Encrypts a ballot and records it as submitted with <paramref name="status"/> (cast, by
     /// default), as Program.cs does. Pass previousConfirmationCode to chain from a prior ballot on
     /// the same device (ChainingMode.Simple); pass null for the first ballot. Pass

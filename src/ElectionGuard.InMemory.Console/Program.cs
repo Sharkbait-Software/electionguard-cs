@@ -118,7 +118,9 @@ try
     string deviceId = "Device 1";
     var deviceHash = new VotingDeviceInformationHash(extendedBaseHash, deviceId);
 
-    var ballots = Directory.GetFiles(Path.Combine(inputDirectory, "ballots"));
+    // In file name order, which is the order the device processes them in (§3.7: "Ordered lists of
+    // the ballots encrypted by each device").
+    var ballots = Directory.GetFiles(Path.Combine(inputDirectory, "ballots")).OrderBy(x => x, StringComparer.Ordinal).ToArray();
 
     // Note 3.5: every exponentiation performed while encrypting and proving ballot components has a
     // base of g, K or K-hat, so build tables of their powers once before encrypting anything. This
@@ -128,17 +130,26 @@ try
 
     ConcurrentBag<EncryptedBallot> encryptedBallots = new ConcurrentBag<EncryptedBallot>();
 
-    Parallel.ForEach(ballots, ballotFile =>
+    // The device's confirmation code chain (§3.4.4). Every ballot it encrypts, cast or challenged, is
+    // appended in the order processed; the chain is closed when voting ends and published as the
+    // device's ordered ballot list. Under simple chaining each ballot chains from the previous one's
+    // confirmation code, so the device encrypts one at a time; under no chaining the ballots are
+    // independent and are encrypted in parallel, then appended in file order.
+    var deviceChain = new DeviceChain(encryptionRecord, deviceId);
+    var encryptedInOrder = new EncryptedBallot[ballots.Length];
+
+    void EncryptBallotFile(int i, ConfirmationCode? previousConfirmationCode)
     {
+        var ballotFile = ballots[i];
         var ballot = JsonSerializer.Deserialize<Ballot>(File.ReadAllBytes(ballotFile), jsonOptions)!;
         var ballotEncryptor = new BallotEncryptor(encryptionRecord, deviceId, deviceHash);
-        var encryptedBallot = ballotEncryptor.Encrypt(ballot, null);
+        var encryptedBallot = ballotEncryptor.Encrypt(ballot, previousConfirmationCode);
 
         // The voter sees the confirmation code and then casts or challenges the ballot (§3.7); every
         // ballot here is cast. The status is recorded with the ballot, so it is written out with it.
         encryptedBallot.RecordStatus(BallotStatus.Cast);
-        encryptedBallots.Add(encryptedBallot);
-        using (var jsonFileStream = File.OpenWrite(Path.Combine(outputDirectory, "encrypted-json-ballots", Path.GetFileName(ballotFile))))
+        encryptedInOrder[i] = encryptedBallot;
+        using (var jsonFileStream = File.Create(Path.Combine(outputDirectory, "encrypted-json-ballots", Path.GetFileName(ballotFile))))
         {
             jsonBallotSerializer.Serialize(jsonFileStream, encryptedBallot);
         }
@@ -146,7 +157,29 @@ try
         //{
         //    protobufBallotSerializer.Serialize(protobufFileStream, encryptedBallot);
         //}
-    });
+    }
+
+    if (manifest.ChainingMode == ChainingMode.None)
+    {
+        Parallel.For(0, ballots.Length, i => EncryptBallotFile(i, null));
+        foreach (var encryptedBallot in encryptedInOrder)
+        {
+            deviceChain.Append(encryptedBallot);
+        }
+    }
+    else
+    {
+        for (int i = 0; i < ballots.Length; i++)
+        {
+            EncryptBallotFile(i, deviceChain.PreviousConfirmationCode);
+            deviceChain.Append(encryptedInOrder[i]);
+        }
+    }
+
+    foreach (var encryptedBallot in encryptedInOrder)
+    {
+        encryptedBallots.Add(encryptedBallot);
+    }
 
     // Cast or challenge (§3.6.7, §3.7): a voter who challenges a ballot has it opened to check that the
     // device encrypted what they chose, and then votes again. The first ballot is encrypted a second
@@ -155,7 +188,7 @@ try
     var challengedSource = ballots.OrderBy(x => x, StringComparer.Ordinal).First();
     var challengedPlaintext = JsonSerializer.Deserialize<Ballot>(File.ReadAllBytes(challengedSource), jsonOptions)!;
     challengedPlaintext = challengedPlaintext with { Id = $"{challengedPlaintext.Id}-challenged" };
-    var challengedBallot = new BallotEncryptor(encryptionRecord, deviceId, deviceHash).Encrypt(challengedPlaintext, null);
+    var challengedBallot = new BallotEncryptor(encryptionRecord, deviceId, deviceHash).EncryptNext(challengedPlaintext, deviceChain);
     challengedBallot.RecordStatus(BallotStatus.Challenged);
     encryptedBallots.Add(challengedBallot);
     using (var jsonFileStream = File.Create(Path.Combine(outputDirectory, "encrypted-json-ballots", $"{challengedPlaintext.Id}.json")))
@@ -188,7 +221,15 @@ try
     //    protobufBallotSerializer.Serialize(protobufFileStream, encryptedBallot2);
     //}
 
-    //    TODO: SOMEWHERE NEEDS TO BE AN 'END OF ELECTION' FUNCTION(MAYBE TALLY ?) WHERE WE CLOSE THE CONFIRMATION CODE CHAIN.
+    // End of voting: the device closes its confirmation code chain (§3.4.4 eqs. 77/78 under simple
+    // chaining) and publishes its ordered list of ballots with the closing hash (§3.7).
+    var deviceChainRecord = deviceChain.Close();
+    using (var deviceChainStream = File.Create(Path.Combine(outputDirectory, "device-chains.json")))
+    {
+        new JsonDeviceChainRecordSerializer().Serialize(deviceChainStream, [deviceChainRecord]);
+    }
+
+    Console.WriteLine($"Device {deviceChainRecord.DeviceId}: {deviceChainRecord.ConfirmationCodes.Count} ballots, chaining mode {deviceChainRecord.ChainingMode}{(deviceChainRecord.ClosingHash is { } closingHash ? $", closing hash {closingHash}" : "")}.");
 
     // Verification 1 (1.A-1.F, H_B included) on the encryption record
     var parameterVerification = new ParameterVerification();
@@ -224,10 +265,14 @@ try
         var adherenceToVoteLimitsVerification = new AdherenceToVoteLimitsVerification();
         adherenceToVoteLimitsVerification.Verify(encryptedBallot, encryptionRecord);
 
-        // Verificaiton 8
+        // Verification 8, per ballot: 8.A, 8.B over the ballot's chaining field, 8.D (no chaining).
         var confirmationCodeVerification = new ConfirmationCodeVerification();
-        confirmationCodeVerification.Verify(encryptedBallot, deviceHash, encryptionRecord, null);
+        confirmationCodeVerification.Verify(encryptedBallot, encryptionRecord);
     });
+
+    // Verification 8, per device: every ballot on exactly one device's list, 8.C, and in list order
+    // 8.D/8.E, then 8.F and 8.G under simple chaining.
+    new ConfirmationCodeVerification().VerifyDevices([deviceChainRecord], encryptedBallots, encryptionRecord);
 
     // Only cast ballots are aggregated; a challenged one would be skipped here and in Verification 9.
     var encryptedTally = new EncryptedTally(manifest);
@@ -325,7 +370,7 @@ try
         var decrypted = tallyAdmin.DecryptChallengedBallot(tallyGuardians, encryptedBallot, encryptionRecord);
 
         // Verification 13
-        challengedBallotDecryptionVerification.Verify(encryptionRecord, encryptedBallot, decrypted, deviceHash, null);
+        challengedBallotDecryptionVerification.Verify(encryptionRecord, encryptedBallot, decrypted);
 
         // Verification 14
         challengedBallotWellFormednessVerification.Verify(manifest, encryptedBallot, decrypted);

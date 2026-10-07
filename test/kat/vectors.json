@@ -5885,6 +5885,141 @@
       "b1_len_spec_table": 101,
       "b1_hex": "29412831FBC562DE41ED45BDE0BCA48F4CE639BF89EC90022A8036AA0645B89A8A6B274A3FD81572FCEF026AD3FEDFA1B125BF32385E87FD3B529DDFE0F2C719E60000000117D8A1F5C2A76A448E9AD93B9E8ECAC22A1B3AF96100FFB47431F88DB5360E1C",
       "expected_hex": "CC89FF738A1488EBB0CB7721D7BC255699678B28C9EB9E496A78296017ABEEA5"
+    },
+    {
+      "family": "preencrypted_confirmation_code",
+      "equation": "(116) H_C = H(H_I; 0x42, chi_1, ..., chi_mB, B_C), B_C = 0x00000000 || H_DI (16.E), H_DI per (119)",
+      "name": "pre-encrypted H_C no chaining",
+      "b0_name": "H_I",
+      "b0_hex": "CA7B1FD3105727E41DFB0037CF00CCE84197F0C4BB7FFFAB9099C2C359288C6C",
+      "inputs": {
+        "H_I_hex": "CA7B1FD3105727E41DFB0037CF00CCE84197F0C4BB7FFFAB9099C2C359288C6C",
+        "contest_hashes_hex": [
+          "505152535455565758595A5B5C5D5E5F606162636465666768696A6B6C6D6E6F",
+          "707172737475767778797A7B7C7D7E7F808182838485868788898A8B8C8D8E8F"
+        ],
+        "contest_hashes": [
+          "bytes 0x50..0x6F",
+          "bytes 0x70..0x8F"
+        ],
+        "H_DI_hex": "714F0800F76BD83C839B8EF702CBCFAA2C9AEF4C6354A19CD5A515A06C01CFCA",
+        "H_DI": "main_chain.H_DI_preencrypted_hex (eq. 119, 0x43)",
+        "B_C_hex": "00000000714F0800F76BD83C839B8EF702CBCFAA2C9AEF4C6354A19CD5A515A06C01CFCA"
+      },
+      "b1_len": 101,
+      "b1_len_spec_table": 101,
+      "b1_hex": "42505152535455565758595A5B5C5D5E5F606162636465666768696A6B6C6D6E6F707172737475767778797A7B7C7D7E7F808182838485868788898A8B8C8D8E8F00000000714F0800F76BD83C839B8EF702CBCFAA2C9AEF4C6354A19CD5A515A06C01CFCA",
+      "expected_hex": "E80674FA2515D59C794C59578E3BAAC069A6C92DF81EB9989938AAAD478CDE90",
+      "notes": "chi values are opaque labelled 32-byte stand-ins (eqs. 113-115 are not covered); eq. (116) hashes them as raw bytes in sequential contest order."
+    },
+    {
+      "family": "preencrypted_chain_init",
+      "equation": "(117) H_0 = H(H_E; 0x42, B_C,0), B_C,0 = 0x00000001 || H_DI, H_DI per (119) (16.G)",
+      "name": "pre-encrypted H_0 simple chaining",
+      "b0_name": "H_E",
+      "b0_hex": "A956469F246D37B21C17F2A68BC4ECE7694FD3F4BE5123F3148DDBF199DA84B0",
+      "inputs": {
+        "H_E_hex": "A956469F246D37B21C17F2A68BC4ECE7694FD3F4BE5123F3148DDBF199DA84B0",
+        "H_DI_hex": "714F0800F76BD83C839B8EF702CBCFAA2C9AEF4C6354A19CD5A515A06C01CFCA",
+        "H_DI": "main_chain.H_DI_preencrypted_hex (eq. 119, 0x43)",
+        "B_C0_hex": "00000001714F0800F76BD83C839B8EF702CBCFAA2C9AEF4C6354A19CD5A515A06C01CFCA"
+      },
+      "b1_len": 37,
+      "b1_len_spec_table": 37,
+      "b1_hex": "4200000001714F0800F76BD83C839B8EF702CBCFAA2C9AEF4C6354A19CD5A515A06C01CFCA",
+      "expected_hex": "EADC57DEB7785FD4B986C5C39FC797C6C3D60EECC824151FC4400AD1C1254153",
+      "notes": "Uses the 0x43 device hash of eq. (119), not the 0x2A one of eq. (72) (§4.1.4)."
+    },
+    {
+      "family": "preencrypted_confirmation_code",
+      "equation": "(116) H_C with B_C,1 = 0x00000001 || H_0 (16.F), simple chaining j=1",
+      "name": "pre-encrypted H_1 simple chaining",
+      "b0_name": "H_I",
+      "b0_hex": "CA7B1FD3105727E41DFB0037CF00CCE84197F0C4BB7FFFAB9099C2C359288C6C",
+      "inputs": {
+        "H_I_hex": "CA7B1FD3105727E41DFB0037CF00CCE84197F0C4BB7FFFAB9099C2C359288C6C",
+        "contest_hashes_hex": [
+          "505152535455565758595A5B5C5D5E5F606162636465666768696A6B6C6D6E6F",
+          "707172737475767778797A7B7C7D7E7F808182838485868788898A8B8C8D8E8F"
+        ],
+        "contest_hashes": [
+          "bytes 0x50..0x6F",
+          "bytes 0x70..0x8F"
+        ],
+        "H_prev_hex": "EADC57DEB7785FD4B986C5C39FC797C6C3D60EECC824151FC4400AD1C1254153",
+        "B_C_hex": "00000001EADC57DEB7785FD4B986C5C39FC797C6C3D60EECC824151FC4400AD1C1254153"
+      },
+      "b1_len": 101,
+      "b1_len_spec_table": 101,
+      "b1_hex": "42505152535455565758595A5B5C5D5E5F606162636465666768696A6B6C6D6E6F707172737475767778797A7B7C7D7E7F808182838485868788898A8B8C8D8E8F00000001EADC57DEB7785FD4B986C5C39FC797C6C3D60EECC824151FC4400AD1C1254153",
+      "expected_hex": "AD9C9C56AC22CEC56A6B6BD0D4E97C9D9AB33814316A6E533FF18A83F6A4A8B3",
+      "notes": "chi values are opaque labelled 32-byte stand-ins (eqs. 113-115 are not covered); eq. (116) hashes them as raw bytes in sequential contest order."
+    },
+    {
+      "family": "preencrypted_confirmation_code",
+      "equation": "(116) H_C with B_C,2 = 0x00000001 || H_1 (16.F), simple chaining j=2",
+      "name": "pre-encrypted H_2 simple chaining (one contest)",
+      "b0_name": "H_I",
+      "b0_hex": "1F39F2EE567614C42932FDD5DFBA0B01FAA1C0EE242B3C1C0B58AB33DF9086DA",
+      "inputs": {
+        "H_I_hex": "1F39F2EE567614C42932FDD5DFBA0B01FAA1C0EE242B3C1C0B58AB33DF9086DA",
+        "H_I": "H_I of id_B = q + 5 (selection_encryption_identifier_hash)",
+        "contest_hashes_hex": [
+          "909192939495969798999A9B9C9D9E9FA0A1A2A3A4A5A6A7A8A9AAABACADAEAF"
+        ],
+        "contest_hashes": [
+          "bytes 0x90..0xAF"
+        ],
+        "H_prev_hex": "AD9C9C56AC22CEC56A6B6BD0D4E97C9D9AB33814316A6E533FF18A83F6A4A8B3",
+        "B_C_hex": "00000001AD9C9C56AC22CEC56A6B6BD0D4E97C9D9AB33814316A6E533FF18A83F6A4A8B3"
+      },
+      "b1_len": 69,
+      "b1_len_spec_table": 69,
+      "b1_hex": "42909192939495969798999A9B9C9D9E9FA0A1A2A3A4A5A6A7A8A9AAABACADAEAF00000001AD9C9C56AC22CEC56A6B6BD0D4E97C9D9AB33814316A6E533FF18A83F6A4A8B3",
+      "expected_hex": "7CCB3F240ED0F2E6C83A160302CCAFC79557F5D7D1920A514259769DB076E5C7",
+      "notes": "chi values are opaque labelled 32-byte stand-ins (eqs. 113-115 are not covered); eq. (116) hashes them as raw bytes in sequential contest order."
+    },
+    {
+      "family": "preencrypted_chain_close_inner",
+      "equation": "(120) inner H(H_E; 0x44, H_l, B_C,0) [body form, Q4]",
+      "name": "pre-encrypted chain close inner hash, H_l = H_2",
+      "b0_name": "H_E",
+      "b0_hex": "A956469F246D37B21C17F2A68BC4ECE7694FD3F4BE5123F3148DDBF199DA84B0",
+      "inputs": {
+        "H_E_hex": "A956469F246D37B21C17F2A68BC4ECE7694FD3F4BE5123F3148DDBF199DA84B0",
+        "H_l_hex": "7CCB3F240ED0F2E6C83A160302CCAFC79557F5D7D1920A514259769DB076E5C7",
+        "B_C0_hex": "00000001714F0800F76BD83C839B8EF702CBCFAA2C9AEF4C6354A19CD5A515A06C01CFCA",
+        "B_C_bar_hex": "00000001A584E2DF6AC22D6AA2F39BE752D0FC65576EDD06938E561B4A10D02F2C62C0BE"
+      },
+      "b1_len": 69,
+      "b1_len_spec_table": 69,
+      "b1_hex": "447CCB3F240ED0F2E6C83A160302CCAFC79557F5D7D1920A514259769DB076E5C700000001714F0800F76BD83C839B8EF702CBCFAA2C9AEF4C6354A19CD5A515A06C01CFCA",
+      "expected_hex": "A584E2DF6AC22D6AA2F39BE752D0FC65576EDD06938E561B4A10D02F2C62C0BE",
+      "notes": "User decision Q4: body form B1 = 0x44 || H_l || B_C,0 (eq. 120, §4.1.4 p.59, Verification 16.H). The §5.5.5 table (p.78) prints B1 = 0x44 || 0x4C4F434B ('LOCK') || H_l || B_C,0, which is an erratum: that layout is 1 + 4 + 32 + 36 = 73 bytes, but the same table row prints len(B1) = 69, which only the body form satisfies. lock_form_erratum records the LOCK-layout hash for diagnosis; it is NOT the expected value.",
+      "lock_form_erratum": {
+        "b1_hex": "444C4F434B7CCB3F240ED0F2E6C83A160302CCAFC79557F5D7D1920A514259769DB076E5C700000001714F0800F76BD83C839B8EF702CBCFAA2C9AEF4C6354A19CD5A515A06C01CFCA",
+        "b1_len": 73,
+        "hash_hex": "58148898FBF10D3168EDE86E555A7497FE8F3FE7161D6480CA6FB49595E90916",
+        "expected": false
+      }
+    },
+    {
+      "family": "preencrypted_chain_close",
+      "equation": "(118) H-bar = H(H_E; 0x42, B-bar_C), B-bar_C = 0x00000001 || H(H_E; 0x44, H_l, B_C,0) (120)",
+      "name": "pre-encrypted chain close H-bar, H_l = H_2",
+      "b0_name": "H_E",
+      "b0_hex": "A956469F246D37B21C17F2A68BC4ECE7694FD3F4BE5123F3148DDBF199DA84B0",
+      "inputs": {
+        "H_E_hex": "A956469F246D37B21C17F2A68BC4ECE7694FD3F4BE5123F3148DDBF199DA84B0",
+        "B_C_bar_hex": "00000001A584E2DF6AC22D6AA2F39BE752D0FC65576EDD06938E561B4A10D02F2C62C0BE",
+        "H_l_hex": "7CCB3F240ED0F2E6C83A160302CCAFC79557F5D7D1920A514259769DB076E5C7",
+        "B_C0_hex": "00000001714F0800F76BD83C839B8EF702CBCFAA2C9AEF4C6354A19CD5A515A06C01CFCA"
+      },
+      "b1_len": 37,
+      "b1_len_spec_table": 37,
+      "b1_hex": "4200000001A584E2DF6AC22D6AA2F39BE752D0FC65576EDD06938E561B4A10D02F2C62C0BE",
+      "expected_hex": "E0DC6F0DC4C340D1594990CFA6A804B3D05E94650E953AAD488D80D74F3394D3",
+      "notes": "Table for (118) prints no B0; H_E per the equation. B-bar_C uses the body form of (120) (Q4)."
     }
   ],
   "tally_decryption": {
@@ -6128,5 +6263,25 @@
         "reproduces_earlier_vectors": false
       }
     ]
+  },
+  "preencrypted_chain": {
+    "election": "main_chain (H_E = main_chain.H_E_hex)",
+    "S_device": "Wahllokal Zürich – Gerät №7 🗳",
+    "H_DI_hex": "714F0800F76BD83C839B8EF702CBCFAA2C9AEF4C6354A19CD5A515A06C01CFCA",
+    "H_DI": "eq. (119), separator 0x43",
+    "separators": {
+      "chain_init_117": "0x42",
+      "confirmation_code_116": "0x42",
+      "chain_close_118": "0x42",
+      "device_info_119": "0x43",
+      "chain_close_inner_120": "0x44"
+    },
+    "H_0_hex": "EADC57DEB7785FD4B986C5C39FC797C6C3D60EECC824151FC4400AD1C1254153",
+    "H_1_hex": "AD9C9C56AC22CEC56A6B6BD0D4E97C9D9AB33814316A6E533FF18A83F6A4A8B3",
+    "H_2_hex": "7CCB3F240ED0F2E6C83A160302CCAFC79557F5D7D1920A514259769DB076E5C7",
+    "B_C_bar_hex": "00000001A584E2DF6AC22D6AA2F39BE752D0FC65576EDD06938E561B4A10D02F2C62C0BE",
+    "H_bar_hex": "E0DC6F0DC4C340D1594990CFA6A804B3D05E94650E953AAD488D80D74F3394D3",
+    "q4_erratum": "§5.5.5 table row for (120) prints 0x44 || 0x4C4F434B || H_l || B_C,0 with len(B1) = 69; the body form 0x44 || H_l || B_C,0 is used (user decision Q4), consistent with the printed length.",
+    "contest_hashes": "opaque labelled stand-ins; eqs. (113)-(115) are not covered"
   }
 }

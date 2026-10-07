@@ -73,12 +73,10 @@ public class JsonEncryptedBallotSerializerTests
         Assert.Equal(original.BallotStyleId, result.BallotStyleId);
         Assert.Equal(original.DeviceId, result.DeviceId);
         Assert.Equal(original.Weight, result.Weight);
-        // ConfirmationCode is the field that folds the (currently no-op, see
-        // BallotEncryptorTests.Encrypt_SecondBallotOnDevice_ChainingHasNoEffect...) ChainingField
-        // into the ballot -- asserting it here is how this phase covers "ChainingField" per the
-        // plan, since ChainingField itself is a transient input to BallotEncryptor.Encrypt and is
-        // not a stored property of EncryptedBallot.
+        // The confirmation code and, since S8 (G19/G37), the chaining field B_C it was hashed with
+        // (JSON chainingField), which Verification 8.B recomputes it from.
         Assert.Equal(original.ConfirmationCode, result.ConfirmationCode);
+        Assert.Equal(original.ChainingField, result.ChainingField);
         // SelectionEncryptionIdentifierHash is a HashValue subclass with no Equals/GetHashCode
         // override (reference equality only), so it must be compared via its byte[] conversion --
         // matching the existing convention in Models/SelectionEncryptionIdentifierHashTests.cs.

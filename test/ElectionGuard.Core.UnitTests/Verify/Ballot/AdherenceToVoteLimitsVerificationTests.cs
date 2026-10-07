@@ -45,6 +45,7 @@ public class AdherenceToVoteLimitsVerificationTests
             Contests = contests,
             ConfirmationCode = ballot.ConfirmationCode,
             EncryptedBallotNonce = ballot.EncryptedBallotNonce,
+            ChainingField = ballot.ChainingField,
             Weight = ballot.Weight,
             Status = ballot.Status,
             DeviceId = ballot.DeviceId,

@@ -1,4 +1,4 @@
-using ElectionGuard.Core.BallotEncryption;
+﻿using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.Models;
 using ElectionGuard.Core.Tally;
@@ -69,6 +69,31 @@ public class ChallengedBallotDecryptionVerification
         DecryptedChallengedBallot decrypted,
         VotingDeviceInformationHash deviceInformationHash,
         ConfirmationCode? previousConfirmationCode)
+    {
+        ArgumentNullException.ThrowIfNull(encryptionRecord);
+        Verify(encryptionRecord, ballot, decrypted, new ChainingField(encryptionRecord.Manifest.ChainingMode, deviceInformationHash, encryptionRecord.ExtendedBaseHash, previousConfirmationCode));
+    }
+
+    /// <summary>
+    /// <see cref="Verify(EncryptionRecord, EncryptedBallot, DecryptedChallengedBallot, VotingDeviceInformationHash, ConfirmationCode?)"/>
+    /// with 13.B over the chaining field the ballot carries ("B_C is the chaining field for ballot
+    /// B"). That the field is the right one for the ballot's device and place in its device's chain
+    /// is Verification 8.D/8.E (<see cref="Ballot.ConfirmationCodeVerification.VerifyDevice(DeviceChainRecord, IEnumerable{EncryptedBallot}, EncryptionRecord)"/>).
+    /// </summary>
+    public void Verify(
+        EncryptionRecord encryptionRecord,
+        EncryptedBallot ballot,
+        DecryptedChallengedBallot decrypted)
+    {
+        ArgumentNullException.ThrowIfNull(ballot);
+        Verify(encryptionRecord, ballot, decrypted, ballot.ChainingField);
+    }
+
+    private static void Verify(
+        EncryptionRecord encryptionRecord,
+        EncryptedBallot ballot,
+        DecryptedChallengedBallot decrypted,
+        ChainingField chainingField)
     {
         ArgumentNullException.ThrowIfNull(encryptionRecord);
         ArgumentNullException.ThrowIfNull(ballot);
@@ -203,7 +228,6 @@ public class ChallengedBallotDecryptionVerification
         }
 
         // 13.B over the contest hashes in contest-index order (eq. 71).
-        var chainingField = new ChainingField(manifest.ChainingMode, deviceInformationHash, encryptionRecord.ExtendedBaseHash, previousConfirmationCode);
         var confirmationCode = new ConfirmationCode(selectionHash, contestHashes.OrderBy(x => x.Index).Select(x => x.Hash).ToList(), chainingField);
         if (confirmationCode != ballot.ConfirmationCode)
         {

@@ -132,6 +132,7 @@ public class BallotStructureTests
         Contests = contests ?? ballot.Contests,
         ConfirmationCode = confirmationCode ?? ballot.ConfirmationCode,
         EncryptedBallotNonce = ballot.EncryptedBallotNonce,
+        ChainingField = ballot.ChainingField,
         Weight = ballot.Weight,
         Status = ballot.Status,
         DeviceId = ballot.DeviceId,
@@ -175,6 +176,21 @@ public class BallotStructureTests
         ["ballot nonce C1 one byte short"] = b => WithBallotNonce(b, WithNonceC1(b.EncryptedBallotNonce, b.EncryptedBallotNonce.C1[1..])),
         ["ballot nonce C1 one byte long"] = b => WithBallotNonce(b, WithNonceC1(b.EncryptedBallotNonce, [.. b.EncryptedBallotNonce.C1, 0])),
         ["ballot nonce C1 null"] = b => WithBallotNonce(b, WithNonceC1(b.EncryptedBallotNonce, null!)),
+        // S8 (G19/G37, §3.4.4): every ballot carries the 36-byte chaining field B_C it was hashed with.
+        ["missing chaining field"] = b => new()
+        {
+            Id = b.Id,
+            SelectionEncryptionIdentifier = b.SelectionEncryptionIdentifier,
+            SelectionEncryptionIdentifierHash = b.SelectionEncryptionIdentifierHash,
+            BallotStyleId = b.BallotStyleId,
+            Contests = b.Contests,
+            ConfirmationCode = b.ConfirmationCode,
+            EncryptedBallotNonce = b.EncryptedBallotNonce,
+            ChainingField = default,
+            Weight = b.Weight,
+            Status = b.Status,
+            DeviceId = b.DeviceId,
+        },
     };
 
     private static EncryptedBallot WithBallotNonce(EncryptedBallot ballot, EncryptedBallotNonce nonce) => new()
@@ -186,6 +202,7 @@ public class BallotStructureTests
         Contests = ballot.Contests,
         ConfirmationCode = ballot.ConfirmationCode,
         EncryptedBallotNonce = nonce,
+        ChainingField = ballot.ChainingField,
         Weight = ballot.Weight,
         Status = ballot.Status,
         DeviceId = ballot.DeviceId,

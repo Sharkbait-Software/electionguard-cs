@@ -1,4 +1,4 @@
-using ElectionGuard.Core.Crypto;
+﻿using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.KeyGeneration;
 using ElectionGuard.Core.Models;
 using ElectionGuard.Core.Tally;
@@ -36,9 +36,6 @@ public partial class KnownAnswerTests
     /// </summary>
     private static readonly Dictionary<string, string> UnsupportedFamilies = new()
     {
-        // Chain closing (eqs. 77/78, 0x2B) has no API yet; stage S8 (G19).
-        ["chain_close_inner"] = "G19: no chain-closing API",
-        ["chain_close"] = "G19: no chain-closing API",
     };
 
     private static readonly Lazy<JsonDocument> Document = new(() =>
@@ -190,6 +187,12 @@ public partial class KnownAnswerTests
             "challenged_ballot_contest_data_kdf_key",
             "challenged_ballot_contest_hash",
             "challenged_ballot_confirmation_code",
+            "chain_close_inner",
+            "chain_close",
+            "preencrypted_confirmation_code",
+            "preencrypted_chain_init",
+            "preencrypted_chain_close_inner",
+            "preencrypted_chain_close",
         };
 
         var families = AllVectors.Select(x => x.GetProperty("family").GetString()!).ToHashSet();
@@ -438,6 +441,9 @@ public partial class KnownAnswerTests
         Assert.Equal("00000001", ToHex(chainingField[..4]));
         Assert.Equal(vector.GetProperty("expected_hex").GetString(), ToHex(chainingField[4..]));
         Assert.Equal(inputs.GetProperty("B_C0_hex").GetString(), "00000001" + inputs.GetProperty("H_DI_hex").GetString());
+
+        // Verification 8.F checks the published H_0 against the same value.
+        AssertExpected(vector, ChainingField.InitialHash(deviceHash, extendedBaseHash));
     }
 
     /// <summary>

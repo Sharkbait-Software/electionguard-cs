@@ -1,4 +1,4 @@
-using ElectionGuard.Core.BallotEncryption;
+﻿using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.Models;
 
@@ -74,6 +74,27 @@ public class BallotPreEncryptor
             new SelectionEncryptionIdentifier(ElectionGuardRandom.GetBytes(32)),
             new BallotNonce(ElectionGuardRandom.GetBytes(32)),
             previousConfirmationCode));
+    }
+
+    /// <summary>
+    /// <see cref="PreEncrypt(string, string, ConfirmationCode?, int)"/> as the next ballot of the
+    /// device's <paramref name="chain"/> (§4.1.4): it chains from
+    /// <see cref="DeviceChain.PreviousConfirmationCode"/> and is appended to the chain before it is
+    /// returned. The chain must be a pre-encrypted chain of this tool's device.
+    /// </summary>
+    public PreEncryptedBallot PreEncryptNext(string ballotId, string ballotStyleId, DeviceChain chain, int maxAttempts = 100)
+    {
+        ArgumentNullException.ThrowIfNull(chain);
+        if (chain.BallotKind != DeviceChainBallotKind.PreEncrypted
+            || !string.Equals(chain.DeviceId, _deviceId, StringComparison.Ordinal)
+            || chain.DeviceInformationHash != _deviceHash)
+        {
+            throw new ArgumentException($"The chain is not the pre-encrypted ballot chain of device {_deviceId}.", nameof(chain));
+        }
+
+        var ballot = PreEncrypt(ballotId, ballotStyleId, chain.PreviousConfirmationCode, maxAttempts);
+        chain.Append(ballot);
+        return ballot;
     }
 
     /// <summary>

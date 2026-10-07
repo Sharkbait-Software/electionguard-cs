@@ -160,6 +160,12 @@ User answers (2026-10-04):
     until an audit workflow is designed.
   - **Q23 (S7c), label for the V13 hardening check g^ξ = C0:** "Report as 13.A".
   - **Q24 (S7d), fallback when nonce decryption fails:** "None for now". Fail closed.
+- **Q25 (S8a), empty simple chain, answered 2026-10-07:** "Refuse to close". `DeviceChain.Close` throws for an empty simple
+  chain, and V8/V16 reject an empty simple-chaining device record as N.structure. A device that encrypted nothing gets no
+  published record.
+- **S8b, carried to S10, no decision needed now:** chain initialization and close use only public inputs. Anyone who can
+  rewrite the record could drop trailing ballots and recompute the close. When the election-record format is designed,
+  sign or timestamp each device's closing hash at close.
 - **Cadence:** "Keep going". After each stage: commit, update this tracker, push, start the next stage. Stop only
   for a new spec contradiction or question.
 - **S7 design and API choices** (2026-10-06; implementer choices, none changes bytes the spec fixes; the first two are
@@ -208,6 +214,31 @@ User answers (2026-10-04):
     as a voter would before casting, so the three cast ballots still tally 0-0: 3. Contest data is decrypted (§3.6.6)
     only for cast ballots; a challenged ballot's is released by §3.6.7.
 
+- **S8 design and API choices** (2026-10-07; low-stakes implementer choices; none changes a hash input, every KAT
+  family passes):
+  - **Every ballot carries its chaining field B_C** (`EncryptedBallot.ChainingField`: JSON `chainingField`, protobuf
+    field 11, exactly 36 bytes), as `PreEncryptedBallot` already did. Verification 13.B's "B_C is the chaining field
+    for ballot B" reads it as published, and without it 8.D/8.E cannot be told apart from 8.B. 8.B now hashes the
+    stored field; 8.D/8.E compare it with the field the device and chain position imply (G37).
+  - **The §3.7 per-device list is a `DeviceChainRecord`** (device id, H_DI, ballot kind, chaining mode, confirmation
+    codes in order, and under simple chaining H_0, B-bar_C and H-bar). Ballots are referenced by confirmation code (the
+    chained value, bound to the ballot's contents and id_B), not by the string id. A record exists under no chaining
+    too, with null close values. The record's mode must equal the manifest's (the library's chaining mode is
+    election-wide).
+  - **Per-ballot V8 vs per-device V8.** `Verify(ballot, record)` covers 8.A, 8.B and 8.D (no chaining) or the
+    0x00000001 identifier (simple). `VerifyDevice`/`VerifyDevices` are the authoritative chain checks: completeness of
+    the list (`"8.structure"`), 8.C on the recorded H_DI, 8.F, 8.D/8.E in list order, 8.G. A listed ballot that names
+    another device is `"8.structure"`; one whose device id was rewritten fails 8.E (simple) or 8.D (none). The same
+    walk serves 16.D-16.H.
+  - **An empty simple chain is not closed** (refused by `DeviceChain.Close` and by the walk), since eq. (78) needs
+    H_ℓ. Listed as open question 1 in the S8 log.
+  - **Only chaining modes 0x00000000 and 0x00000001 (S8 review round 1).** §3.4.4 leaves any other mode to "a 4-byte
+    identifier ... specified in the election manifest", and this manifest model specifies none, so
+    `Manifest.Validate` refuses any other `ChainingMode` value (`InvalidManifestException`; this covers
+    `EncryptionRecord` construction and deserialization, both encryptors, `DeviceChain` and every verification), and
+    the public `ChainingField` builders throw `ArgumentOutOfRangeException`. Before, mode 2 (which JSON accepts) was
+    treated as simple chaining with a 0x00000002 identifier on ballots but 0x00000001 in B_C,0 and the close.
+
 ## Stages
 
 | Stage | G-IDs | Blocked on | Status | Commit |
@@ -219,8 +250,8 @@ User answers (2026-10-04):
 | S5 Supplemental fields redesign (with S5b: user follow-up decisions Q11-Q16) | G3, G8, G22, G29, G10 | — | done | 27e75e2 (+ S5b f8a0699, S5c) |
 | S5c Null-vote relation gains the overvote term (Q17) | G22 (Q17 follow-up) | S5b | done | 567e7a6 |
 | S6 Contest data | G11, G32 | after S4 | done | e6d7be0 |
-| S7 Ballot nonce and challenged ballots | G17, G18 | after S4 | done | see next commit |
-| S8 Chain closing | G19, G37 | — | todo | |
+| S7 Ballot nonce and challenged ballots | G17, G18 | after S4 | done | 90ea38b |
+| S8 Chain closing | G19, G37 | — | done | see next commit |
 | S9 Pre-encrypted recording tool | G31 | after S5, S7 | todo | |
 | S10 Record metadata | G40 (G39 won't fix, per Q9); S2 carry-overs: bind the parsed `Manifest` to `ManifestFile` (S2 review R1), record JSON round trip; S4 carry-overs: a `DecryptedTally` record serializer, and a tally loaded from a record must carry or recompute each option's `MaximumCount` (S4 review R1) | — | todo | |
 
@@ -371,7 +402,286 @@ gains one comparison (13.A: g^ξ = C_0), and an honest record never meets it.
 S7 review round 2: no pinned value moved and no test was re-pinned. The library changed only in doc comments; the
 round adds tests.
 
+S8: no hash, nonce, ciphertext, contest hash, confirmation code or KAT value moved (every pre-S8 family passed before
+and after; `chain_init` and `confirmation_code` go through the refactored `ChainingField` unchanged). What changed:
+every encrypted ballot now carries `chainingField` (JSON) / field 11 (protobuf), so serialized ballots grow (smoke:
+protobuf 12,444 -> 12,482 bytes, JSON about +60 bytes). The six chaining families are pinned only by
+`KnownAnswerTests.Chaining.cs` (and `ChainInitialization_Eq74And75`); no test holds a literal. One behavior pin was
+re-pinned (`ConfirmationCodeVerificationTests...MismatchedPreviousConfirmationCode`, 8.B -> 8.E; see the S8 log).
+The console's `tally.json` counts are unchanged; it also writes `device-chains.json`. New committed fixture:
+`test/data/single-contest-chained/manifest.json` (scenario `chained`).
+
 ## Log
+
+### 2026-10-07 — S8 review round 1 (G19, G37: undefined chaining modes, V16 walk test gaps, egperf walk coverage, VerifyAll cost)
+Worktree changes only; nothing committed. No hash input, pinned value or KAT moved, and no test expectation was
+re-pinned. Seven findings, judged as four pieces of work.
+
+**Undefined chaining modes (two minor findings, spec lens and code lens): fixed.** §3.4.4 p.42 specifies the modes
+0x00000000 and 0x00000001 and leaves others to "a 4-byte identifier ... specified in the election manifest". The
+manifest model specifies none, but nothing refused another value: JSON accepts `"chainingMode": 2`, and every
+`mode != None` branch then treated it as simple chaining, with 0x00000002 on ballots (`ChainingField.For`) but
+0x00000001 in B_C,0 and the close, and the per-ballot 8.E identifier check and the walk accepted all of it.
+- `Manifest.Validate` refuses any `ChainingMode` outside {None, Simple} (`InvalidManifestException`). Every chaining
+  path reads the mode from `EncryptionRecord.Manifest`, which is validated on assignment, so this covers record
+  construction and deserialization, both encryptors, `DeviceChain`, V8/V16 per ballot and the walk.
+- `ChainingField`'s public builders (`new ChainingField(...)`, `ForPreEncryptedBallots`) throw
+  `ArgumentOutOfRangeException` on an undefined mode.
+- The per-ballot V8 identifier check compares with 0x00000001 explicitly, not `(int)chainingMode`.
+- No explicit `else throw` was added to the walk's `mode != None` branches: after `Validate` they are unreachable,
+  and a device record claiming another mode already fails `"8.structure"`/`"16.structure"` (mode must equal the
+  manifest's). CLAUDE.md and the Decisions section say so.
+- Tests (`ManifestValidationTests`): `Validate_UndefinedChainingMode_Throws` (2 and -1, read from JSON, refused by
+  `Validate` and by `CreateEncryptionRecord`), `Validate_SpecifiedChainingModes_DoNotThrow`,
+  `ChainingField_UndefinedChainingMode_Throws`. No committed manifest (test/data, perf/scenarios, C:\temp\eg\data)
+  uses another mode (grep: 10 × 0, 1 × 1).
+
+**V16 device-walk test gaps (two minor findings, spec lens and tests lens): fixed; the S8 claim "the same for V16"
+was wrong and is corrected in the S8 entry.** `PreEncryptedDeviceChainTests` now builds two devices (3 and 2
+ballots) under both modes, as the V8 tests do, and adds: an honest no-chaining walk; no-chaining wrong B_C
+(re-hashed, eq. 116) -> 16.E, and another device's ballot with its id rewritten -> 16.E (the walk's
+`NoChainingSubSection` and `ForPreEncryptedBallots(None, ...)` are now exercised); wrong previous code -> 16.F;
+first ballot chained from the regular H_0 -> 16.F; a spliced ballot of device-2 as published -> 16.structure and
+with its id rewritten -> 16.F; H_0 missing -> 16.G; the closing hash alone flipped, a flipped closing field, a
+missing hash, a missing field and the regular close -> 16.H (asserting which message, field or hash, fired); 16.D
+under both modes; dropped from the list only and a mode other than the manifest's -> 16.structure; `VerifyDevices`
+with device-2 unlisted -> 16.structure; `DeviceChain.Append(PreEncryptedBallot)` refusing another device's ballot,
+a wrong position, and anything after close. 9 tests became 19 methods (24 cases). Totals: Core 1634 -> 1654
+(+15 here, +5 in `ManifestValidationTests`), Perf 227 -> 231.
+
+**egperf's device walk was untested (two minor findings, code lens and tests lens): fixed with a record hook; the
+suggestion to move the ballot hook before `deviceChain.Append` was not taken.** The only runner test was rejected
+earlier, by the per-ballot 8.E in the serial `VerifyChunk`. New internal seam
+`ScenarioRunner.DeviceChainRecordHookForTesting` (applied between `deviceChain.Close()` and `VerifyDevices`). New
+tests: `Run_ChainedManifest_WalksTheClosedDeviceRecord` (closing hash flipped -> the walk's 8.G message "The closing
+hash recorded for device"; H_0 replaced -> 8.F's message; last code dropped from the list -> the structure message
+"is not in its ordered list of ballots") and `Run_ChainedManifest_ClosesTheDeviceChainOverEveryBallot` (honest
+run passes; the record covers all 8 ballots and carries a close). Deleting the `VerifyDevices` call fails all three
+cases of the first. Why the ballot hook stays after `Append`: `Append` checks each ballot's B_C against its chain
+position and throws `ArgumentException`, so moving the hook first would turn the existing wrong-previous-code test
+into a harness failure instead of a verification failure. Appending first models what the record exists to expose:
+the device recorded its ballots honestly, and the published ballots were tampered with afterwards. The ballot
+hook's doc comment now says so; the existing test's summary says the per-ballot 8.E catches it.
+
+**`VerifyAll` was O(devices × ballots) (one minor finding, code lens): fixed.** `DeviceChainWalk.VerifyAll` groups
+the links by device id once and hands each device walk only its own group, so the completeness check is O(ballots)
+for the whole record. `byCode` stays whole, so a listed ballot of another device is still found and reported as
+structure. The single-device `VerifyDevice` overloads keep the full scan (they are given whatever list the caller
+has). Behavior unchanged; covered by the existing `VerifyDevices` tests in both files.
+
+Mutation check (run, then reverted from byte-exact copies): with the `VerifyDevices` call in the runner removed, the
+pre-encrypted scheme's "16.E"/"16.G" labels changed, and the `Manifest.Validate` mode check disabled, 6 Core tests
+(`Validate_UndefinedChainingMode_Throws` ×2, `WrongInitialHash_Fails16G` ×2, both 16.E tests) and 3 Perf tests
+(`Run_ChainedManifest_WalksTheClosedDeviceRecord` ×3) fail.
+
+Gate before re-pinning (all changes in): build `0 Warning(s)`, `0 Error(s)`; smoke `correctness passed`,
+EncryptBallots 0.235 ms/ballot, 165.7 MB, VerifyBallots 0.996 ms/ballot, 12.2 MB, JSON 21,138 bytes, protobuf 12,482
+bytes; console `Device Device 1: 4 ballots, chaining mode None.`, `Done.`, then the expected ReadKey
+`InvalidOperationException`, `tally.json` 0-0: 3, 0-1: 0, every field 0; tests Perf `Passed: 231, Total: 231`, Core
+`Passed: 1654, Total: 1654`. Nothing failed, so nothing was re-pinned.
+
+Gate after (rebuilt after the mutation check): build `0 Warning(s)`, `0 Error(s)`; smoke `correctness passed`,
+EncryptBallots 0.262 ms/ballot, 165.8 MB, VerifyBallots 1.018 ms/ballot, 12.2 MB, JSON 21,168 bytes, protobuf 12,482
+bytes; console as above, `tally.json` 0-0: 3, 0-1: 0, every field 0; tests Perf `Passed: 231, Total: 231`, Core
+`Passed: 1654, Total: 1654`. The `chained` scenario: `correctness passed`, EncryptBallots 2.395 ms/ballot,
+VerifyBallots 15.292 ms/ballot (S8: 2.421 / 15.415).
+
+Perf: no hot path changed (the smoke run is unchained and never reaches the walk; the per-ballot change swaps one
+4-byte comparison operand). Smoke against S8's figures: Encrypt 0.235-0.262 against 0.217-0.243 ms/ballot (single
+runs; the encrypt path is untouched), Verify 0.996-1.018 against 0.98-1.02 ms/ballot; memory unchanged (165.7-165.8
+MB, 12.2 MB).
+
+Carry-overs: none new. The S8 open questions and carry-overs stand.
+
+### 2026-10-07 — S8 (ballot chaining: chain close, device records, Verification 8.D-8.G and 16.G/16.H: G19, G37)
+Worktree changes only; nothing staged or committed. The KAT oracle (`test/kat/*`) was extended by the orchestrator
+before this stage with four pre-encrypted chaining families (`preencrypted_confirmation_code` 3,
+`preencrypted_chain_init` 1, `preencrypted_chain_close_inner` 1, `preencrypted_chain_close` 1) and a
+`preencrypted_chain` summary; the two regular-ballot close families (`chain_close_inner`, `chain_close`) were listed
+as unsupported until now. All six pass through the library on the first run; no byte needed a fix.
+
+**Design (recorded under Decisions, "S8 design and API choices"):** the ballot now carries its chaining field B_C,
+as `PreEncryptedBallot` already did. Without it, 8.D/8.E cannot be told apart from 8.B (the hash is one-way), and a
+no-chaining ballot with a wrong B_C could only fail 8.B. No hash input changed: B_C was always computed and hashed
+into H_C (eq. 71); it is now also kept.
+
+**G19 (chain close and device records, §3.4.4 eqs. 74-78, §4.1.4 eqs. 116-120, §3.7):**
+- `ChainingField` gains the per-device formulas: `InitialHash` (H_0 = H(H_E; 0x29, B_C,0), eq. 74),
+  `InitialHashForPreEncryptedBallots` (0x42, eq. 117), `Closing` (B-bar_C = 0x00000001 ‖ H(H_E; 0x2B, H_ℓ, B_C,0),
+  eq. 78), `ClosingForPreEncryptedBallots` (0x44, eq. 120, the 69-byte body form per Q4), `ClosingHash` (H-bar =
+  H(H_E; 0x29, B-bar_C), eq. 77) and `ClosingHashForPreEncryptedBallots` (0x42, eq. 118); `FromCanonicalBytes`
+  (exactly 36 bytes, else `NonCanonicalEncodingException`), `IsWellFormed`, content-based `GetHashCode`, hex
+  `ToString`. The constructor and `ForPreEncryptedBallots` share one implementation (bytes unchanged; the
+  `chain_init` and `confirmation_code` KATs pass as before).
+- `ConfirmationCode.GetHashCode` hashed the array reference, so a decoded code could not find its ballot in a
+  dictionary; it now hashes the bytes (and `Equals` tolerates a default value). Hex `ToString`.
+- `DeviceChainRecord` (Models): `DeviceId` (S_device), `DeviceInformationHash`, `BallotKind` (`Encrypted` /
+  `PreEncrypted`), `ChainingMode`, `ConfirmationCodes` (H_1..H_ℓ in order), and under simple chaining `InitialHash`,
+  `ClosingChainingField`, `ClosingHash` (null under no chaining). Ballots are referenced by confirmation code.
+  `DeviceChainLink` (id, device id, H_C, B_C) lets a streaming caller check a chain without keeping ballots.
+- `DeviceChain` (BallotEncryption): a device's chain. `PreviousConfirmationCode` (null before the first ballot, and
+  always under no chaining), `Append(EncryptedBallot)` / `Append(PreEncryptedBallot)` (refuses another device's
+  ballot, a field that does not fit the position, anything after `Close`), `Close()` (the record; refuses an empty
+  simple chain, see question 1). `BallotEncryptor.EncryptNext(ballot, chain)` and
+  `BallotPreEncryptor.PreEncryptNext(id, style, chain)` encrypt from the chain's previous code and append. (Named
+  `...Next` because an `Encrypt(Ballot, DeviceChain)` overload made every `Encrypt(ballot, null)` call ambiguous.)
+- `EncryptedBallot.ChainingField` (required): JSON `chainingField` (base64, strict 36 bytes via the new
+  `ChainingFieldJsonConverter`; missing or null is a `JsonException`), protobuf ballot field 11 (`byte[]?`, decoded
+  with `ChainingField.FromCanonicalBytes`, so missing/35/37 bytes throw `NonCanonicalEncodingException`).
+  `BallotStructure` requires a well-formed field on regular and pre-encrypted ballots (`"N.structure"`).
+- `JsonDeviceChainRecordSerializer` (JSON only; the record does not ride on encrypted ballots).
+- Verification 16 (`PreEncryptedConfirmationCodeVerification`): `VerifyDevice` (over ballots or links) and
+  `VerifyDevices`, for 16.D, 16.F in list order, 16.G and 16.H; its remark no longer says 16.G/16.H are uncovered.
+
+**G37 (8.D/8.E tautological):**
+- `ConfirmationCodeVerification.Verify(ballot, record)` (new, per ballot): `"8.structure"`, 8.A, 8.B over the ballot's
+  own B_C, then 8.D under no chaining (B_C = 0x00000000 ‖ H_DI with H_DI computed from the ballot's device id), or
+  under simple chaining only the 0x00000001 identifier (as 8.E). `Verify(ballot, deviceHash, record, previous)` keeps
+  its signature: the same, plus 8.C against the given device hash and 8.E against the given previous code (null = the
+  device's first ballot, chaining from H_0). The two dead comparisons are gone.
+- `VerifyDevice(record, ballots | links, encryptionRecord)` and `VerifyDevices(records, ballots | links, ...)`: the
+  authoritative chain checks, through the shared `DeviceChainWalk` (Verify namespace, also used by V16).
+  `"8.structure"` first: record kind and mode must be the verification's and the manifest's, no close values under no
+  chaining, a non-empty simple chain, every listed code a ballot of the record named for this device and listed once,
+  every ballot naming the device listed; `VerifyDevices` adds one list per device and a list for every ballot's
+  device. Then 8.C (recorded H_DI), 8.F (recorded H_0), 8.D/8.E per ballot in list order, 8.G (recorded B-bar_C and
+  H-bar over the last listed code). It does not redo 8.A/8.B: callers run the per-ballot check too (documented).
+- `ChallengedBallotDecryptionVerification.Verify(record, ballot, decrypted)` (new overload): 13.B over the ballot's
+  own B_C ("B_C is the chaining field for ballot B"); the old overload with device hash and previous code is kept and
+  behaves as before.
+- Detected by tests: wrong previous code (8.E), reordered (8.E; passes under no chaining, which attests to no
+  order), dropped last ballot from list and record (8.G) or from the list only (8.structure), dropped middle ballot
+  (8.E), wrong/missing closing hash or field (8.G), wrong/missing H_0 (8.F), wrong recorded H_DI (8.C), a ballot of
+  another device spliced in (8.structure; with its device id rewritten, 8.E under simple and 8.D under no chaining),
+  a no-chaining ballot with a wrong B_C re-hashed consistently (8.D per ballot and in the walk). For V16 S8 itself
+  covered only a subset (16.D, 16.F for reordered and dropped-middle ballots, 16.G for a regular-ballot H_0, 16.H for
+  truncation and a regular-ballot close, and 16.structure for the ballot kind); the rest of the V8 set was added
+  for V16 in S8 review round 1 (see that entry).
+
+**Pipelines:**
+- Console (`Program.cs`, the old TODO): ballots in file-name order; a `DeviceChain` for "Device 1"; under no chaining
+  encrypted in parallel and appended in file order, under simple chaining encrypted one at a time from the chain;
+  the challenged ballot goes through `EncryptNext` (it was processed on the device); the chain is closed after
+  encryption and written to `device-chains.json`; V8 per ballot (`Verify(ballot, record)`) then
+  `VerifyDevices([record], ballots, ...)`; V13 uses the new overload. Ballot JSON files are now written with
+  `File.Create` (truncating) instead of `File.OpenWrite`. No input file in `C:\temp\eg\data\1` changed (the
+  manifest stays no-chaining), so no .bak was made.
+- egperf: under simple chaining the runner appends each encrypted ballot to a `DeviceChain` (outside the encrypt
+  timing), keeps a `DeviceChainLink` per published ballot while ballot verification runs, and after the last chunk
+  closes the chain and runs `VerifyDevices`, billed to `VerifyBallots` without adding ballots. Under no chaining
+  nothing new is kept (per-ballot 8.D is complete there); the parallel V8 call is now `Verify(ballot, record)`.
+  New scenario `perf/scenarios/chained.json` (300 ballots, `test/data/single-contest-chained/manifest.json` =
+  smoke's manifest with `chainingMode` 1 and its own `electionId`); `perf/README.md` describes it. First run:
+  `correctness passed`, EncryptBallots 2.421 ms/ballot, VerifyBallots 15.415 ms/ballot (serial by design).
+
+Gate before re-pinning (all code above, the console and the perf runner in; the test project only compile-fixed:
+`ChainingField = x.ChainingField` copied into the hand-built ballot clones (16 test files), the KAT challenged-ballot
+shells given the vector's B_C or `ElectionFixtureBuilder.PlaceholderChainingField` (new, 36 zero bytes), and the
+protobuf DTO clones in `StrictDecodingTests` copying field 11; no assertion touched):
+- Build: `0 Warning(s)`, `0 Error(s)`.
+- Smoke: `correctness passed`. dkg 143 ms; EncryptBallots 221 ms, 0.221 ms/ballot, 165.7 MB; VerifyBallots 1,009 ms,
+  1.009 ms/ballot, 12.3 MB; Tally 8, VerifyTally 5, DecryptTally 34, VerifyDecryption 8 ms; JSON 21,198 bytes,
+  protobuf 12,482 bytes.
+- Console: `Device Device 1: 4 ballots, chaining mode None.`, `Ballot 0, contest 0: contest data "Write-in: Ada
+  Lovelace".`, `Challenged ballot 0-challenged, contest 0: 0-0=1, 0-1=0, contest data "Write-in: Ada Lovelace".`,
+  `Done.`, then the expected ReadKey `InvalidOperationException`; `tally.json` 0-0: 3, 0-1: 0, every supplemental
+  field 0; `device-chains.json` lists 4 confirmation codes, mode 0, null close values.
+- Tests: Perf `Passed: 226, Total: 226`; Core `Failed: 2, Passed: 1558, Total: 1560`. The failures:
+  `KnownAnswerTests.EveryVectorFamilyIsCheckedOrExplicitlyUnsupported` (the four new oracle families not yet
+  checked; closed by the new KAT tests by design), and
+  `ConfirmationCodeVerificationTests.Verify_ChainingModeSimple_MismatchedPreviousConfirmationCode_Throws_SubSection8B`
+  (`Expected: "8.B"`, `Actual: "8.E"`; the behavior G37 asks for, re-pinned below).
+
+Re-pinned (one behavior pin, no value):
+- `ConfirmationCodeVerificationTests.Verify_ChainingModeSimple_MismatchedPreviousConfirmationCode_Throws_SubSection8B`
+  -> `..._SubSection8E`, expecting `"8.E"`. The ballot carries the B_C it was hashed with, so 8.B passes; an
+  unrelated previous code is a wrong chain position, which is 8.E's statement. Its old comment explained that 8.E
+  was dead code (the G37 finding). Also: `KnownAnswerTests.UnsupportedFamilies` is now empty (the two `chain_close*`
+  entries are checked), and the two serializer tests whose comment said B_C "is not a stored property of
+  EncryptedBallot" now assert it round-trips.
+
+New tests (Core 1560 -> 1634, Perf 226 -> 227):
+- KAT (`KnownAnswerTests.Chaining.cs`): `ChainCloseInner_Eq78`, `ChainClose_Eq77`, `PreEncryptedChainInitialization_Eq117`,
+  `PreEncryptedConfirmationCode_Eq116` (3), `PreEncryptedChainCloseInner_Eq120_BodyForm` (also asserts the library
+  does not produce `lock_form_erratum.hash_hex` nor the 0x2B close), `PreEncryptedChainClose_Eq118`, and
+  `OracleChain_AsADeviceRecord_VerifiesAndDetectsTampering` (regular and pre-encrypted: the oracle's H_0, H_1, H_2
+  and close as a `DeviceChainRecord` pass `VerifyDevice`; truncated -> 8.G/16.H, swapped -> 8.E/16.F, the LOCK-form
+  close -> 16.H). `ChainInitialization_Eq74And75` also checks `ChainingField.InitialHash`.
+- `ConfirmationCodeVerificationTests` (+8 cases): the ballot carries its B_C; tampered B_C without re-hashing -> 8.B;
+  no-chaining ballot with another device's hash, the simple identifier, or a zero hash (re-hashed) -> 8.D on both
+  overloads; simple chaining per ballot checks only the identifier (8.E for 0x00000000); the first ballot must chain
+  from its own device's H_0 (8.E); a default B_C -> 8.structure.
+- `DeviceChainVerificationTests` (new, two devices of 4 and 2 ballots, one challenged): every case listed under G37,
+  plus honest records under both modes, the record's values against eqs. 74/76/77/78, `VerifyDevices` completeness,
+  and `DeviceChain` refusals (another device, wrong position, after close; an empty chain closes only without
+  chaining; previous code null under no chaining; `EncryptNext` with another device's chain). One case documents
+  the limit of the check: a shortened chain with a recomputed close passes, and differs from the published H-bar.
+- `PreEncryptedDeviceChainTests` (new, 9): part of the 16.D-16.H counterparts on a `PreEncryptNext` chain (completed
+  in S8 review round 1).
+- `ChainingSerializationTests` (new, 5): B_C round trips (JSON and protobuf) and the decoded ballots still pass V8
+  and `VerifyDevices`; JSON `chainingField` missing or null is refused; `DeviceChainRecord` JSON round trip
+  (simple and no chaining) still verifies; a 35-byte closing field is refused.
+- `StrictDecodingTests`: protobuf B_C missing, 35 and 37 bytes; JSON B_C 35 and 37 bytes.
+  `BallotStructureTests`: shape "missing chaining field" × V6/7/8/9.
+  `ChallengedBallotDecryptionTests.Verification13_OverTheBallotsOwnChainingField`.
+- Perf `ScenarioRunnerTests.Run_ChainedManifest_FailsABallotChainedFromTheWrongPreviousCode`.
+- Mutation check (run, then reverted): with 8.G/16.H and the simple-chaining 8.E/16.F comparisons disabled in
+  `DeviceChainWalk`, 16 of the 47 device-chain and oracle-chain tests fail.
+
+Gate after:
+- Build: `0 Warning(s)`, `0 Error(s)`.
+- Smoke ×3, each `correctness passed`: dkg 138-139 ms; EncryptBallots 0.233 / 0.236 / 0.243 ms/ballot, 165.7 MB;
+  VerifyBallots 0.993 / 1.018 / 1.012 ms/ballot, 12.1-12.3 MB; Tally 8-10, VerifyTally 4-6, DecryptTally 35,
+  VerifyDecryption 8 ms. JSON 21,088-21,163 bytes, protobuf 12,482 bytes.
+- Console: as before re-pinning (`Device Device 1: 4 ballots, chaining mode None.`, `Done.`, the expected ReadKey
+  exception); `tally.json`, `device-chains.json`, `contest-data.json`, `challenged-ballots.json` rewritten at
+  00:07:11; 0-0: 3, 0-1: 0, fields 0.
+- Tests: Core `Passed: 1634, Total: 1634`; Perf `Passed: 227, Total: 227`.
+
+Perf against S7. `--repeat 5` of S8 (group c1b66d04) against a same-load `--repeat 5` of HEAD `90ea38b` (S7 code,
+detached worktree `.tmp-head-baseline`, records written into this worktree's `perf/results`, group 5eb152cf; the
+worktree was removed). `compare --baseline 20261007T040647Z-b11c8e --candidate 20261007T040534Z-833fa4`, nothing
+flagged:
+
+| Phase | S7 (HEAD, same load) | S8 |
+|---|---|---|
+| EncryptBallots ms/ballot | 0.203 | 0.217 (+6.8%; runs 0.204-0.236 against 0.195-0.235) |
+| EncryptBallots alloc B/ballot | 173,103 | 173,078 (-0.01%) |
+| VerifyBallots ms/ballot | 0.975 | 0.980 (+0.4%) |
+| VerifyBallots alloc B/ballot | 11,663 | 11,487 (-1.5%) |
+
+Against the tracker's S7 figures (Encrypt 0.264, Verify 1.09 ms/ballot) S8 is lower on both; against S7 review
+round 2's group 47eac1db the same compare flagged Tally (+7.1%) and VerifyTally (+7.0%) allocation, about 65 bytes
+per ballot on paths S8 does not touch, which the same-load baseline above does not reproduce (-0.01%, +1.7%).
+Encryption only stores the B_C it already built; verification computes H_DI per ballot as before and compares one
+36-byte field. Serialized ballot: JSON +~60 bytes (about 21.1 KB), protobuf 12,444 -> 12,482 bytes (+38: B_C and
+its tag). The smoke scenario and manifest hashes did not change, so S7 records stay comparable.
+
+Note for later compares: group 5eb152cf holds S7 code, but its records carry the same `gitCommit` (`90ea38b`) as the
+S8 worktree runs (group c1b66d04). Only the group id tells them apart. `perf/results/` is gitignored.
+
+Open questions for the user (implemented as the recommended option; neither changes bytes the spec defines):
+1. **Closing a simple chain that holds no ballot.** Eq. (78) closes over "the final confirmation code in the chain",
+   which an empty chain lacks. (a) As built: `DeviceChain.Close` refuses, and Verification 8/16 reject an empty
+   simple-chaining record (`"8.structure"`). (b) Close with H_ℓ = H_0, i.e. B-bar_C = 0x00000001 ‖ H(H_E; 0x2B,
+   H_0, B_C,0), which invents bytes the spec does not give. (c) Publish no close for an unused device.
+   Recommendation: (a) for now, or (c) if unused devices must appear in the record.
+2. **Where the protection against truncation comes from.** H_0 and the close use no secret (H_E is public), so
+   anyone who can rewrite the record can drop the last ballots and recompute B-bar_C and H-bar
+   (`DroppedLastBallot_WithARecomputedClose_...` shows it passes). The spec's protection is that H-bar is
+   "formed and published" when the chain closes. The library cannot enforce that by itself. Nothing to decide now;
+   the record format and its signature (§3.7, S10/G40) should timestamp or sign each device's closing hash.
+
+Carry-overs:
+- egperf's chained path still verifies serially per ballot (4-argument V8 with the previous code) because the
+  whole run is forced to parallelism 1. With B_C stored, per-ballot V8 no longer needs the chain, so verification
+  could run in parallel with the cheap device walk at the end; that needs a verify-specific parallelism setting.
+- The console's simple-chaining branch is exercised by the unit tests' `DeviceChain`/`EncryptNext` and the
+  `chained` scenario, not by the console's own input (its manifest is no-chaining; changing it is outside S8).
+- An election record type (S10/G40) should carry the `DeviceChainRecord` list; `VerifyDevices` is ready for it.
+- Chaining modes other than 0 and 1 (§3.4.4: "must be uniquely identified by a 4-byte identifier and specified in
+  the election manifest") are not supported; `ChainingMode` has only `None` and `Simple`. (S8 review round 1:
+  `Manifest.Validate` now refuses any other value; before, nothing did.)
 
 ### 2026-10-06 — S7 review round 2 (G18: RLA granularity, guardian trust boundary, perf check, V13/V14 test gaps)
 Worktree changes only; nothing staged or committed. Five minor findings. Two are accepted and resolved in

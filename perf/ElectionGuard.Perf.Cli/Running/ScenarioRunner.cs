@@ -66,8 +66,21 @@ public sealed class ScenarioRunner
     /// phase's timing and before the ballot is verified or tallied; the ballot it returns is used in
     /// its place. Lets a test plant a fault that only shows across chunks, such as a later chunk
     /// repeating an earlier chunk's id_B (Verification 5.A). Null, and never set, outside tests.
+    ///
+    /// Under simple chaining the device chain has already appended the original ballot when the hook
+    /// runs, so the closed device record lists what the device encrypted while the replaced ballot
+    /// is what gets verified: the hook models a published ballot tampered with after the device
+    /// recorded it, which is what the record exists to expose.
     /// </summary>
     internal Func<int, EncryptedBallot, EncryptedBallot>? EncryptedBallotHookForTesting { get; init; }
+
+    /// <summary>
+    /// Test seam: under simple chaining, called with the closed device record before the
+    /// once-per-device Verification 8 walk checks it; the record it returns is checked in its place.
+    /// Lets a test tamper with what only that walk checks (8.F, 8.G). Null, and never set, outside
+    /// tests.
+    /// </summary>
+    internal Func<DeviceChainRecord, DeviceChainRecord>? DeviceChainRecordHookForTesting { get; init; }
 
     public RunOutcome Run()
     {
@@ -230,6 +243,15 @@ public sealed class ScenarioRunner
 
         EncryptedBallot? representative = null;
         ConfirmationCode? previousConfirmationCode = null;
+
+        // Under simple chaining, the device's confirmation code chain (§3.4.4): every encrypted ballot
+        // is appended, the chain is closed after the last chunk (eqs. 77/78), and the published
+        // ballots are walked against its record (Verification 8.C-8.G). That keeps a confirmation
+        // code per ballot, and a link (id, device, H_C, B_C) per ballot while ballot verification
+        // runs. Under no chaining it is skipped: each ballot's B_C is fully checked per ballot (8.D),
+        // and the list the harness would publish is just the order it encrypted in.
+        var deviceChain = isChained ? new DeviceChain(records.EncryptionRecord, DeviceId) : null;
+        var chainLinks = isChained && _scenario.Phases.BallotVerification ? new List<DeviceChainLink>() : null;
         int generated = 0;
         bool aborted = false;
 
@@ -289,6 +311,7 @@ public sealed class ScenarioRunner
                 // collected here rather than by retaining the ballots.
                 foreach (var encryptedBallot in encryptedChunk)
                 {
+                    deviceChain?.Append(encryptedBallot);
                     encryptedBallot.RecordStatus(BallotStatus.Cast);
                     foreach (var contest in encryptedBallot.Contests)
                     {
@@ -305,6 +328,14 @@ public sealed class ScenarioRunner
                 }
 
                 representative ??= encryptedChunk[0];
+
+                if (chainLinks is not null)
+                {
+                    foreach (var encryptedBallot in encryptedChunk)
+                    {
+                        chainLinks.Add(DeviceChainLink.From(encryptedBallot));
+                    }
+                }
 
                 if (_scenario.Phases.BallotVerification)
                 {
@@ -351,6 +382,24 @@ public sealed class ScenarioRunner
                 }
 
                 _log($"  {generated:N0}/{_scenario.BallotCount:N0} ballots");
+            }
+
+            // --- Verification 8, once per device (simple chaining) --------------------------
+            // The chain is closed when the device stops (eqs. 77/78) and its record checked against
+            // the published ballots: 8.C, 8.F, 8.E in list order and 8.G. Billed to ballot
+            // verification without adding to its ballot count.
+            if (deviceChain is not null && chainLinks is not null && !aborted)
+            {
+                var deviceChainRecord = deviceChain.Close();
+                if (DeviceChainRecordHookForTesting is { } recordHook)
+                {
+                    deviceChainRecord = recordHook(deviceChainRecord);
+                }
+
+                using (ballotVerify.Enter())
+                {
+                    new ConfirmationCodeVerification().VerifyDevices([deviceChainRecord], chainLinks, records.EncryptionRecord);
+                }
             }
 
             // --- Verification 9 -----------------------------------------------------------
@@ -697,7 +746,7 @@ public sealed class ScenarioRunner
                     else
                     {
                         new AdherenceToVoteLimitsVerification().Verify(item.Ballot, encryptionRecord);
-                        new ConfirmationCodeVerification().Verify(item.Ballot, deviceHash, encryptionRecord, null);
+                        new ConfirmationCodeVerification().Verify(item.Ballot, encryptionRecord);
                     }
                 });
         }

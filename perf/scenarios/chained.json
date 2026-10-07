@@ -1,0 +1,16 @@
+{
+  "id": "chained",
+  "manifest": "test/data/single-contest-chained/manifest.json",
+  "ballotCount": 300,
+  "seed": 20261007,
+  "guardians": { "n": 3, "k": 2 },
+  "parallelism": 0,
+  "chunkSize": 100,
+  "warmupBallots": 50,
+  "phases": {
+    "ballotVerification": true,
+    "tallyVerification": true,
+    "decrypt": true,
+    "serialization": false
+  }
+}

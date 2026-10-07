@@ -439,6 +439,7 @@ public partial class KnownAnswerTests
             Weight = 1,
             ConfirmationCode = new ConfirmationCode(new byte[32]),
             EncryptedBallotNonce = ElectionFixtureBuilder.PlaceholderBallotNonce,
+            ChainingField = ElectionFixtureBuilder.PlaceholderChainingField,
             Contests =
             [
                 new EncryptedContest

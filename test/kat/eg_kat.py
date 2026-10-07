@@ -2,7 +2,7 @@
 """ElectionGuard v2.1.0 hash-chain known-answer-test (KAT) oracle.
 
 Written from the ElectionGuard Design Specification v2.1.0 ONLY (sections 3.1-3.4, 3.6.2-3.6.7,
-4.1.4 and 5, and Verifications 10, 12, 13 and 14), plus the user's recorded decisions Q5-Q7, Q10 and Q20 on spec
+4.1.4 and 5, and Verifications 10, 12, 13, 14 and 16), plus the user's recorded decisions Q4-Q7, Q10 and Q20 on spec
 contradictions (docs/spec-compliance/2026-10-04-fix-progress.md), without reference to the C# implementation in this repository,
 so that its outputs can be used as independent expected values. Standard library only.
 
@@ -301,17 +301,22 @@ def chain_init(h_e, b_c0, sep=0x29):
     return b1, H(h_e, b1)
 
 
-def chain_close_bc(h_e, h_last, b_c0):
-    """Eq. (78): B-bar_C = 0x00000001 || H(H_E; 0x2B, H_l, B_{C,0}). Returns (inner B1, inner hash, B-bar_C)."""
-    b1 = b"\x2B" + h_last + b_c0
+def chain_close_bc(h_e, h_last, b_c0, sep=0x2B):
+    """Eq. (78) (sep 0x2B) / eq. (120) (sep 0x44): B-bar_C = 0x00000001 || H(H_E; sep, H_l, B_{C,0}).
+    Returns (inner B1, inner hash, B-bar_C). Eq. (120) uses the body form (user decision Q4): the
+    §5.5.5 table's extra 0x4C4F434B ('LOCK') after 0x44 is an erratum; the table's own len(B1) = 69
+    agrees with the body (1 + 32 + 36), not with its printed layout (1 + 4 + 32 + 36 = 73)."""
+    assert len(h_last) == 32 and len(b_c0) == 36
+    b1 = bytes([sep]) + h_last + b_c0
     assert len(b1) == 69
     inner = H(h_e, b1)
     return b1, inner, b"\x00\x00\x00\x01" + inner
 
 
-def chain_close(h_e, b_c_bar):
-    """Eq. (77): H-bar = H(H_E; 0x29, B-bar_C)."""
-    b1 = b"\x29" + b_c_bar
+def chain_close(h_e, b_c_bar, sep=0x29):
+    """Eq. (77) (sep 0x29) / eq. (118) (sep 0x42): H-bar = H(H_E; sep, B-bar_C)."""
+    assert len(b_c_bar) == 36
+    b1 = bytes([sep]) + b_c_bar
     assert len(b1) == 37
     return b1, H(h_e, b1)
 
@@ -1517,6 +1522,99 @@ def build():
                             "contests": sorted(rec["contests"]),
                             "reproduces_earlier_vectors": "H_C_expected" in rec})
 
+    # --- Pre-encrypted ballot chaining, §4.1.4 eqs. (116)-(120), §5.5.5 table, Verification 16.E-16.H ----
+    # Appended after all earlier families. Same election (main_chain H_E) and device string as the regular
+    # chain above, but H_DI is the pre-encrypted one (eq. 119, 0x43). The contest hashes chi fed to eq. (116)
+    # are opaque labelled 32-byte stand-ins: eqs. (113)-(115) are out of scope here, and eq. (116) treats chi as
+    # input bytes.
+    pre_note_chi = ("chi values are opaque labelled 32-byte stand-ins (eqs. 113-115 are not covered); eq. (116) "
+                    "hashes them as raw bytes in sequential contest order.")
+    pre_chis_1 = [bytes(range(0x50, 0x70)), bytes(range(0x70, 0x90))]
+    pre_chis_2 = [bytes(range(0x90, 0xB0))]
+    pre_chi_desc_1 = ["bytes 0x50..0x6F", "bytes 0x70..0x8F"]
+    pre_chi_desc_2 = ["bytes 0x90..0xAF"]
+
+    # (16.E) no chaining: B_C = 0x00000000 || H_DI, with the 0x43 H_DI.
+    pre_bc_none = b_c_no_chaining(H_DI_pre)
+    b1, pre_hc_none = confirmation_code(H_I, pre_chis_1, pre_bc_none, sep=0x42)
+    vectors.append(vec("preencrypted_confirmation_code",
+                       "(116) H_C = H(H_I; 0x42, chi_1, ..., chi_mB, B_C), B_C = 0x00000000 || H_DI (16.E), "
+                       "H_DI per (119)",
+                       "pre-encrypted H_C no chaining", "H_I", H_I, b1, pre_hc_none,
+                       {"H_I_hex": hx(H_I), "contest_hashes_hex": [hx(c_) for c_ in pre_chis_1],
+                        "contest_hashes": pre_chi_desc_1, "H_DI_hex": hx(H_DI_pre),
+                        "H_DI": "main_chain.H_DI_preencrypted_hex (eq. 119, 0x43)", "B_C_hex": hx(pre_bc_none)},
+                       37 + 32 * len(pre_chis_1), notes=pre_note_chi))
+
+    # (117) chain initialization, B_C,0 = 0x00000001 || H_DI (16.G), H_DI per (119).
+    pre_bc0 = b_c0_simple(H_DI_pre)
+    b1, pre_h0 = chain_init(H_E, pre_bc0, sep=0x42)
+    assert pre_h0 != h0
+    vectors.append(vec("preencrypted_chain_init",
+                       "(117) H_0 = H(H_E; 0x42, B_C,0), B_C,0 = 0x00000001 || H_DI, H_DI per (119) (16.G)",
+                       "pre-encrypted H_0 simple chaining", "H_E", H_E, b1, pre_h0,
+                       {"H_E_hex": hx(H_E), "H_DI_hex": hx(H_DI_pre),
+                        "H_DI": "main_chain.H_DI_preencrypted_hex (eq. 119, 0x43)", "B_C0_hex": hx(pre_bc0)}, 37,
+                       notes="Uses the 0x43 device hash of eq. (119), not the 0x2A one of eq. (72) (§4.1.4)."))
+
+    # (116) with B_C,j = 0x00000001 || H_{j-1} (16.F), j = 1 and j = 2. Ballot 2 is a different ballot
+    # (different H_I), as in the regular chain.
+    pre_bc1 = b_c_simple(pre_h0)
+    b1, pre_h1 = confirmation_code(H_I, pre_chis_1, pre_bc1, sep=0x42)
+    vectors.append(vec("preencrypted_confirmation_code",
+                       "(116) H_C with B_C,1 = 0x00000001 || H_0 (16.F), simple chaining j=1",
+                       "pre-encrypted H_1 simple chaining", "H_I", H_I, b1, pre_h1,
+                       {"H_I_hex": hx(H_I), "contest_hashes_hex": [hx(c_) for c_ in pre_chis_1],
+                        "contest_hashes": pre_chi_desc_1, "H_prev_hex": hx(pre_h0), "B_C_hex": hx(pre_bc1)},
+                       37 + 32 * len(pre_chis_1), notes=pre_note_chi))
+    pre_bc2 = b_c_simple(pre_h1)
+    b1, pre_h2 = confirmation_code(H_I2, pre_chis_2, pre_bc2, sep=0x42)
+    vectors.append(vec("preencrypted_confirmation_code",
+                       "(116) H_C with B_C,2 = 0x00000001 || H_1 (16.F), simple chaining j=2",
+                       "pre-encrypted H_2 simple chaining (one contest)", "H_I", H_I2, b1, pre_h2,
+                       {"H_I_hex": hx(H_I2), "H_I": "H_I of id_B = q + 5 (selection_encryption_identifier_hash)",
+                        "contest_hashes_hex": [hx(c_) for c_ in pre_chis_2], "contest_hashes": pre_chi_desc_2,
+                        "H_prev_hex": hx(pre_h1), "B_C_hex": hx(pre_bc2)},
+                       37 + 32 * len(pre_chis_2), notes=pre_note_chi))
+
+    # (120) and (118) chain close with H_l = H_2, body form per Q4.
+    b1_in, pre_inner, pre_bc_bar = chain_close_bc(H_E, pre_h2, pre_bc0, sep=0x44)
+    lock_b1 = b"\x44" + b"\x4C\x4F\x43\x4B" + pre_h2 + pre_bc0  # the table's printed layout, NOT used
+    assert len(lock_b1) == 73
+    lock_inner = H(H_E, lock_b1)
+    assert lock_inner != pre_inner
+    q4_note = ("User decision Q4: body form B1 = 0x44 || H_l || B_C,0 (eq. 120, §4.1.4 p.59, Verification 16.H). "
+               "The §5.5.5 table (p.78) prints B1 = 0x44 || 0x4C4F434B ('LOCK') || H_l || B_C,0, which is an erratum: "
+               "that layout is 1 + 4 + 32 + 36 = 73 bytes, but the same table row prints len(B1) = 69, which only "
+               "the body form satisfies. lock_form_erratum records the LOCK-layout hash for diagnosis; it is NOT "
+               "the expected value.")
+    vv = vec("preencrypted_chain_close_inner", "(120) inner H(H_E; 0x44, H_l, B_C,0) [body form, Q4]",
+             "pre-encrypted chain close inner hash, H_l = H_2", "H_E", H_E, b1_in, pre_inner,
+             {"H_E_hex": hx(H_E), "H_l_hex": hx(pre_h2), "B_C0_hex": hx(pre_bc0), "B_C_bar_hex": hx(pre_bc_bar)},
+             69, notes=q4_note)
+    vv["lock_form_erratum"] = {"b1_hex": hx(lock_b1), "b1_len": len(lock_b1), "hash_hex": hx(lock_inner),
+                               "expected": False}
+    vectors.append(vv)
+    b1, pre_h_bar = chain_close(H_E, pre_bc_bar, sep=0x42)
+    vectors.append(vec("preencrypted_chain_close",
+                       "(118) H-bar = H(H_E; 0x42, B-bar_C), B-bar_C = 0x00000001 || H(H_E; 0x44, H_l, B_C,0) (120)",
+                       "pre-encrypted chain close H-bar, H_l = H_2", "H_E", H_E, b1, pre_h_bar,
+                       {"H_E_hex": hx(H_E), "B_C_bar_hex": hx(pre_bc_bar), "H_l_hex": hx(pre_h2),
+                        "B_C0_hex": hx(pre_bc0)}, 37,
+                       notes="Table for (118) prints no B0; H_E per the equation. B-bar_C uses the body form of "
+                             "(120) (Q4)."))
+    pre_summary = {
+        "election": "main_chain (H_E = main_chain.H_E_hex)",
+        "S_device": devices[1], "H_DI_hex": hx(H_DI_pre), "H_DI": "eq. (119), separator 0x43",
+        "separators": {"chain_init_117": "0x42", "confirmation_code_116": "0x42", "chain_close_118": "0x42",
+                       "device_info_119": "0x43", "chain_close_inner_120": "0x44"},
+        "H_0_hex": hx(pre_h0), "H_1_hex": hx(pre_h1), "H_2_hex": hx(pre_h2),
+        "B_C_bar_hex": hx(pre_bc_bar), "H_bar_hex": hx(pre_h_bar),
+        "q4_erratum": "§5.5.5 table row for (120) prints 0x44 || 0x4C4F434B || H_l || B_C,0 with len(B1) = 69; the "
+                      "body form 0x44 || H_l || B_C,0 is used (user decision Q4), consistent with the printed length.",
+        "contest_hashes": "opaque labelled stand-ins; eqs. (113)-(115) are not covered",
+    }
+
     # The Q7 helper's rejection boundary (not spec; recorded, not a hash vector).
     cd_rejections = []
     for b_lambda, s in ((1, full1 + "!"), (3, full3 + "x"), (1, "Write-in: Grace Hopper (US)é")):
@@ -1587,6 +1685,7 @@ def build():
                                    "released nonces. Verification 14 computes no hash.",
             "verification_13": v13_summary,
         },
+        "preencrypted_chain": pre_summary,
     }
     return doc
 
