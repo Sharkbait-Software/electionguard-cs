@@ -23,7 +23,7 @@
                 }
             ],
             "numWriteinsSelected": 0,
-            "contestData": "Some Contest Data 1"
+            "contestData": "AAAAE1NvbWUgQ29udGVzdCBEYXRhIDEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
         },
         {
             "id": "2",
@@ -46,7 +46,7 @@
                 }
             ],
             "numWriteinsSelected": 0,
-            "contestData": "Some Contest Data 2"
+            "contestData": "AAAAE1NvbWUgQ29udGVzdCBEYXRhIDIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
         }
     ]
 }

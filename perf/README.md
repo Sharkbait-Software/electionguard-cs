@@ -180,6 +180,19 @@ that indicator is declared, user decision Q17), so `smoke`'s
 Verification 7 now builds its relation ciphertexts in one Montgomery representation. The committed
 manifests dropped the `countsTowardSelectionLimit` key, so `compare` reports S5 records as incomparable.
 
+Stage S6 replaced the election-wide `optionalContestDataMaxLength` with a per-contest
+`contestDataBlocks` (b_Λ, §3.3.10; user decision Q7). Every committed manifest declares 2 blocks
+(64 bytes) on each contest that offers write-in fields, and such a contest carries an encrypted contest
+data field on every ballot, filled or not, so each ballot of `smoke` costs three more full-width
+exponentiations (g^ξ, K-hat^ξ, g^u; g and K-hat have tables): `EncryptBallots` went from about 0.236
+to 0.24-0.25 ms/ballot and 168.7 to 171.0 MB, and `VerifyBallots` did not move (no verification of a
+ballot checks the field's Schnorr proof; only the guardians do, before decrypting it). `BallotGenerator`
+writes text into the field of each contest whose voter used a write-in, derived from the ballot index
+so that no other generated value moved. Contest data decryption (§3.6.6) has no egperf phase: the
+harness streams and discards ballots, and decrypting a field is per ballot contest; the unit tests and
+the console pipeline exercise it. The manifests' hashes changed, so `compare` reports S5c records as
+incomparable; rebaseline.
+
 `smoke`'s contest has L = 1 and R = 1, where "sum above L or an option above R" and the old "sum above
 L x R" rule agree, so `smoke` cannot tell them apart. The `limits` scenario (`test/data/option-limits`,
 2,000 ballots) can: its four contests (L/R = 1/2, 3/3, 3/3 without an overvote indicator, 2/1) offer two

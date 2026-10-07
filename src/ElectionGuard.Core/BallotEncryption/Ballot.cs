@@ -20,7 +20,16 @@ public record BallotContest
     /// selections and this number.
     /// </summary>
     public int NumWriteinsSelected { get; init; }
-    public string? ContestData { get; init; }
+
+    /// <summary>
+    /// The contest data field D_Λ (§3.3.10): exactly 32·b_Λ raw bytes, b_Λ being the manifest's
+    /// <see cref="Models.Contest.ContestDataBlocks"/> for the contest (user decision Q7), filled
+    /// unambiguously by the caller; <see cref="ContestDataEncoding.Encode"/> builds one from a string.
+    /// Null for none: in a contest that declares contest data the encryptor then encrypts 32·b_Λ zero
+    /// bytes (the encoding of the empty string), so every ballot carries the field and its presence
+    /// reveals nothing. A contest that declares no contest data (b_Λ = 0) must leave this null.
+    /// </summary>
+    public byte[]? ContestData { get; init; }
 }
 
 public record BallotChoice
@@ -32,8 +41,9 @@ public record BallotChoice
 /// <summary>
 /// A plaintext ballot the encryptor refuses: a contest listed twice or not in the manifest, a
 /// contest that does not list exactly the manifest's options, a negative selection value, a number
-/// of write-ins outside [0, the contest's write-in field count], or a ballot that does not list
-/// exactly its ballot style's contests. (A selection above the option selection limit is not
+/// of write-ins outside [0, the contest's write-in field count], contest data in a contest that
+/// declares none or of a length other than 32·b_Λ, or a ballot that does not list exactly its
+/// ballot style's contests. (A selection above the option selection limit is not
 /// refused: it overvotes the contest, §3.3.5.)
 /// </summary>
 public class InvalidBallotException : ArgumentException

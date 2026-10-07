@@ -8,7 +8,6 @@ public record Manifest
     public required string ElectionId { get; init; }
     public required List<Contest> Contests { get; init; }
     public required List<BallotStyle> BallotStyles { get; init; }
-    public required int OptionalContestDataMaxLength { get; init; }
     public ChainingMode ChainingMode { get; init; }
 
     /// <summary>
@@ -88,6 +87,13 @@ public record Manifest
             }
 
             ValidateSupplementalFields(contest);
+
+            // §3.3.10 p.40: D_Λ has 32·b_Λ bytes and the KDF hashes b(b_Λ·256, 4), so a contest that
+            // has contest data needs 1 <= b_Λ < 2^24; 0 declares none (user decision Q7).
+            if (contest.ContestDataBlocks < 0 || contest.ContestDataBlocks >= Contest.ContestDataBlocksLimit)
+            {
+                throw new InvalidManifestException($"Contest {contest.Id} declares {contest.ContestDataBlocks} contest data blocks; b_Λ is 0 (no contest data) or satisfies 1 <= b_Λ < 2^24 (§3.3.10 p.40).");
+            }
         }
 
         if (FirstDuplicateId(Contests, static x => x.Id) is string duplicateContestId)
@@ -259,6 +265,24 @@ public record Contest
     /// zero and the number of write-in fields that are offered"). 0 when the contest offers none.
     /// </summary>
     public int WriteInFieldCount { get; init; }
+
+    /// <summary>
+    /// b_Λ (§3.3.10 p.40): the contest's contest data field is exactly 32·b_Λ bytes, "specified in
+    /// the election manifest to be the smallest value large enough for D_Λ to capture all additional
+    /// information about this contest" (user decision Q7: per contest). 0, the default, declares no
+    /// contest data: no ballot may carry any for the contest. Above 0, every ballot carries exactly
+    /// one encrypted contest data field for the contest, whether or not the voter wrote anything
+    /// (an empty field encrypts 32·b_Λ zero bytes), so the ballot's shape never reveals whether
+    /// write-in text was entered. <see cref="BallotEncryption.ContestDataEncoding"/> turns a string
+    /// into such a field.
+    /// </summary>
+    public int ContestDataBlocks { get; init; }
+
+    /// <summary>b_Λ is below this (2^24), so that b(b_Λ·256, 4) fits in four bytes (§3.3.10 p.40).</summary>
+    public const int ContestDataBlocksLimit = 1 << 24;
+
+    /// <summary>The length in bytes of the contest's data field D_Λ and of C_1: 32·<see cref="ContestDataBlocks"/>.</summary>
+    public int ContestDataLength() => 32 * ContestDataBlocks;
 
     /// <summary>
     /// Every verifiable field of the contest in manifest order: the selectable options, then the

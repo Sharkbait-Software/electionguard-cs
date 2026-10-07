@@ -2,8 +2,9 @@
 
 `eg_kat.py` is an independent reference implementation of the ElectionGuard v2.1.0 hash chain,
 used as a known-answer-test oracle for `ElectionGuard.Core`. It was written from the
-specification text only (sections 3.1-3.4, 3.6.2-3.6.5, 4.1.4 and 5, and Verification 10, including the section 5.5 domain-separation
-tables), without reading the C# source or its existing test expectations, so its outputs are not
+specification text only (sections 3.1-3.4, 3.6.2-3.6.6, 4.1.4 and 5, and Verifications 10, 12 and 13, including the section 5.5
+domain-separation tables) and the user's recorded decisions on spec contradictions (Q5, Q6, Q7 and Q10 in
+`docs/spec-compliance/2026-10-04-fix-progress.md`), without reading the C# source or its existing test expectations, so its outputs are not
 shaped by any encoding bug in the C# code.
 
 It is Python 3, standard library only (`hmac`, `hashlib`, `json`). It transcribes the standard
@@ -39,6 +40,13 @@ This rewrites `test/kat/vectors.json` and prints H_P for n = 3, k = 2.
 | `preencrypted_device_info_hash` | (119) H_DI = H(H_E; 0x43, S_device) |
 | `tally_decryption_commitment_hash` | (88) d_i = H(H_E; 0x30, ind_c, ind_o, i, A, B, a_i, b_i, M_i, U), len(B1) = 2577 + 4 * #U |
 | `tally_decryption_challenge` | (90) c = H_q(H_E; 0x31, ind_c, ind_o, A, B, a, b, M), len(B1) = 2569 (Verification 10.B) |
+| `contest_data_nonce` | (64) xi = H_q(H_I; 0x25, ind_c, xi_B), len(B1) = 37 |
+| `contest_data_secret_key` | (65) h = H(H_I; 0x26, ind_c, alpha, beta), alpha = g^xi, beta = K-hat^xi, len(B1) = 1029 |
+| `contest_data_kdf_key` | (66) k_i = HMAC(h, b(i, 4) \|\| "data_enc_keys" \|\| 0x00 \|\| "contest_data" \|\| b(ind_c, 4) \|\| b(b_Lambda * 256, 4)), 1 <= i <= b_Lambda |
+| `contest_data_encryption_challenge` | (67)-(69) C0, C1 and C2 = (c, v), c = H_q(H_I; 0x27, ind_c, a, C0, C1), len(B1) = 1029 + 32 * b_Lambda |
+| `contest_hash_with_contest_data` | (70) chi_l with C0, C1, C2, len(B1) = 69 + (2m + 1) * 512 + 32 * b_Lambda |
+| `contest_data_decryption_commitment_hash` | (99) d_i = H(H_I; 0x32, ind_c, i, C0, C1, C2, a_i, b_i, m_i, U), len(B1) = 2125 + 32 * b_Lambda + 4 * #U |
+| `contest_data_decryption_challenge` | (101) c = H_q(H_I; 0x33, ind_c, C0, C1, C2, a, b, beta), len(B1) = 2117 + 32 * b_Lambda (Verification 12.B) |
 
 ## Vector format
 
@@ -65,3 +73,32 @@ that orders U differently will disagree. Each challenge vector carries the whole
 10 (10.1-10.3 recompute exactly M, a, b; 10.A-10.C) and Note 3.7 (eqs. 94, 95) for each. Verification 10 uses no
 hash other than eq. (90). These vectors carry `b1_layout` and are appended after all earlier families; the
 top-level `tally_decryption` key (after `vectors`) summarizes the setup.
+
+### Contest data (sections 3.3.10 and 3.6.6)
+
+The contest data families sit on the `main_chain` ballot (its H_I, xi_B = A0A1..BF and K-hat = g^7) and are
+appended after all earlier families. Five ciphertexts cover b_Lambda = 1 and 3: the empty string, an ASCII
+string, a multi-block non-ASCII string, and strings that exactly fill 32 * b_Lambda bytes (28 UTF-8 bytes for
+b_Lambda = 1, 92 for b_Lambda = 3). Each `contest_data_encryption_challenge` vector carries xi, alpha, beta,
+h, every k_i, the fixed Schnorr nonce u and a = g^u in `inputs`, and C0, C1, c, v and `C2_hex` under
+`ciphertext`. The script checks g^v * C0^c = a and that C1 decrypts back to D.
+
+Encoding choices to know about:
+
+- `D_hex` is the plaintext the spec operates on. The string-to-D step is the library helper fixed by user decision
+  Q7, not spec: b(len_utf8, 4) || UTF-8 bytes, zero-padded to exactly 32 * b_Lambda bytes, rejected if it does
+  not fit. The top-level `contest_data.string_helper_rejections` lists strings one byte over capacity.
+- Label and Context are the raw UTF-8 bytes of `data_enc_keys` (13) and `contest_data` (12), with underscores as on
+  the p.40 page image, with no length prefix. The KDF counter i is 1-based (Q6; Verification 13.7's 0 <= l < b_Lambda
+  is treated as an erratum). The last field is the key length in bits, b_Lambda * 256.
+- b(C2, 64) is b(c, 32) || b(v, 32). The spec writes C2 = (c, v) and b(C2, 64) without spelling out the split.
+- In eq. (70) the table's 69 is 1 (0x28) + 4 (l) + 64 (C2), (2m + 1) * 512 is the m (alpha, beta) pairs plus C0,
+  and 32 * b_Lambda is C1.
+- Eq. (99) is keyed with H_I, per the body and user decision Q5. The section 5.5.4 table prints B0 = H_E, which is
+  treated as an erratum; its B1 layout and length are used as printed. U is ascending (Q10).
+
+The decryption vectors are complete, valid proofs. The guardians' ballot-data-key polynomials are the K-hat ones
+the n = 3, k = 2 `guardian_record_hash` vector commits to (s-hat = 7). The script asserts that beta = prod m_i^w_i
+equals K-hat^xi, that the decryption-side h = H(H_I; 0x26, ind_c, C0, beta) equals the encryption-side h of eq.
+(65), that Verification 12.1-12.2 recompute exactly a and b, that 12.A-12.C hold, and that the per-guardian
+relations hold. A `confirmation_code` vector over the three contest hashes with contest data is also appended.

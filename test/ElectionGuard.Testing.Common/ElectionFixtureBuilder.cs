@@ -136,6 +136,12 @@ public static class ElectionFixtureBuilder
         SupplementalFieldKind.UndervoteDifferenceCount,
     ];
 
+    /// <summary>
+    /// b_Λ that <see cref="CreateMinimalManifest"/> declares for a contest with write-ins: 2 blocks,
+    /// 64 bytes, room for 60 UTF-8 bytes of text after the 4-byte length.
+    /// </summary>
+    public const int DefaultContestDataBlocks = 2;
+
     /// <summary>Every supplemental field kind of §3.3.9, in declaration order.</summary>
     public static readonly IReadOnlyList<SupplementalFieldKind> AllSupplementalFields =
     [
@@ -176,9 +182,11 @@ public static class ElectionFixtureBuilder
     /// Builds a small deterministic (non-Bogus) 1-contest, 2-choice manifest plus its serialized
     /// ManifestFile bytes. The contest declares <paramref name="supplementalFields"/>, by default
     /// <see cref="DefaultSupplementalFields"/>, plus the write-in count when
-    /// <paramref name="includeWriteIns"/>. Pass includeWriteIns: true and a non-null ContestData
+    /// <paramref name="includeWriteIns"/>. Pass includeWriteIns: true and a non-null contestData
     /// string on the ballot (see CreateBallot) to exercise the write-in / contest-data path; the
-    /// contest then offers <paramref name="writeInFieldCount"/> write-in fields (1 by default).
+    /// contest then offers <paramref name="writeInFieldCount"/> write-in fields (1 by default) and
+    /// declares <paramref name="contestDataBlocks"/> blocks of contest data (b_Λ, §3.3.10), by
+    /// default <see cref="DefaultContestDataBlocks"/> with write-ins and none without.
     /// </summary>
     public static (Manifest Manifest, ManifestFile ManifestFile) CreateMinimalManifest(
         bool includeWriteIns = false,
@@ -187,7 +195,8 @@ public static class ElectionFixtureBuilder
         int selectionLimit = 1,
         HashTrimmingFunction? hashTrimmingFunction = null,
         IReadOnlyList<SupplementalFieldKind>? supplementalFields = null,
-        int? writeInFieldCount = null)
+        int? writeInFieldCount = null,
+        int? contestDataBlocks = null)
     {
         var kinds = (supplementalFields ?? DefaultSupplementalFields).ToList();
         if (includeWriteIns && !kinds.Contains(SupplementalFieldKind.WriteInCount))
@@ -217,6 +226,7 @@ public static class ElectionFixtureBuilder
                     },
                     SupplementalFields = SupplementalFields(2, kinds),
                     WriteInFieldCount = writeInFields,
+                    ContestDataBlocks = contestDataBlocks ?? (includeWriteIns ? DefaultContestDataBlocks : 0),
                 },
             },
             BallotStyles = new List<BallotStyle>
@@ -228,7 +238,6 @@ public static class ElectionFixtureBuilder
                     ContestIds = new List<string> { "contest-1" },
                 },
             },
-            OptionalContestDataMaxLength = 256,
             ChainingMode = chainingMode,
             HashTrimmingFunction = hashTrimmingFunction,
         };
@@ -276,7 +285,9 @@ public static class ElectionFixtureBuilder
     /// Builds a minimal deterministic Ballot/BallotContest/BallotChoice graph matching the manifest
     /// produced by CreateMinimalManifest (single contest). Supply selectionValuesByChoiceId to mark
     /// specific choices, or leave null/empty for a nullvote. Set numWriteinsSelected/contestData to
-    /// exercise the write-in path.
+    /// exercise the write-in path: <paramref name="contestData"/> is encoded with
+    /// <see cref="ContestDataEncoding.Encode"/> to the contest's b_Λ, so the contest must declare
+    /// contest data.
     /// </summary>
     public static Ballot CreateBallot(
         Manifest manifest,
@@ -306,7 +317,7 @@ public static class ElectionFixtureBuilder
                     Id = contest.Id,
                     Choices = choices,
                     NumWriteinsSelected = numWriteinsSelected,
-                    ContestData = contestData,
+                    ContestData = contestData is null ? null : ContestDataEncoding.Encode(contestData, contest.ContestDataBlocks),
                 },
             },
         };

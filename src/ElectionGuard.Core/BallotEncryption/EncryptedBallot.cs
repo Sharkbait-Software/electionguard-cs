@@ -122,6 +122,12 @@ public record EncryptedContest
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public ChallengeResponsePair[]? NullVoteProof { get; init; }
 
-    public required EncryptedData? ContestData { get; init; }
+    /// <summary>
+    /// The encrypted contest data field (§3.3.10): present exactly when the manifest declares contest
+    /// data for the contest (<see cref="Contest.ContestDataBlocks"/> b_Λ >= 1), with C_1 of exactly
+    /// 32·b_Λ bytes, and hashed into the contest hash (eq. 70). Null otherwise.
+    /// <see cref="Verify.BallotStructure"/> enforces both.
+    /// </summary>
+    public required EncryptedContestData? ContestData { get; init; }
     public required ContestHash ContestHash { get; init; }
 }

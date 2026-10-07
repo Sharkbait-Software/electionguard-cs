@@ -12,7 +12,6 @@ public class BallotGeneratorTests
         var manifest = new Manifest
         {
             ElectionId = "duplicate-choice-id-election",
-            OptionalContestDataMaxLength = 0,
             Contests = new List<Contest>
             {
                 new Contest
@@ -44,7 +43,6 @@ public class BallotGeneratorTests
         var manifest = new Manifest
         {
             ElectionId = "multiple-duplicate-choice-ids-election",
-            OptionalContestDataMaxLength = 0,
             Contests = new List<Contest>
             {
                 new Contest
@@ -81,7 +79,6 @@ public class BallotGeneratorTests
         var manifest = new Manifest
         {
             ElectionId = "null-contests-election",
-            OptionalContestDataMaxLength = 0,
             Contests = null!,
             BallotStyles = new List<BallotStyle>(),
         };
@@ -98,7 +95,6 @@ public class BallotGeneratorTests
         var manifest = new Manifest
         {
             ElectionId = "null-choices-election",
-            OptionalContestDataMaxLength = 0,
             Contests = new List<Contest>
             {
                 new Contest
@@ -245,6 +241,35 @@ public class BallotGeneratorTests
         Assert.All(noWriteIns, n => Assert.Equal(0, n));
         Assert.Contains(writeIns, n => n > 0);
         Assert.All(writeIns, n => Assert.InRange(n, 0, 3));
+    }
+
+    /// <summary>
+    /// S6: a contest that declares contest data (b_Λ) gets write-in text exactly on the ballots that
+    /// use a write-in field, encoded to 32·b_Λ bytes (the encryptor fills the others with an empty
+    /// field). The text comes from the ballot index, not the random stream, so it moves nothing else:
+    /// the same seed gives the same selections with or without contest data declared.
+    /// </summary>
+    [Fact]
+    public void Generate_WritesWriteInTextIntoTheContestDataOfBallotsThatUseAWriteIn()
+    {
+        var (with, _) = ElectionFixtureBuilder.CreateMinimalManifest(includeWriteIns: true);
+        var (withoutData, _) = ElectionFixtureBuilder.CreateMinimalManifest(includeWriteIns: true, contestDataBlocks: 0);
+        Assert.Equal(ElectionFixtureBuilder.DefaultContestDataBlocks, with.Contests[0].ContestDataBlocks);
+
+        var contests = Enumerable.Range(0, 500).Select(i => new BallotGenerator(with, seed: 9).Generate(i).Contests[0]).ToList();
+        var plain = Enumerable.Range(0, 500).Select(i => new BallotGenerator(withoutData, seed: 9).Generate(i).Contests[0]).ToList();
+
+        Assert.Contains(contests, c => c.ContestData is not null);
+        Assert.All(contests, c => Assert.Equal(c.NumWriteinsSelected > 0, c.ContestData is not null));
+        Assert.All(contests.Where(c => c.ContestData is not null), c =>
+        {
+            Assert.Equal(32 * ElectionFixtureBuilder.DefaultContestDataBlocks, c.ContestData!.Length);
+            Assert.StartsWith("Write-in ", ContestDataEncoding.Decode(c.ContestData));
+        });
+        Assert.All(plain, c => Assert.Null(c.ContestData));
+        Assert.Equal(
+            plain.Select(c => (c.NumWriteinsSelected, string.Join(",", c.Choices.Select(x => x.SelectionValue)))),
+            contests.Select(c => (c.NumWriteinsSelected, string.Join(",", c.Choices.Select(x => x.SelectionValue)))));
     }
 
     [Fact]

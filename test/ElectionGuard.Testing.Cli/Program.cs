@@ -74,6 +74,8 @@ Manifest GenerateManifest(Options options)
             // field, whose use counts toward the selection limit.
             SupplementalFields = ElectionFixtureBuilder.SupplementalFields(numChoices, ElectionFixtureBuilder.AllSupplementalFields),
             WriteInFieldCount = 1,
+            // b_Λ (§3.3.10): room for the write-in's text, which every ballot then carries encrypted.
+            ContestDataBlocks = ElectionFixtureBuilder.DefaultContestDataBlocks,
         });
     }
 
@@ -102,7 +104,6 @@ Manifest GenerateManifest(Options options)
         ElectionId = faker.Random.Guid().ToString(),
         Contests = contests,
         BallotStyles = ballotStyles,
-        OptionalContestDataMaxLength = 0,
         ChainingMode = ChainingMode.None,
     };
 }

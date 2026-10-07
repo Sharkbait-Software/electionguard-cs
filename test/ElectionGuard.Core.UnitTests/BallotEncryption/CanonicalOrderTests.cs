@@ -84,7 +84,6 @@ public class CanonicalOrderTests
             ElectionId = "canonical-order",
             Contests = contests,
             BallotStyles = [new BallotStyle { Id = "style-1", Name = "Style 1", ContestIds = styleContestIds }],
-            OptionalContestDataMaxLength = 0,
             ChainingMode = ChainingMode.None,
         };
         var manifestFile = new ManifestFile { Bytes = JsonSerializer.SerializeToUtf8Bytes(manifest) };

@@ -34,7 +34,7 @@ public class ContestHashTests
         return (encryptedBallot.Contests[0], encryptedBallot.SelectionEncryptionIdentifierHash, manifest.Contests[0].Index);
     }
 
-    private static ContestHash BuildHash(EncryptedContest contest, SelectionEncryptionIdentifierHash selIdHash, int contestIndex, EncryptedData? contestData)
+    private static ContestHash BuildHash(EncryptedContest contest, SelectionEncryptionIdentifierHash selIdHash, int contestIndex, EncryptedContestData? contestData)
     {
         return new ContestHash(
             selIdHash,
@@ -193,9 +193,9 @@ public class ContestHashTests
         var nullVoteCount = Field(40);
         var underVoteCount = Field(50);
         var writeInVoteCount = Field(60);
-        var contestData = new EncryptedData
+        var contestData = new EncryptedContestData
         {
-            C0 = new byte[] { 0x70 },
+            C0 = new IntegerModP(0x70),
             C1 = new byte[] { 0x71 },
             Challenge = new IntegerModQ(72),
             Response = new IntegerModQ(73),
@@ -262,9 +262,10 @@ public class ContestHashTests
         var nullVoteCount = Field(new IntegerModP(p - 3), 4);
         var underVoteCount = Field(5, 6);
         var writeInVoteCount = Field(7, 8);
-        var contestData = new EncryptedData
+        var contestData = new EncryptedContestData
         {
-            C0 = Enumerable.Range(0, 600).Select(i => (byte)(i * 7)).ToArray(),
+            // C_0 is hashed as b(C_0, 512) (eq. 70), padded like every other element of Z_p.
+            C0 = new IntegerModP(p - 5),
             C1 = Array.Empty<byte>(),
             Challenge = new IntegerModQ(0),
             Response = new IntegerModQ(EGParameters.CryptographicParameters.Q - 1),

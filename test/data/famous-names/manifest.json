@@ -1,6 +1,5 @@
 {
   "electionId": "1",
-  "optionalContestDataMaxLength": 50,
   "contests": [
     {
       "id": "1",
@@ -62,7 +61,8 @@
           "kind": "WriteInCount"
         }
       ],
-      "writeInFieldCount": 1
+      "writeInFieldCount": 1,
+      "contestDataBlocks": 2
     },
     {
       "id": "2",
@@ -124,7 +124,8 @@
           "kind": "WriteInCount"
         }
       ],
-      "writeInFieldCount": 1
+      "writeInFieldCount": 1,
+      "contestDataBlocks": 2
     }
   ],
   "ballotStyles": [

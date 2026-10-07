@@ -25,6 +25,13 @@ public class BallotEncryptor
     private readonly VotingDeviceInformationHash _deviceHash;
 
     /// <summary>
+    /// Test seam: supplies the Schnorr proof nonce u of a contest's data encryption (eq. 69), given
+    /// its contest index, in place of a fresh random value. Lets the known-answer tests reproduce the
+    /// oracle's C_2. Null outside tests.
+    /// </summary>
+    internal Func<int, IntegerModQ>? ContestDataProofNonceForTesting { get; set; }
+
+    /// <summary>
     /// Opt in to the precomputed power tables of Note 3.5.
     ///
     /// The note observes that every exponentiation performed while encrypting and proving ballot
@@ -158,6 +165,21 @@ public class BallotEncryptor
             if (contest.NumWriteinsSelected < 0 || contest.NumWriteinsSelected > manifestContest.WriteInFieldCount)
             {
                 throw new InvalidBallotException($"Contest with id {contest.Id} uses {contest.NumWriteinsSelected} write-in fields; it offers {manifestContest.WriteInFieldCount}.");
+            }
+
+            // §3.3.10: D_Λ is exactly 32·b_Λ bytes, b_Λ from the manifest (user decision Q7). The
+            // library takes the bytes as given and never pads or truncates them.
+            if (contest.ContestData is not null)
+            {
+                if (manifestContest.ContestDataBlocks == 0)
+                {
+                    throw new InvalidBallotException($"Contest with id {contest.Id} has contest data, but the manifest declares none for it (b_Λ = 0).");
+                }
+
+                if (contest.ContestData.Length != manifestContest.ContestDataLength())
+                {
+                    throw new InvalidBallotException($"Contest with id {contest.Id} has {contest.ContestData.Length} bytes of contest data; with b_Λ = {manifestContest.ContestDataBlocks} the field is exactly {manifestContest.ContestDataLength()} bytes (§3.3.10).");
+                }
             }
         }
 
@@ -370,10 +392,20 @@ public class BallotEncryptor
             nullVoteProof = GenerateProofs(nullValue, 0, limit, nullCiphertext, _encryptionRecord.ElectionPublicKeys, selectionEncryptionIdentifierHash, manifestContest.Index, nullVoteIndex, weight: limit);
         }
 
-        EncryptedData? encryptedContestData = null;
-        if(contest.ContestData != null)
+        // §3.3.10: a contest that declares contest data (b_Λ >= 1) carries an encrypted field on every
+        // ballot, 32·b_Λ zero bytes (the empty string's encoding) when the voter gave none, so that
+        // the ballot's shape never shows whether write-in text was entered.
+        EncryptedContestData? encryptedContestData = null;
+        if (manifestContest.ContestDataBlocks > 0)
         {
-            encryptedContestData = EncryptContestData(contest.ContestData, manifestContest.Index, selectionEncryptionIdentifierHash, ballotNonce);
+            encryptedContestData = ContestDataEncryption.Encrypt(
+                contest.ContestData ?? new byte[manifestContest.ContestDataLength()],
+                manifestContest.Index,
+                manifestContest.ContestDataBlocks,
+                selectionEncryptionIdentifierHash,
+                ballotNonce,
+                _encryptionRecord.ElectionPublicKeys.OtherBallotDataEncryptionKey,
+                ContestDataProofNonceForTesting?.Invoke(manifestContest.Index));
         }
 
         // Eq. (70): every verifiable field in manifest order, the options and then the declared
@@ -595,78 +627,12 @@ public class BallotEncryptor
             Response = x.response,
         }).ToArray();
     }
-
-    private EncryptedData EncryptContestData(string valueToEncrypt, int contestIndex, SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, BallotNonce ballotNonce)
-    {
-        // 3.3.10
-        var bytes = Encoding.UTF8.GetBytes(valueToEncrypt);
-        var encryptionNonce = EGHash.HashModQ(selectionEncryptionIdentifierHash,
-            [0x25],
-            contestIndex.ToByteArray(),
-            ballotNonce);
-
-        var alpha = MontgomeryModP.PowModP(EGParameters.G, encryptionNonce);
-        var beta = MontgomeryModP.PowModP(_encryptionRecord.ElectionPublicKeys.OtherBallotDataEncryptionKey, encryptionNonce);
-        var secretKey = EGHash.Hash(selectionEncryptionIdentifierHash,
-            [0x26],
-            contestIndex.ToByteArray(),
-            alpha,
-            beta);
-
-        List<byte[]> encryptedBlocks = new();
-
-        for (int i = 0; i <= bytes.Length; i += 32)
-        {
-            int endOfSpan = i + 32;
-            if(endOfSpan > bytes.Length)
-            {
-                endOfSpan = bytes.Length;
-            }
-
-            var di = bytes[i..endOfSpan];
-            
-            // Right pad any remaining bytes.
-            if(di.Length < 32)
-            {
-                var ndi = new byte[32];
-                di.CopyTo(ndi, 0);
-                di = ndi;
-            }
-
-            var ki = EGHash.Hash(secretKey,
-                i.ToByteArray(),
-                Encoding.UTF8.GetBytes("data_enc_keys"),
-                [0x00],
-                Encoding.UTF8.GetBytes("contest_data"),
-                contestIndex.ToByteArray(),
-                (i * 256).ToByteArray());
-
-            var encryptedBlock = di.XOR(ki);
-            encryptedBlocks.Add(encryptedBlock);
-        }
-
-        var c0 = alpha;
-        var c1 = ByteArrayExtensions.Concat(encryptedBlocks.ToArray());
-
-        var proofKeyPair = KeyPair.GenerateRandom();
-        var challenge = EGHash.HashModQ(selectionEncryptionIdentifierHash,
-            [0x27],
-            contestIndex.ToByteArray(),
-            proofKeyPair.PublicKey,
-            c0,
-            c1);
-        var response = proofKeyPair.SecretKey - challenge * encryptionNonce;
-
-        return new EncryptedData
-        {
-            C0 = c0,
-            C1 = c1,
-            Challenge = challenge,
-            Response = response,
-        };
-    }
 }
 
+/// <summary>
+/// A hashed ElGamal ciphertext (C_0, C_1, C_2 = (c, v)) under K-hat, as the ballot nonce encryption
+/// of §3.3.4 produces. Contest data has its own type, <see cref="EncryptedContestData"/>.
+/// </summary>
 public class EncryptedData
 {
     public required byte[] C0 { get; init; }

@@ -1,17 +1,17 @@
+using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.Extensions;
 using ElectionGuard.Core.KeyGeneration;
 using ElectionGuard.Core.Models;
-using System.Numerics;
 using static ElectionGuard.Core.Tally.DecryptedTally;
-using static ElectionGuard.Core.Tally.PartialTallyDecryption;
 
 namespace ElectionGuard.Core.Tally;
 
 /// <summary>
-/// A guardian's side of verifiable tally decryption (§3.6.3-§3.6.5). For every option of every
-/// contest, the participating guardians U jointly compute M = A^s (eq. 86) and a Chaum-Pedersen
-/// proof (c, v) that they did (eqs. 87-93), in three rounds, each a method here:
+/// A guardian's side of verifiable decryption: of a tally (§3.6.3-§3.6.5), and of one ballot
+/// contest's contest data field (§3.6.6). For every option of every contest, the participating
+/// guardians U jointly compute M = A^s (eq. 86) and a Chaum-Pedersen proof (c, v) that they did
+/// (eqs. 87-93), in three rounds, each a method here:
 /// <list type="number">
 /// <item><see cref="Commit"/>: pick a fresh secret u_i, compute M_i = A^{z_i} (eq. 84) and the
 /// commitment pair (a_i, b_i) = (g^{u_i}, A^{u_i}) (eq. 87), and send M_i with the commitment hash
@@ -22,19 +22,27 @@ namespace ElectionGuard.Core.Tally;
 /// a, b, M (eqs. 86, 89) and the challenge c (eq. 90) itself, and send
 /// v_i = u_i - c·w_i·z_i (eqs. 91, 92).</item>
 /// </list>
+/// Contest data decryption is "exactly the same" protocol (§3.6.6 p.50) over the field's C_0, with
+/// the ballot data encryption key share ẑ_i, the hashes of eqs. (99) and (101) keyed with H_I, and
+/// one extra step first: the guardian checks the field's Schnorr proof C_2 (eq. 69) and refuses to
+/// decrypt if it fails (<see cref="CommitContestData"/>, <see cref="RevealContestData"/>,
+/// <see cref="RespondContestData"/>). Both run on <see cref="VerifiableDecryption"/>.
+///
 /// The administrator mediates every message (<see cref="TallyAdmin"/>). There is no network layer
 /// in this library: <see cref="TallyAdmin.Decrypt"/> drives in-process guardians through the three
 /// rounds, and a distributed deployment carries the same three messages between machines and hands
-/// them to <see cref="TallyAdmin.Combine"/>.
+/// them to <see cref="TallyAdmin.Combine"/> (<see cref="TallyAdmin.DecryptContestData"/> and
+/// <see cref="TallyAdmin.CombineContestData"/> for contest data).
 ///
 /// The guardian never accepts a challenge from anyone. It computes c from values that every
 /// participant committed to before any was revealed, so no one can choose c after seeing a
-/// commitment. Each u_i is used for exactly one response: <see cref="Respond"/> discards the
+/// commitment. Each u_i is used for exactly one response: the respond step discards the
 /// decryption in progress, and a second call throws. Two responses with one u_i to two different
-/// challenges would give away z_i.
+/// challenges would give away the key share.
 ///
-/// A guardian works on one decryption at a time. <see cref="Commit"/> starts a new one and
-/// discards any unfinished one, which is safe: nothing is ever responded with an old u_i.
+/// A guardian works on one decryption at a time, a tally's or a contest data field's. Either commit
+/// step starts a new one and discards any unfinished one, which is safe: nothing is ever responded
+/// with an old u_i. The reveal and respond steps of one kind refuse a decryption of the other kind.
 /// </summary>
 public class TallyGuardian
 {
@@ -46,22 +54,22 @@ public class TallyGuardian
 
     private readonly GuardianIndex _index;
     private readonly GuardianSecretShares _shares;
-    private Session? _session;
+    private object? _session;
 
     public GuardianIndex Index => _index;
 
     /// <summary>
     /// Test seam: supplies u_i for an option, given (ind_c, ind_o), in place of a fresh random
-    /// value. Lets the known-answer tests reproduce the spec oracle's proofs exactly. Null outside
-    /// tests.
+    /// value; for a contest data field, given (ind_c, 0) (no option index is 0). Lets the
+    /// known-answer tests reproduce the spec oracle's proofs exactly. Null outside tests.
     /// </summary>
     internal Func<int, int, IntegerModQ>? NonceSourceForTesting { get; set; }
 
     /// <summary>
     /// Test seam: replaces this guardian's M_i for an option, given (ind_c, ind_o, M_i), before it is
     /// hashed into d_i and sent: a dishonest guardian that is consistent about its wrong share, such
-    /// as M_i·K^(-δ/w_i), which would shift the count by δ if nothing checked the proof. Null
-    /// outside tests.
+    /// as M_i·K^(-δ/w_i), which would shift the count by δ if nothing checked the proof. For a
+    /// contest data field it is given (ind_c, 0, m_i). Null outside tests.
     /// </summary>
     internal Func<int, int, IntegerModP, IntegerModP>? PartialDecryptionTamperForTesting { get; set; }
 
@@ -82,61 +90,19 @@ public class TallyGuardian
     {
         _session = null;
 
-        var sorted = TallyDecryptionHashes.RequireQuorum(participants);
-        if (!sorted.Contains(_index))
-        {
-            throw new ArgumentException($"Guardian {_index.Index} is not among the participants, so it cannot take part in this decryption.", nameof(participants));
-        }
-
-        var options = TallyOption.ForTally(encryptionRecord.Manifest, encryptedTally);
-        var extendedBaseHash = encryptionRecord.ExtendedBaseHash;
-        var secretShare = _shares.VoteEncryptionKeyShare;
+        var sorted = RequireParticipant(participants);
+        var options = TallyOption.ForTally(encryptionRecord, encryptedTally);
         var nonceSource = NonceSourceForTesting;
         var tamper = PartialDecryptionTamperForTesting;
+        var session = Begin(
+            options,
+            sorted,
+            _shares.VoteEncryptionKeyShare,
+            nonceSource is null ? null : o => nonceSource(options[o].ContestIndex, options[o].ChoiceIndex),
+            tamper is null ? null : (o, m) => tamper(options[o].ContestIndex, options[o].ChoiceIndex, m),
+            maxDegreeOfParallelism);
 
-        var nonces = new IntegerModQ[options.Length];
-        var partialDecryptions = new IntegerModP[options.Length];
-        var commitmentsA = new IntegerModP[options.Length];
-        var commitmentsB = new IntegerModP[options.Length];
-        var commitmentHashes = new byte[options.Length][];
-
-        Parallel.For(0, options.Length, new ParallelOptions { MaxDegreeOfParallelism = maxDegreeOfParallelism }, o =>
-        {
-            var option = options[o];
-            var u = nonceSource?.Invoke(option.ContestIndex, option.ChoiceIndex) ?? ElectionGuardRandom.GetIntegerModQ();
-
-            // u_i and z_i are secrets and full-width elements of Z_q: the constant-time path.
-            var partialDecryption = MontgomeryModP.PowModP(option.A, secretShare);
-            if (tamper is not null)
-            {
-                partialDecryption = tamper(option.ContestIndex, option.ChoiceIndex, partialDecryption);
-            }
-
-            var commitmentA = MontgomeryModP.PowModP(EGParameters.G, u);
-            var commitmentB = MontgomeryModP.PowModP(option.A, u);
-
-            nonces[o] = u;
-            partialDecryptions[o] = partialDecryption;
-            commitmentsA[o] = commitmentA;
-            commitmentsB[o] = commitmentB;
-            commitmentHashes[o] = TallyDecryptionHashes.CommitmentHash(
-                extendedBaseHash, option.ContestIndex, option.ChoiceIndex, _index,
-                option.A, option.B, commitmentA, commitmentB, partialDecryption, sorted);
-        });
-
-        _session = new Session
-        {
-            ExtendedBaseHash = extendedBaseHash,
-            Participants = sorted,
-            Options = options,
-            Nonces = nonces,
-            PartialDecryptions = partialDecryptions,
-            CommitmentsA = commitmentsA,
-            CommitmentsB = commitmentsB,
-            CommitmentHashes = commitmentHashes,
-        };
-
-        return TallyDecryptionMessages.Commitment(_index, options, partialDecryptions, commitmentHashes);
+        return TallyDecryptionMessages.Commitment(_index, options, session.Round1.PartialDecryptions, session.Round1.CommitmentHashes);
     }
 
     /// <summary>
@@ -147,33 +113,9 @@ public class TallyGuardian
     /// </summary>
     public TallyDecryptionCommitmentReveal Reveal(IReadOnlyCollection<PartialTallyDecryption> commitments)
     {
-        var session = _session ?? throw new InvalidOperationException($"Guardian {_index.Index} has no decryption awaiting a reveal: call Commit first.");
-        if (session.Commitments is not null)
-        {
-            throw new InvalidOperationException($"Guardian {_index.Index} has already revealed its commitments for this decryption.");
-        }
-
-        try
-        {
-            var received = TallyDecryptionMessages.ReadCommitments(commitments, session.Participants, session.Options);
-            var own = received[Array.IndexOf(session.Participants, _index)];
-            for (int o = 0; o < session.Options.Length; o++)
-            {
-                if (own.PartialDecryptions[o] != session.PartialDecryptions[o] || !own.CommitmentHashes[o].AsSpan().SequenceEqual(session.CommitmentHashes[o]))
-                {
-                    throw new TallyDecryptionException(null, $"Guardian {_index.Index}'s own round-1 message came back altered for contest {session.Options[o].ContestId}, option {session.Options[o].ChoiceId}.");
-                }
-            }
-
-            session.Commitments = received;
-        }
-        catch (TallyDecryptionException)
-        {
-            _session = null;
-            throw;
-        }
-
-        return TallyDecryptionMessages.Reveal(_index, session.Options, session.CommitmentsA, session.CommitmentsB);
+        var session = Current<TallyOption>("a reveal", "Commit");
+        Accept(session, () => TallyDecryptionMessages.ReadCommitments(commitments, session.Participants, session.Statements));
+        return TallyDecryptionMessages.Reveal(_index, session.Statements, session.Round1.CommitmentsA, session.Round1.CommitmentsB);
     }
 
     /// <summary>
@@ -186,64 +128,255 @@ public class TallyGuardian
     /// </summary>
     public TallyDecryptionResponse Respond(IReadOnlyCollection<TallyDecryptionCommitmentReveal> reveals, int maxDegreeOfParallelism = -1)
     {
-        var session = _session ?? throw new InvalidOperationException($"Guardian {_index.Index} has no decryption awaiting a response: call Commit and Reveal first, and respond only once.");
-        var commitments = session.Commitments ?? throw new InvalidOperationException($"Guardian {_index.Index} has not revealed its commitments for this decryption: call Reveal first.");
+        var session = Current<TallyOption>("a response", "Commit and Reveal");
+        var responses = RespondTo(
+            session,
+            () => TallyDecryptionMessages.ReadReveals(reveals, session.Participants, session.Statements),
+            _shares.VoteEncryptionKeyShare,
+            maxDegreeOfParallelism);
+
+        return TallyDecryptionMessages.Response(_index, session.Statements, responses);
+    }
+
+    /// <summary>
+    /// Round 1 of a contest data decryption (§3.6.6): starts a decryption of contest
+    /// <paramref name="contestId"/>'s contest data field on <paramref name="ballot"/> by
+    /// <paramref name="participants"/> (U, which must include this guardian and be a quorum). First
+    /// checks that C_0 is in Z_p^r (a library hardening the spec does not state; see
+    /// <c>ContestDataStatement.RequireDecryptable</c>) and verifies the field's Schnorr proof C_2:
+    /// a = g^v·C_0^c and c = H_q(H_I; 0x27, ind_c, a, C_0, C_1) (eq. 69); "only if this is the case"
+    /// does the guardian compute m_i = C_0^{ẑ_i} (eq. 96), the commitment pair (g^{u_i}, C_0^{u_i})
+    /// (eq. 98) and d_i (eq. 99). A non-member C_0 or a failing proof throws
+    /// <see cref="TallyDecryptionException"/> naming no guardian, as does nothing else here; a malformed ballot, a
+    /// contest that declares no contest data, or a ballot whose H_I is not H(H_E; 0x20, id_B) throws
+    /// <see cref="ArgumentException"/>. ind_c, b_Λ and H_E come from <paramref name="encryptionRecord"/>.
+    /// </summary>
+    public ContestDataPartialDecryption CommitContestData(
+        EncryptedBallot ballot,
+        string contestId,
+        EncryptionRecord encryptionRecord,
+        IReadOnlyCollection<GuardianIndex> participants)
+    {
+        _session = null;
+
+        var sorted = RequireParticipant(participants);
+        var statement = ContestDataStatement.For(encryptionRecord, ballot, contestId);
+        statement.RequireDecryptable($"guardian {_index.Index}");
+
+        var nonceSource = NonceSourceForTesting;
+        var tamper = PartialDecryptionTamperForTesting;
+        var session = Begin(
+            [statement],
+            sorted,
+            _shares.OtherBallotDataEncryptionKeyShare,
+            nonceSource is null ? null : _ => nonceSource(statement.ContestIndex, 0),
+            tamper is null ? null : (_, m) => tamper(statement.ContestIndex, 0, m),
+            maxDegreeOfParallelism: 1);
+
+        return new ContestDataPartialDecryption
+        {
+            GuardianIndex = _index,
+            BallotId = statement.BallotId,
+            ContestId = statement.ContestId,
+            Mi = session.Round1.PartialDecryptions[0],
+            CommitmentHash = session.Round1.CommitmentHashes[0],
+        };
+    }
+
+    /// <summary>
+    /// Round 2 of a contest data decryption: given every participant's round-1 message, this
+    /// guardian's included unchanged, returns (a_i, b_i), as <see cref="Reveal"/> does for a tally.
+    /// </summary>
+    public ContestDataCommitmentReveal RevealContestData(IReadOnlyCollection<ContestDataPartialDecryption> commitments)
+    {
+        var session = Current<ContestDataStatement>("a contest data reveal", "CommitContestData");
+        var statement = session.Statements[0];
+        Accept(session, () => ReadContestDataCommitments(statement, commitments, session.Participants));
+
+        return new ContestDataCommitmentReveal
+        {
+            GuardianIndex = _index,
+            BallotId = statement.BallotId,
+            ContestId = statement.ContestId,
+            CommitmentA = session.Round1.CommitmentsA[0],
+            CommitmentB = session.Round1.CommitmentsB[0],
+        };
+    }
+
+    /// <summary>
+    /// Round 3 of a contest data decryption: given every participant's round-2 message, checks each
+    /// d_j by eq. (99), computes a, b (eq. 100), β = ∏ m_j^{w_j} (eq. 97) and c (eq. 101) itself, and
+    /// returns v_i = (u_i - c·w_i·ẑ_i) mod q (eq. 102). As for <see cref="Respond"/>, the decryption
+    /// is over whatever happens.
+    /// </summary>
+    public ContestDataDecryptionResponse RespondContestData(IReadOnlyCollection<ContestDataCommitmentReveal> reveals)
+    {
+        var session = Current<ContestDataStatement>("a contest data response", "CommitContestData and RevealContestData");
+        var statement = session.Statements[0];
+        var responses = RespondTo(
+            session,
+            () => ReadContestDataReveals(statement, reveals, session.Participants),
+            _shares.OtherBallotDataEncryptionKeyShare,
+            maxDegreeOfParallelism: 1);
+
+        return new ContestDataDecryptionResponse
+        {
+            GuardianIndex = _index,
+            BallotId = statement.BallotId,
+            ContestId = statement.ContestId,
+            Response = responses[0],
+        };
+    }
+
+    internal static VerifiableDecryption.ReceivedCommitment[] ReadContestDataCommitments(ContestDataStatement statement, IEnumerable<ContestDataPartialDecryption> messages, GuardianIndex[] participants)
+    {
+        const string round = "contest data round-1 (m_i, d_i)";
+        return statement.Read(messages, x => x.GuardianIndex, x => (x.BallotId, x.ContestId), participants, round)
+            .Select(x => x.CommitmentHash is null
+                ? throw new TallyDecryptionException(x.GuardianIndex, $"Guardian {x.GuardianIndex.Index}'s {round} message has no commitment hash.")
+                : new VerifiableDecryption.ReceivedCommitment { PartialDecryptions = [x.Mi], CommitmentHashes = [x.CommitmentHash] })
+            .ToArray();
+    }
+
+    internal static VerifiableDecryption.ReceivedReveal[] ReadContestDataReveals(ContestDataStatement statement, IEnumerable<ContestDataCommitmentReveal> messages, GuardianIndex[] participants)
+    {
+        return statement.Read(messages, x => x.GuardianIndex, x => (x.BallotId, x.ContestId), participants, "contest data round-2 (a_i, b_i)")
+            .Select(x => new VerifiableDecryption.ReceivedReveal { CommitmentsA = [x.CommitmentA], CommitmentsB = [x.CommitmentB] })
+            .ToArray();
+    }
+
+    internal static IntegerModQ[][] ReadContestDataResponses(ContestDataStatement statement, IEnumerable<ContestDataDecryptionResponse> messages, GuardianIndex[] participants)
+    {
+        return statement.Read(messages, x => x.GuardianIndex, x => (x.BallotId, x.ContestId), participants, "contest data round-3 (v_i)")
+            .Select(x => new[] { x.Response })
+            .ToArray();
+    }
+
+    /// <summary>U, in ascending order, required to be a quorum that includes this guardian.</summary>
+    private GuardianIndex[] RequireParticipant(IReadOnlyCollection<GuardianIndex> participants)
+    {
+        var sorted = TallyDecryptionHashes.RequireQuorum(participants);
+        if (!sorted.Contains(_index))
+        {
+            throw new ArgumentException($"Guardian {_index.Index} is not among the participants, so it cannot take part in this decryption.", nameof(participants));
+        }
+
+        return sorted;
+    }
+
+    private Session<T> Begin<T>(
+        T[] statements,
+        GuardianIndex[] participants,
+        IntegerModQ secretShare,
+        Func<int, IntegerModQ?>? nonceSource,
+        Func<int, IntegerModP, IntegerModP>? tamper,
+        int maxDegreeOfParallelism)
+        where T : IDecryptionStatement
+    {
+        var round1 = VerifiableDecryption.Commit(statements, secretShare, _index, participants, nonceSource, tamper,
+            new ParallelOptions { MaxDegreeOfParallelism = maxDegreeOfParallelism });
+        var session = new Session<T>
+        {
+            Participants = participants,
+            Statements = statements,
+            Round1 = round1,
+        };
+        _session = session;
+        return session;
+    }
+
+    /// <summary>The decryption in progress, if it is of the kind <typeparamref name="T"/>.</summary>
+    private Session<T> Current<T>(string step, string before)
+        where T : IDecryptionStatement
+    {
+        return _session as Session<T>
+            ?? throw new InvalidOperationException($"Guardian {_index.Index} has no {(typeof(T) == typeof(TallyOption) ? "tally " : "contest data ")}decryption awaiting {step}: call {before} first, and respond only once.");
+    }
+
+    /// <summary>
+    /// Round 2's check: every participant's round-1 message, read by <paramref name="read"/>, this
+    /// guardian's own among them unchanged. Any failure ends the decryption.
+    /// </summary>
+    private void Accept<T>(Session<T> session, Func<VerifiableDecryption.ReceivedCommitment[]> read)
+        where T : IDecryptionStatement
+    {
+        if (session.Commitments is not null)
+        {
+            throw new InvalidOperationException($"Guardian {_index.Index} has already revealed its commitments for this decryption.");
+        }
+
+        try
+        {
+            var received = read();
+            var own = received[Array.IndexOf(session.Participants, _index)];
+            for (int o = 0; o < session.Statements.Length; o++)
+            {
+                if (own.PartialDecryptions[o] != session.Round1.PartialDecryptions[o] || !own.CommitmentHashes[o].AsSpan().SequenceEqual(session.Round1.CommitmentHashes[o]))
+                {
+                    throw new TallyDecryptionException(null, $"Guardian {_index.Index}'s own round-1 message came back altered for {session.Statements[o].Description}.");
+                }
+            }
+
+            session.Commitments = received;
+        }
+        catch (TallyDecryptionException)
+        {
+            _session = null;
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Round 3: ends the decryption, then checks this guardian's own reveal came back unchanged,
+    /// checks every d_j and combines (<see cref="VerifiableDecryption.CheckAndCombine"/>), and
+    /// responds.
+    /// </summary>
+    private IntegerModQ[] RespondTo<T>(Session<T> session, Func<VerifiableDecryption.ReceivedReveal[]> read, IntegerModQ secretShare, int maxDegreeOfParallelism)
+        where T : IDecryptionStatement
+    {
+        var commitments = session.Commitments ?? throw new InvalidOperationException($"Guardian {_index.Index} has not revealed its commitments for this decryption: call the reveal step first.");
 
         // Whatever happens below, this decryption is finished: u_i is never used twice.
         _session = null;
 
-        var revealed = TallyDecryptionMessages.ReadReveals(reveals, session.Participants, session.Options);
+        var revealed = read();
         int self = Array.IndexOf(session.Participants, _index);
-        for (int o = 0; o < session.Options.Length; o++)
+        for (int o = 0; o < session.Statements.Length; o++)
         {
-            if (revealed[self].CommitmentsA[o] != session.CommitmentsA[o] || revealed[self].CommitmentsB[o] != session.CommitmentsB[o])
+            if (revealed[self].CommitmentsA[o] != session.Round1.CommitmentsA[o] || revealed[self].CommitmentsB[o] != session.Round1.CommitmentsB[o])
             {
-                throw new TallyDecryptionException(null, $"Guardian {_index.Index}'s own round-2 message came back altered for contest {session.Options[o].ContestId}, option {session.Options[o].ChoiceId}.");
+                throw new TallyDecryptionException(null, $"Guardian {_index.Index}'s own round-2 message came back altered for {session.Statements[o].Description}.");
             }
         }
 
         var options = new ParallelOptions { MaxDegreeOfParallelism = maxDegreeOfParallelism };
-        var proof = TallyDecryptionMessages.CheckAndCombine(session.ExtendedBaseHash, session.Participants, session.Options, commitments, revealed, options);
-
-        var lagrangeCoefficient = proof.LagrangeCoefficients[self];
-        var secretShare = _shares.VoteEncryptionKeyShare;
-        var responses = new IntegerModQ[session.Options.Length];
-        for (int o = 0; o < session.Options.Length; o++)
-        {
-            var challenge = proof.Challenges[o] * lagrangeCoefficient;
-            responses[o] = session.Nonces[o] - challenge * secretShare;
-            session.Nonces[o] = default;
-        }
-
-        return TallyDecryptionMessages.Response(_index, session.Options, responses);
+        var proof = VerifiableDecryption.CheckAndCombine(session.Participants, session.Statements, commitments, revealed, options);
+        return VerifiableDecryption.Respond(proof, self, session.Round1.Nonces, secretShare);
     }
 
-    private sealed class Session
+    private sealed class Session<T>
+        where T : IDecryptionStatement
     {
-        public required ExtendedBaseHash ExtendedBaseHash { get; init; }
         public required GuardianIndex[] Participants { get; init; }
-        public required TallyOption[] Options { get; init; }
-        public required IntegerModQ[] Nonces { get; init; }
-        public required IntegerModP[] PartialDecryptions { get; init; }
-        public required IntegerModP[] CommitmentsA { get; init; }
-        public required IntegerModP[] CommitmentsB { get; init; }
-        public required byte[][] CommitmentHashes { get; init; }
+        public required T[] Statements { get; init; }
+        public required VerifiableDecryption.GuardianCommitment Round1 { get; init; }
 
-        /// <summary>Every participant's round-1 message, in <see cref="Participants"/> order; set by Reveal.</summary>
-        public TallyDecryptionMessages.ReceivedCommitment[]? Commitments { get; set; }
+        /// <summary>Every participant's round-1 message, in <see cref="Participants"/> order; set by the reveal step.</summary>
+        public VerifiableDecryption.ReceivedCommitment[]? Commitments { get; set; }
     }
 }
 
 /// <summary>
-/// The administrator's side of tally decryption (§3.6.4, §3.6.5): mediating the guardians'
-/// messages, combining them into M, T and the proof (c, v), and recovering each count t.
+/// The administrator's side of verifiable decryption (§3.6.4-§3.6.6): mediating the guardians'
+/// messages, combining them into M, T and the proof (c, v) and recovering each count t for a tally,
+/// or into β, the proof (c, v) and the data D for a contest data field.
 /// </summary>
 public class TallyAdmin
 {
     /// <summary>
-    /// Test seam: when false, <see cref="Combine"/> publishes without first checking the combined
-    /// proof, as a careless administrator would, so tests can show that Verification 10 catches
-    /// what the check would have. True outside tests.
+    /// Test seam: when false, <see cref="Combine"/> and <see cref="CombineContestData"/> publish
+    /// without first checking the combined proof, as a careless administrator would, so tests can
+    /// show that Verifications 10 and 12 catch what the check would have. True outside tests.
     /// </summary>
     internal bool VerifyBeforePublishing { get; init; } = true;
 
@@ -293,7 +426,7 @@ public class TallyAdmin
     {
         // Distinct senders: a guardian that sent two round-1 messages is named by ReadCommitments.
         var participants = TallyDecryptionHashes.RequireQuorum(commitments.Select(x => x.GuardianIndex).Distinct());
-        var options = TallyOption.ForTally(encryptionRecord.Manifest, encryptedTally);
+        var options = TallyOption.ForTally(encryptionRecord, encryptedTally);
         var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = maxDegreeOfParallelism };
 
         // The rounds are checked in protocol order: a guardian whose d_j does not hold is named even
@@ -302,29 +435,15 @@ public class TallyAdmin
         var revealed = TallyDecryptionMessages.ReadReveals(reveals, participants, options);
 
         // A zero M_j has no inverse and makes M zero; only a corrupt share can be zero.
-        for (int j = 0; j < participants.Length; j++)
+        if (VerifiableDecryption.FindZeroPartialDecryption(received) is { } zero)
         {
-            int zero = Array.FindIndex(received[j].PartialDecryptions, m => m == 0);
-            if (zero >= 0)
-            {
-                throw new TallyDecryptionException(participants[j], $"Tally did not decrypt successfully: guardian {participants[j].Index}'s partial decryption for contest {options[zero].ContestId}, option {options[zero].ChoiceId} is 0.");
-            }
+            var guardian = participants[zero.Participant];
+            throw new TallyDecryptionException(guardian, $"Tally did not decrypt successfully: guardian {guardian.Index}'s partial decryption for contest {options[zero.Statement].ContestId}, option {options[zero.Statement].ChoiceId} is 0.");
         }
 
-        var proof = TallyDecryptionMessages.CheckAndCombine(encryptionRecord.ExtendedBaseHash, participants, options, received, revealed, parallelOptions);
+        var proof = VerifiableDecryption.CheckAndCombine(participants, options, received, revealed, parallelOptions);
         var responded = TallyDecryptionMessages.ReadResponses(responses, participants, options);
-
-        var responseSums = new IntegerModQ[options.Length];
-        for (int o = 0; o < options.Length; o++)
-        {
-            IntegerModQ v = 0;
-            for (int j = 0; j < participants.Length; j++)
-            {
-                v += responded[j][o];
-            }
-
-            responseSums[o] = v;
-        }
+        var responseSums = VerifiableDecryption.SumResponses(responded, options.Length);
 
         // T = B / M. The combined partial decryptions are published, so the variable-time batch
         // inversion is safe here.
@@ -341,13 +460,14 @@ public class TallyAdmin
             var failing = new bool[options.Length];
             Parallel.For(0, options.Length, parallelOptions, o =>
             {
-                failing[o] = !ProofHolds(options[o].A, proof.CombinedDecryptions[o], voteEncryptionKey,
+                failing[o] = !VerifiableDecryption.ProofHolds(options[o].A, proof.CombinedDecryptions[o], voteEncryptionKey,
                     proof.CommitmentA[o], proof.CommitmentB[o], proof.Challenges[o], responseSums[o]);
             });
 
             if (failing.Any(x => x))
             {
-                var culprit = IdentifyInvalidShare(encryptionRecord, participants, options, failing, proof, received, revealed, responded);
+                var culprit = VerifiableDecryption.IdentifyInvalidShare(participants, options, failing, proof, received, revealed, responded,
+                    j => VerifiableDecryption.PublicKeyShare(encryptionRecord.Guardians.Select(x => x.VoteEncryptionCommitments), j));
                 var first = options[Array.IndexOf(failing, true)];
                 throw new TallyDecryptionException(culprit,
                     culprit is null
@@ -417,67 +537,91 @@ public class TallyAdmin
         return decryptedTally;
     }
 
-    /// <summary>g^v·K^c = a and A^v·M^c = b: Verification 10.2/10.3 against the commitments the guardians revealed.</summary>
-    private static bool ProofHolds(IntegerModP a, IntegerModP combinedDecryption, IntegerModP voteEncryptionKey, IntegerModP commitmentA, IntegerModP commitmentB, IntegerModQ challenge, IntegerModQ response)
+    /// <summary>
+    /// Drives <paramref name="guardians"/> (U, at least k of them) through the three rounds of a
+    /// contest data decryption (§3.6.6) of contest <paramref name="contestId"/> on
+    /// <paramref name="ballot"/>, and combines the result with <see cref="CombineContestData"/>.
+    /// </summary>
+    public DecryptedContestData DecryptContestData(IReadOnlyList<TallyGuardian> guardians, EncryptedBallot ballot, string contestId, EncryptionRecord encryptionRecord)
     {
-        var expectedA = MontgomeryModP.PowModP(EGParameters.G, response) * MontgomeryModP.PowModP(voteEncryptionKey, challenge);
-        if (expectedA != commitmentA)
-        {
-            return false;
-        }
+        var participants = guardians.Select(x => x.Index).ToList();
+        var commitments = guardians.Select(x => x.CommitContestData(ballot, contestId, encryptionRecord, participants)).ToList();
+        var reveals = guardians.Select(x => x.RevealContestData(commitments)).ToList();
+        var responses = guardians.Select(x => x.RespondContestData(reveals)).ToList();
 
-        var expectedB = MontgomeryModP.PowModP(a, response) * MontgomeryModP.PowModP(combinedDecryption, challenge);
-        return expectedB == commitmentB;
+        return CombineContestData(ballot, contestId, encryptionRecord, commitments, reveals, responses);
     }
 
     /// <summary>
-    /// Note 3.7: for each participant j and each failing option, recomputes
-    /// a'_j = (∏_l ∏_m K_{l,m}^{j^m})^{c_j}·g^{v_j} (eq. 94) and b'_j = A^{v_j}·M_j^{c_j} (eq. 95), with
-    /// c_j = c·w_j, and returns the first guardian for which either differs from what it revealed.
-    /// The product of commitments is g^{z_j}, guardian j's public key share. Runs only once the
-    /// combined proof has failed.
+    /// Combines the three rounds' messages of a contest data decryption (§3.6.6) into the published
+    /// β, proof (c, v) and data D, in the order <see cref="Combine"/> follows:
+    /// <list type="number">
+    /// <item>C_0 must be in Z_p^r and the field's Schnorr proof C_2 (eq. 69) must hold, as the
+    /// guardians required; otherwise the ballot is at fault and no guardian is named.</item>
+    /// <item>The round-1 senders must be a quorum, each with exactly one message per round, all for
+    /// this ballot contest; no m_j may be 0; each d_j is checked (eq. 99).</item>
+    /// <item>β = ∏ m_j^{w_j} (eq. 97), a and b (eq. 100), c (eq. 101) and v = Σ v_j (eq. 103).</item>
+    /// <item>Before anything is published, the proof is checked as Verification 12 will check it:
+    /// g^v·K-hat^c = a and C_0^v·β^c = b; if it fails, Note 3.7's per-guardian checks, with the
+    /// guardians' K-hat commitments, find whose share is wrong.</item>
+    /// <item>h = H(H_I; 0x26, ind_c, C_0, β), the keys k_1..k_{b_Λ} (eq. 104) and D = C_1 ⊕ k
+    /// (eqs. 105, 106).</item>
+    /// </list>
+    /// Any failure throws <see cref="TallyDecryptionException"/>, naming the guardian at fault when
+    /// it can be identified.
     /// </summary>
-    private static GuardianIndex? IdentifyInvalidShare(
+    public DecryptedContestData CombineContestData(
+        EncryptedBallot ballot,
+        string contestId,
         EncryptionRecord encryptionRecord,
-        GuardianIndex[] participants,
-        TallyOption[] options,
-        bool[] failing,
-        TallyDecryptionMessages.CombinedProof proof,
-        TallyDecryptionMessages.ReceivedCommitment[] received,
-        TallyDecryptionMessages.ReceivedReveal[] revealed,
-        IntegerModQ[][] responded)
+        IReadOnlyCollection<ContestDataPartialDecryption> commitments,
+        IReadOnlyCollection<ContestDataCommitmentReveal> reveals,
+        IReadOnlyCollection<ContestDataDecryptionResponse> responses)
     {
-        for (int j = 0; j < participants.Length; j++)
+        var statement = ContestDataStatement.For(encryptionRecord, ballot, contestId);
+        statement.RequireDecryptable("the administrator");
+
+        var participants = TallyDecryptionHashes.RequireQuorum(commitments.Select(x => x.GuardianIndex).Distinct());
+        ContestDataStatement[] statements = [statement];
+        var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = 1 };
+
+        var received = TallyGuardian.ReadContestDataCommitments(statement, commitments, participants);
+        var revealed = TallyGuardian.ReadContestDataReveals(statement, reveals, participants);
+        if (VerifiableDecryption.FindZeroPartialDecryption(received) is { } zero)
         {
-            // j^m is a small public exponent: BigInteger.ModPow scales with it and wins here.
-            IntegerModP publicKeyShare = 1;
-            foreach (var guardian in encryptionRecord.Guardians)
-            {
-                for (int m = 0; m < guardian.VoteEncryptionCommitments.Count; m++)
-                {
-                    publicKeyShare *= IntegerModP.PowModP(guardian.VoteEncryptionCommitments[m], BigInteger.Pow(participants[j].Index, m));
-                }
-            }
+            var guardian = participants[zero.Participant];
+            throw new TallyDecryptionException(guardian, $"Contest data did not decrypt successfully: guardian {guardian.Index}'s partial decryption m_i of {statement.Description} is 0.");
+        }
 
-            for (int o = 0; o < options.Length; o++)
-            {
-                if (!failing[o])
-                {
-                    continue;
-                }
+        var proof = VerifiableDecryption.CheckAndCombine(participants, statements, received, revealed, parallelOptions);
+        var responded = TallyGuardian.ReadContestDataResponses(statement, responses, participants);
+        var response = VerifiableDecryption.SumResponses(responded, 1)[0];
+        var beta = proof.CombinedDecryptions[0];
 
-                var challenge = proof.Challenges[o] * proof.LagrangeCoefficients[j];
-                var response = responded[j][o];
-                var expectedA = MontgomeryModP.PowModP(publicKeyShare, challenge) * MontgomeryModP.PowModP(EGParameters.G, response);
-                var expectedB = MontgomeryModP.PowModP(options[o].A, response) * MontgomeryModP.PowModP(received[j].PartialDecryptions[o], challenge);
-                if (expectedA != revealed[j].CommitmentsA[o] || expectedB != revealed[j].CommitmentsB[o])
-                {
-                    return participants[j];
-                }
+        if (VerifyBeforePublishing)
+        {
+            var ballotDataKey = encryptionRecord.ElectionPublicKeys.OtherBallotDataEncryptionKey;
+            if (!VerifiableDecryption.ProofHolds(statement.Base, beta, ballotDataKey, proof.CommitmentA[0], proof.CommitmentB[0], proof.Challenges[0], response))
+            {
+                var culprit = VerifiableDecryption.IdentifyInvalidShare(participants, statements, [true], proof, received, revealed, responded,
+                    j => VerifiableDecryption.PublicKeyShare(encryptionRecord.Guardians.Select(x => x.OtherBallotDataEncryptionCommitments), j));
+                throw new TallyDecryptionException(culprit,
+                    culprit is null
+                        ? $"Contest data did not decrypt successfully: the combined proof of correct decryption of {statement.Description} does not verify, and Note 3.7's per-guardian checks find no single guardian at fault."
+                        : $"Contest data did not decrypt successfully: guardian {culprit.Index}'s share of the proof of correct decryption does not verify (Note 3.7, eqs. 94-95 with C_0, m_i and K-hat); the combined proof of {statement.Description} fails.");
             }
         }
 
-        return null;
+        return new DecryptedContestData
+        {
+            BallotId = statement.BallotId,
+            ContestId = statement.ContestId,
+            ContestIndex = statement.ContestIndex,
+            Beta = beta,
+            Challenge = proof.Challenges[0],
+            Response = response,
+            Data = ContestDataEncryption.Decrypt(statement.SelectionEncryptionIdentifierHash, statement.ContestIndex, statement.Blocks, statement.Data, beta),
+        };
     }
 
     /// <summary>
@@ -521,17 +665,33 @@ public class TallyAdmin
 
 /// <summary>
 /// One option of one contest, in manifest order, with its manifest indices and a snapshot of its
-/// encrypted aggregate (A, B).
+/// encrypted aggregate (A, B): the statement of one tally decryption (§3.6.5), whose hashes are
+/// eqs. (88) and (90) keyed with H_E.
 /// </summary>
-internal sealed record TallyOption(string ContestId, string ChoiceId, int ContestIndex, int ChoiceIndex, IntegerModP A, IntegerModP B, long MaximumCount)
+internal sealed record TallyOption(string ContestId, string ChoiceId, int ContestIndex, int ChoiceIndex, IntegerModP A, IntegerModP B, long MaximumCount, ExtendedBaseHash ExtendedBaseHash)
+    : IDecryptionStatement
 {
+    public IntegerModP Base => A;
+
+    public string Description => $"contest {ContestId}, option {ChoiceId}";
+
+    public string CommitmentEquation => "eq. 88";
+
+    public byte[] CommitmentHash(GuardianIndex guardian, IntegerModP commitmentA, IntegerModP commitmentB, IntegerModP partialDecryption, IReadOnlyCollection<GuardianIndex> participants) =>
+        TallyDecryptionHashes.CommitmentHash(ExtendedBaseHash, ContestIndex, ChoiceIndex, guardian, A, B, commitmentA, commitmentB, partialDecryption, participants);
+
+    public IntegerModQ Challenge(IntegerModP commitmentA, IntegerModP commitmentB, IntegerModP combinedDecryption) =>
+        TallyDecryptionHashes.Challenge(ExtendedBaseHash, ContestIndex, ChoiceIndex, A, B, commitmentA, commitmentB, combinedDecryption);
+
     /// <summary>
-    /// Every option of every contest of <paramref name="manifest"/>, in manifest order, with its
-    /// aggregate in <paramref name="encryptedTally"/>. The tally must hold exactly the manifest's
-    /// contests and options: an <see cref="ArgumentException"/> otherwise.
+    /// Every option of every contest of <paramref name="encryptionRecord"/>'s manifest, in manifest
+    /// order, with its aggregate in <paramref name="encryptedTally"/> and the record's H_E. The tally
+    /// must hold exactly the manifest's contests and options: an <see cref="ArgumentException"/>
+    /// otherwise.
     /// </summary>
-    public static TallyOption[] ForTally(Manifest manifest, EncryptedTally encryptedTally)
+    public static TallyOption[] ForTally(EncryptionRecord encryptionRecord, EncryptedTally encryptedTally)
     {
+        var manifest = encryptionRecord.Manifest;
         var options = new List<TallyOption>();
         foreach (var contest in manifest.Contests)
         {
@@ -550,7 +710,7 @@ internal sealed record TallyOption(string ContestId, string ChoiceId, int Contes
                     throw new ArgumentException($"The tally has no aggregate for option {choice.Id} of contest {contest.Id}.", nameof(encryptedTally));
                 }
 
-                options.Add(new TallyOption(contest.Id, choice.Id, contest.Index, choice.Index, aggregate.A, aggregate.B, aggregate.MaximumCount));
+                options.Add(new TallyOption(contest.Id, choice.Id, contest.Index, choice.Index, aggregate.A, aggregate.B, aggregate.MaximumCount, encryptionRecord.ExtendedBaseHash));
             }
         }
 

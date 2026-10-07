@@ -57,6 +57,8 @@ public class BallotStructureTests
                 new Contest
                 {
                     Id = "contest-b", Name = "B", Index = 2, SelectionLimit = 1, OptionSelectionLimit = 1,
+                    // §3.3.10: B carries a contest data field on every ballot; A carries none.
+                    ContestDataBlocks = 1,
                     Choices =
                     [
                         new Choice { Id = "b-1", Name = "B 1", Index = 1 },
@@ -78,7 +80,6 @@ public class BallotStructureTests
                 new BallotStyle { Id = StyleId, Name = "A and B", ContestIds = ["contest-a", "contest-b"] },
                 new BallotStyle { Id = "style-abc", Name = "All", ContestIds = ["contest-a", "contest-b", "contest-c"] },
             ],
-            OptionalContestDataMaxLength = 0,
             ChainingMode = ChainingMode.None,
         };
         var manifestFile = new ManifestFile { Bytes = JsonSerializer.SerializeToUtf8Bytes(manifest) };
@@ -160,6 +161,21 @@ public class BallotStructureTests
         // malformed (the consumers after the structure check walk it unguarded); so is a null entry.
         ["null supplemental field list"] = b => With(b, [A(b) with { SupplementalFields = null! }, B(b)]),
         ["null supplemental field entry"] = b => With(b, [A(b) with { SupplementalFields = [null!] }, B(b)]),
+        // S6 (G11, user decision Q7): a contest that declares b_Λ carries one field of exactly
+        // 32·b_Λ bytes on every ballot, and a contest that declares none carries none.
+        ["contest data on a contest that declares none"] = b => With(b, [A(b) with { ContestData = B(b).ContestData }, B(b)]),
+        ["missing contest data"] = b => With(b, [A(b), B(b) with { ContestData = null }]),
+        ["contest data C1 one block too long"] = b => With(b, [A(b), B(b) with { ContestData = WithC1(B(b).ContestData!, [.. B(b).ContestData!.C1, .. new byte[32]]) }]),
+        ["contest data C1 one byte short"] = b => With(b, [A(b), B(b) with { ContestData = WithC1(B(b).ContestData!, B(b).ContestData!.C1[1..]) }]),
+        ["contest data C1 null"] = b => With(b, [A(b), B(b) with { ContestData = WithC1(B(b).ContestData!, null!) }]),
+    };
+
+    private static EncryptedContestData WithC1(EncryptedContestData data, byte[] c1) => new()
+    {
+        C0 = data.C0,
+        C1 = c1,
+        Challenge = data.Challenge,
+        Response = data.Response,
     };
 
     public static TheoryData<string, int> ShapesByVerification()

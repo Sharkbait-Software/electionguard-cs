@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """ElectionGuard v2.1.0 hash-chain known-answer-test (KAT) oracle.
 
-Written from the ElectionGuard Design Specification v2.1.0 ONLY (sections 3.1-3.4, 3.6.2-3.6.5,
-4.1.4 and 5, and Verification 10), without reference to the C# implementation in this repository,
+Written from the ElectionGuard Design Specification v2.1.0 ONLY (sections 3.1-3.4, 3.6.2-3.6.6,
+4.1.4 and 5, and Verifications 10, 12 and 13), plus the user's recorded decisions Q5-Q7 and Q10 on spec
+contradictions (docs/spec-compliance/2026-10-04-fix-progress.md), without reference to the C# implementation in this repository,
 so that its outputs can be used as independent expected values. Standard library only.
 
 Run from the repository root:
@@ -371,6 +372,122 @@ def lagrange_coefficient(i, U):
 
 
 # ---------------------------------------------------------------------------------------------
+# §3.3.10 contest data (eqs. 63-70) and §3.6.6 its verifiable decryption (eqs. 96-106).
+# ---------------------------------------------------------------------------------------------
+
+# Eq. (66) Label and Context strings, §5.1.4 fixed-length form b(s, len(s)): raw UTF-8, no length prefix.
+# The p.40 page image has underscores ("data_enc_keys", "contest_data"); the PDF text extraction shows spaces.
+KDF_LABEL = "data_enc_keys".encode("utf-8")
+KDF_CONTEXT_STR = "contest_data".encode("utf-8")
+assert len(KDF_LABEL) == 13 and len(KDF_CONTEXT_STR) == 12
+
+
+def b_c2(c, v):
+    """b(C2, 64) for C2 = (c, v) (§5.5 tables, pp.76-77): b(c, 32) || b(v, 32). The spec writes C2 = (c, v)
+    (eq. 69 text, p.41) and b(C2, 64) but does not spell out the split; this oracle takes c then v."""
+    return b_q(c) + b_q(v)
+
+
+def contest_data_nonce(h_i, ind_c, xi_b):
+    """Eq. (64): xi = H_q(H_I; 0x25, ind_c(Lambda), xi_B), xi_B a 256-bit value b(xi_B, 32) (not reduced mod q).
+    §5.5.3 table (p.76): B1 = 0x25 || b(ind_c, 4) || b(xi_B, 32), len(B1) = 37."""
+    b1 = b"\x25" + b_small(ind_c) + b(xi_b, 32)
+    assert len(b1) == 37
+    return b1, H(h_i, b1)
+
+
+def contest_data_secret_key(h_i, ind_c, alpha, beta):
+    """Eq. (65): h = H(H_I; 0x26, ind_c(Lambda), alpha, beta); also (12.3) with (C0, beta) on decryption.
+    §5.5.3 table (p.76): B1 = 0x26 || b(ind_c, 4) || b(alpha, 512) || b(beta, 512), len(B1) = 1029."""
+    b1 = b"\x26" + b_small(ind_c) + b_p(alpha) + b_p(beta)
+    assert len(b1) == 1029
+    return b1, H(h_i, b1)
+
+
+def contest_data_kdf_message(i, ind_c, b_lambda):
+    """Eq. (66) HMAC message: b(i, 4) || Label || 0x00 || Context || b(b_Lambda * 256, 4),
+    Label = b("data_enc_keys", 13), Context = b("contest_data", 12) || b(ind_c, 4); 1 <= i <= b_Lambda (Q6)."""
+    assert 1 <= i <= b_lambda and 1 <= b_lambda < 2**24
+    msg = b(i, 4) + KDF_LABEL + b"\x00" + KDF_CONTEXT_STR + b_small(ind_c) + b(b_lambda * 256, 4)
+    assert len(msg) == 38
+    return msg
+
+
+def contest_data_kdf_keys(h, ind_c, b_lambda):
+    """Eq. (66) / (104): k_i = HMAC(h, msg_i) for 1 <= i <= b_Lambda. Returns [(msg_i, k_i), ...]."""
+    out = []
+    for i in range(1, b_lambda + 1):
+        msg = contest_data_kdf_message(i, ind_c, b_lambda)
+        out.append((msg, H(h, msg)))
+    return out
+
+
+def xor_blocks(data, keys):
+    """Eqs. (68) / (106): block-wise XOR of 32-byte blocks with k_1 .. k_b."""
+    assert len(data) == 32 * len(keys)
+    return b"".join(bytes(x ^ y for x, y in zip(data[32 * m:32 * m + 32], k)) for m, k in enumerate(keys))
+
+
+def encode_contest_data_string(s, b_lambda):
+    """NOT SPEC: the library helper fixed by user decision Q7. D_Lambda = b(len_utf8(s), 4) || UTF-8(s),
+    zero-padded to exactly 32 * b_Lambda bytes; data that does not fit is rejected (ValueError)."""
+    enc = s.encode("utf-8")
+    d = b_small(len(enc)) + enc
+    if len(d) > 32 * b_lambda:
+        raise ValueError(f"contest data of {len(enc)} UTF-8 bytes does not fit in 32*{b_lambda} bytes")
+    return d + b"\x00" * (32 * b_lambda - len(d))
+
+
+def contest_data_challenge(h_i, ind_c, a, c0, c1):
+    """Eq. (69): c = H_q(H_I; 0x27, ind_c(Lambda), a, C0, C1).
+    §5.5.3 table (p.76): B1 = 0x27 || b(ind_c, 4) || b(a, 512) || b(C0, 512) || C1, len(B1) = 1029 + 32*b_Lambda."""
+    assert len(c1) % 32 == 0
+    parts = [(b"\x27", "0x27"), (b_small(ind_c), "ind_c"), (b_p(a), "a"), (b_p(c0), "C0"), (c1, "C1")]
+    b1, layout = _layout(parts)
+    assert len(b1) == 1029 + len(c1)
+    return b1, H(h_i, b1), layout
+
+
+def contest_hash_with_data(h_i, l, ciphertexts, c0, c1, c2):
+    """Eq. (70) with contest data: chi_l = H(H_I; 0x28, l, alpha_1, beta_1, ..., alpha_m, beta_m, C0, C1, C2).
+    §5.5.3 table (p.76): B1 = 0x28 || b(l, 4) || b(alpha_1, 512) || ... || b(beta_m, 512) || b(C0, 512) || C1
+    || b(C2, 64), len(B1) = 69 + (2m + 1)*512 + 32*b_Lambda."""
+    parts = [(b"\x28", "0x28"), (b_small(l), "l")]
+    for j, (alpha, beta) in enumerate(ciphertexts, start=1):
+        parts += [(b_p(alpha), f"alpha_{j}"), (b_p(beta), f"beta_{j}")]
+    parts += [(b_p(c0), "C0"), (c1, "C1"), (b_c2(*c2), "C2=(c,v)")]
+    b1, layout = _layout(parts)
+    m, b_lambda = len(ciphertexts), len(c1) // 32
+    assert len(b1) == 69 + (2 * m + 1) * 512 + 32 * b_lambda
+    return b1, H(h_i, b1), layout
+
+
+def contest_data_decryption_commitment_hash(h_i, ind_c, i, c0, c1, c2, a_i, b_i, m_i, U):
+    """Eq. (99): d_i = H(H_I; 0x32, ind_c(Lambda), i, C0, C1, C2, a_i, b_i, m_i, U), §3.6.6.
+    B0 = H_I per the body and user decision Q5 (the §5.5.4 table's "B0 = H_E" is treated as an erratum).
+    §5.5.4 table (p.77): B1 = 0x32 || b(ind_c, 4) || b(i, 4) || b(C0, 512) || C1 || b(C2, 64) || b(a_i, 512)
+    || b(b_i, 512) || b(m_i, 512) || b(#U, 4) || b(j_1, 4) || ... || b(j_#U, 4), len(B1) = 2125 + 32*b_Lambda + 4*#U."""
+    assert i in U
+    parts = [(b"\x32", "0x32"), (b_small(ind_c), "ind_c"), (b_small(i), "i"), (b_p(c0), "C0"), (c1, "C1"),
+             (b_c2(*c2), "C2=(c,v)"), (b_p(a_i), "a_i"), (b_p(b_i), "b_i"), (b_p(m_i), "m_i")]
+    parts += b_index_set(U)
+    b1, layout = _layout(parts)
+    assert len(b1) == 2125 + len(c1) + 4 * len(U)
+    return b1, H(h_i, b1), layout
+
+
+def contest_data_decryption_challenge(h_i, ind_c, c0, c1, c2, a, b_, beta):
+    """Eq. (101) / Verification 12.B: c = H_q(H_I; 0x33, ind_c(Lambda), C0, C1, C2, a, b, beta), §3.6.6.
+    §5.5.4 table (p.77): B0 = H_I, B1 = 0x33 || b(ind_c, 4) || b(C0, 512) || C1 || b(C2, 64) || b(a, 512)
+    || b(b, 512) || b(beta, 512), len(B1) = 2117 + 32*b_Lambda. No U."""
+    parts = [(b"\x33", "0x33"), (b_small(ind_c), "ind_c"), (b_p(c0), "C0"), (c1, "C1"), (b_c2(*c2), "C2=(c,v)"),
+             (b_p(a), "a"), (b_p(b_), "b"), (b_p(beta), "beta")]
+    b1, layout = _layout(parts)
+    assert len(b1) == 2117 + len(c1)
+    return b1, H(h_i, b1), layout
+
+
+# ---------------------------------------------------------------------------------------------
 # Vector generation.
 # ---------------------------------------------------------------------------------------------
 
@@ -633,6 +750,7 @@ def build():
     ]
     h_gs = {}
     guardian_coeffs = {}
+    guardian_coeffs_hat = {}
     for (n, k), mname, a0, ahat0 in hg_cases:
         if (n, k, mname) in hbs:
             h_b = hbs[(n, k, mname)]
@@ -661,6 +779,7 @@ def build():
         b1, h_g, layout = guardian_record_hash(h_b, K_j, K_hat_j, Ks, K_hats, kappas)
         h_gs[(n, k)] = h_g
         guardian_coeffs[(n, k)] = a
+        guardian_coeffs_hat[(n, k)] = ahat
         v = vec("guardian_record_hash",
                 "(27) H_G = H(H_B; 0x13, K, K-hat, K_1,0, ..., K_1,k-1, K_2,0, ..., K_n,k-1, "
                 "K-hat_1,0, ..., K-hat_n,k-1, kappa_1, ..., kappa_n)",
@@ -820,6 +939,278 @@ def build():
         vectors.append(v)
         tally_summary.append({"ind_c": ind_c, "ind_o": ind_o, "U": U, "t": t, "c_hex": hq(c), "v_hex": hq(v_resp)})
 
+    # --- §3.3.10 contest data, eqs. (64)-(69), and eq. (70) with contest data ------------------
+    # Appended after every earlier family so existing vectors keep their positions.
+    # Everything sits on main_chain's ballot: H_I (id_B = 0x0102..20), xi_B = A0A1..BF, K_hat = g^7.
+    cd_derivation = "main_chain ballot: H_I = main_chain.H_I_hex, xi_B = main_chain.xi_B_hex, K_hat = g^7"
+    # (a) eq. (64) contest data nonces.
+    cd_nonce_cases = [(1, xi_b_main), (2, xi_b_main), (3, xi_b_main), (4, xi_b_main), (5, xi_b_main),
+                      (1, Q + 7), (2147483647, 2**256 - 1)]
+    cd_xi = {}
+    for ind_c, xi_b in cd_nonce_cases:
+        b1, raw = contest_data_nonce(H_I, ind_c, xi_b)
+        if xi_b == xi_b_main:
+            cd_xi[ind_c] = int.from_bytes(raw, "big") % Q
+        vectors.append(vec("contest_data_nonce", "(64) xi = H_q(H_I; 0x25, ind_c(Lambda), xi_B)",
+                           f"contest data xi ind_c={ind_c} xi_B={hq(xi_b)[:8]}..", "H_I", H_I, b1, raw,
+                           {"H_I_hex": hx(H_I), "ind_c": ind_c, "xi_B_hex": hq(xi_b)}, 37, hq_out=True,
+                           notes="§5.5.3 table (p.76): B1 = 0x25 || b(ind_c, 4) || b(xi_B, 32), len(B1) = 37. "
+                                 "xi_B is encoded as a 256-bit value, never reduced mod q."))
+
+    # Exactly-full non-ASCII string for b_Lambda = 3: 32*3 - 4 = 92 UTF-8 bytes.
+    full3 = "write-in: Ægir Þórsson – №7 🗳 "
+    full3 += "é" * ((92 - len(full3.encode("utf-8"))) // 2)
+    full3 += "x" * (92 - len(full3.encode("utf-8")))
+    assert len(full3.encode("utf-8")) == 92
+    full1 = "Write-in: Grace Hopper (USN)"
+    assert len(full1.encode("utf-8")) == 28
+    # (label, ind_c, b_Lambda, contest data string, Schnorr nonce u of eq. 69).
+    cd_cases = [
+        ("empty string", 1, 1, "", 5001),
+        ("ASCII", 2, 1, "Write-in: Ada Lovelace", 5002),
+        ("non-ASCII multi-block", 3, 3, "Wahl Zürich – Gerät №7 🗳 / write-in: Ægir Þórsson", Q - 1),
+        ("exactly full b=1 (28 UTF-8 bytes)", 4, 1, full1, 5004),
+        ("exactly full b=3 non-ASCII (92 UTF-8 bytes)", 5, 3, full3, 5005),
+    ]
+    cd = {}  # ind_c -> dict of every value of the encryption
+    for label, ind_c, b_lambda, s, u_s in cd_cases:
+        D = encode_contest_data_string(s, b_lambda)
+        xi = cd_xi[ind_c]
+        alpha, beta = pow(G, xi, P), pow(K_hat, xi, P)
+        b1_h, h = contest_data_secret_key(H_I, ind_c, alpha, beta)
+        kdf = contest_data_kdf_keys(h, ind_c, b_lambda)
+        keys = [k for _, k in kdf]
+        C0, C1 = alpha, xor_blocks(D, keys)                              # eqs. (67), (68)
+        a_s = pow(G, u_s, P)
+        b1_c, raw_c, layout_c = contest_data_challenge(H_I, ind_c, a_s, C0, C1)
+        c_s = int.from_bytes(raw_c, "big") % Q
+        v_s = (u_s - c_s * xi) % Q
+        # Schnorr check a guardian runs before decrypting (p.49-50) and the verifier's recomputation.
+        assert pow(G, v_s, P) * pow(C0, c_s, P) % P == a_s
+        assert contest_data_challenge(H_I, ind_c, pow(G, v_s, P) * pow(C0, c_s, P) % P, C0, C1)[1] == raw_c
+        # Verification 13.4-13.A with the nonce: recompute (alpha, beta), h, k_l and confirm C1.
+        assert xor_blocks(C1, keys) == D
+        enc = s.encode("utf-8")
+        assert int.from_bytes(D[:4], "big") == len(enc) and D[4:4 + len(enc)].decode("utf-8") == s
+        cd[ind_c] = {"label": label, "b": b_lambda, "s": s, "D": D, "xi": xi, "alpha": alpha, "beta": beta,
+                     "h": h, "b1_h": b1_h, "kdf": kdf, "C0": C0, "C1": C1, "u": u_s, "a": a_s, "c": c_s,
+                     "v": v_s, "b1_c": b1_c, "raw_c": raw_c, "layout_c": layout_c}
+
+    # (b) eq. (65) secret keys.
+    for ind_c, e in cd.items():
+        vectors.append(vec("contest_data_secret_key", "(65) h = H(H_I; 0x26, ind_c(Lambda), alpha, beta)",
+                           f"contest data h ind_c={ind_c}", "H_I", H_I, e["b1_h"], e["h"],
+                           {"H_I_hex": hx(H_I), "ind_c": ind_c, "xi_hex": hq(e["xi"]),
+                            "alpha_hex": hp(e["alpha"]), "beta_hex": hp(e["beta"]),
+                            "derivation": f"{cd_derivation}; xi = eq. (64) with this ind_c; alpha = g^xi, "
+                                          f"beta = K_hat^xi mod p"},
+                           1029, notes="§5.5.3 table (p.76): B1 = 0x26 || b(ind_c, 4) || b(alpha, 512) || "
+                                       "b(beta, 512), len(B1) = 1029. Decryption (eq. 104 text, 12.3) hashes "
+                                       "(C0, beta) with beta = prod m_i^w_i, the same value K_hat^xi."))
+
+    # (c) eq. (66) KDF keys: b_Lambda = 1 and 3. The ind_c=2 secret key is also expanded with b_Lambda = 3 to
+    # show that b(b_Lambda * 256, 4) changes every k_i, not just the number of keys.
+    for ind_c, b_lambda in ((2, 1), (2, 3), (3, 3)):
+        h = cd[ind_c]["h"]
+        for i, (msg, k_i) in enumerate(contest_data_kdf_keys(h, ind_c, b_lambda), start=1):
+            vectors.append(vec("contest_data_kdf_key",
+                               "(66) k_i = HMAC(h, b(i, 4) || Label || 0x00 || Context || b(b_Lambda * 256, 4)), "
+                               "Label = b(\"data_enc_keys\", 13), Context = b(\"contest_data\", 12) || b(ind_c, 4)",
+                               f"k_{i} ind_c={ind_c} b_Lambda={b_lambda}", "h", h, msg, k_i,
+                               {"h_hex": hx(h), "i": i, "ind_c": ind_c, "b_Lambda": b_lambda,
+                                "Label_hex": hx(KDF_LABEL), "Context_hex": hx(KDF_CONTEXT_STR + b_small(ind_c)),
+                                "key_bits_hex": hx(b(b_lambda * 256, 4)),
+                                "derivation": f"h = eq. (65) vector for ind_c={ind_c}"},
+                               None,
+                               notes="Not in the §5.5 tables (an HMAC, not a domain-separated H call); the message "
+                                     "is always 4 + 13 + 1 + 16 + 4 = 38 bytes. The key is h (32 bytes). The counter "
+                                     "i is 1-based, 1 <= i <= b_Lambda (eqs. 66, 104, Verification 12.4; user "
+                                     "decision Q6: Verification 13.7's 0 <= l < b_Lambda is an erratum). The final "
+                                     "field is the key material length in BITS, b_Lambda * 256."))
+
+    # (d) eqs. (67)-(69): full ciphertexts and the Schnorr proof C2 = (c, v) with a fixed nonce u.
+    for ind_c, e in cd.items():
+        v = vec("contest_data_encryption_challenge", "(69) c = H_q(H_I; 0x27, ind_c(Lambda), a, C0, C1), "
+                "C0 = g^xi (67), C1 = D_1 xor k_1 || ... || D_b xor k_b (68), C2 = (c, v), v = (u - c*xi) mod q",
+                f"contest data C ind_c={ind_c} b_Lambda={e['b']} {e['label']}", "H_I", H_I, e["b1_c"], e["raw_c"],
+                {"H_I_hex": hx(H_I), "ind_c": ind_c, "b_Lambda": e["b"],
+                 "contest_data_string": e["s"], "contest_data_string_utf8_hex": hx(e["s"].encode("utf-8")),
+                 "contest_data_string_utf8_len": len(e["s"].encode("utf-8")),
+                 "D_hex": hx(e["D"]),
+                 "xi_hex": hq(e["xi"]), "alpha_hex": hp(e["alpha"]), "beta_hex": hp(e["beta"]), "h_hex": hx(e["h"]),
+                 "k_hex": [hx(k) for _, k in e["kdf"]],
+                 "u_hex": hq(e["u"]), "a_hex": hp(e["a"]),
+                 "derivation": f"{cd_derivation}; xi = eq. (64) with this ind_c; h = eq. (65); k_i = eq. (66); "
+                               f"D = the Q7 string helper (NOT SPEC): b(len_utf8, 4) || UTF-8 || 0x00 padding to "
+                               f"32*b_Lambda bytes; a = g^u with u fixed (u = {'q-1' if e['u'] == Q - 1 else e['u']})"},
+                1029 + 32 * e["b"], hq_out=True,
+                notes="§5.5.3 table (p.76): B1 = 0x27 || b(ind_c, 4) || b(a, 512) || b(C0, 512) || C1, len(B1) = "
+                      "1029 + 32*b_Lambda (1029 = 1 + 4 + 512 + 512). D_hex is the plaintext the spec operates on; "
+                      "the string and its encoding are a library convention (user decision Q7), not spec. "
+                      "ciphertext gives C0, C1 and C2 = (c, v); C2_hex is b(C2, 64) = b(c, 32) || b(v, 32). "
+                      "The script checks g^v * C0^c = a and that C1 decrypts back to D.")
+        v["ciphertext"] = {"C0_hex": hp(e["C0"]), "C1_hex": hx(e["C1"]), "c_hex": hq(e["c"]), "v_hex": hq(e["v"]),
+                           "C2_hex": hx(b_c2(e["c"], e["v"]))}
+        v["b1_layout"] = e["layout_c"]
+        vectors.append(v)
+
+    # (e) eq. (70) with contest data. Contests 1 and 2 are main_chain's option ciphertexts (the ones the
+    # options-only contest_hash vectors chi_1, chi_2 hash), contest 3 is one option encrypting 1 with
+    # xi_{3,1} from eq. (33). Each carries the contest data ciphertext with the same ind_c.
+    nonces[(3, 1)] = int.from_bytes(encryption_nonce(H_I, 3, 1, xi_b_main)[1], "big") % Q
+    cd_contests = {1: [1, 0], 2: [0, 0, 1], 3: [1]}
+    chis_cd = {}
+    for l, votes in cd_contests.items():
+        e = cd[l]
+        cts = [(pow(G, nonces[(l, j)], P), pow(K, sigma + nonces[(l, j)], P)) for j, sigma in enumerate(votes, start=1)]
+        b1, chi, layout = contest_hash_with_data(H_I, l, cts, e["C0"], e["C1"], (e["c"], e["v"]))
+        chis_cd[l] = chi
+        m = len(cts)
+        v = vec("contest_hash_with_contest_data",
+                "(70) chi_l = H(H_I; 0x28, l, alpha_1, beta_1, ..., alpha_ml, beta_ml, C0, C1, C2)",
+                f"chi_{l} {m} options + contest data b_Lambda={e['b']}", "H_I", H_I, b1, chi,
+                {"H_I_hex": hx(H_I), "l": l,
+                 "ciphertexts": [{"alpha_hex": hp(a_), "beta_hex": hp(bb)} for a_, bb in cts],
+                 "C0_hex": hp(e["C0"]), "C1_hex": hx(e["C1"]), "C2_hex": hx(b_c2(e["c"], e["v"])),
+                 "b_Lambda": e["b"],
+                 "derivation": f"alpha_j = g^xi_{{l,j}}, beta_j = K^(sigma_j + xi_{{l,j}}), K = g^5, xi from eq. (33) "
+                               f"(xi_B = A0A1..BF), sigma = {votes}; (C0, C1, C2) = the "
+                               f"contest_data_encryption_challenge vector with ind_c = {l}"},
+                69 + (2 * m + 1) * 512 + 32 * e["b"],
+                notes="§5.5.3 table (p.76): B1 = 0x28 || b(l, 4) || b(alpha_1, 512) || ... || b(beta_m, 512) || "
+                      "b(C0, 512) || C1 || b(C2, 64), len(B1) = 69 + (2m + 1)*512 + 32*b_Lambda. 69 = 1 (0x28) + 4 "
+                      "(b(l, 4)) + 64 (b(C2, 64)); (2m + 1)*512 = m (alpha, beta) pairs plus C0; 32*b_Lambda = C1. "
+                      "C2 = (c, v) is encoded b(c, 32) || b(v, 32). b1_layout gives [offset, length, label].")
+        v["b1_layout"] = layout
+        vectors.append(v)
+    # The ballot's confirmation code over those three contest hashes, no chaining (eqs. 71, 73).
+    chi_cd_list = [chis_cd[l] for l in sorted(chis_cd)]
+    b1, hc_cd = confirmation_code(H_I, chi_cd_list, bc_none)
+    vectors.append(vec("confirmation_code", "(71) H_C = H(H_I; 0x29, chi_1, ..., chi_mB, B_C), B_C per (73) no chaining",
+                       "H_C no chaining, three contests with contest data", "H_I", H_I, b1, hc_cd,
+                       {"H_I_hex": hx(H_I), "contest_hashes_hex": [hx(c_) for c_ in chi_cd_list],
+                        "H_DI_hex": hx(H_DI), "B_C_hex": hx(bc_none),
+                        "derivation": "contest hashes = the three contest_hash_with_contest_data vectors"},
+                       37 + 32 * len(chi_cd_list)))
+
+    # (f) §3.6.6 verifiable decryption of contest data, eqs. (96)-(106) / Verification 12. The guardian
+    # ballot-data-key polynomials are the K_hat ones the n=3,k=2 guardian_record_hash vector commits to:
+    # P_hat_i(x) = ahat_{i,0} + ahat_{i,1} x, s_hat = sum ahat_{i,0} = 7 (K_hat = g^7), z_hat_i = sum_j P_hat_j(i).
+    ahat_t = guardian_coeffs_hat[(n_t, k_t)]
+    s_hat = sum(row[0] for row in ahat_t) % Q
+    assert s_hat == 7 and pow(G, s_hat, P) == K_hat
+    z_hat = {i: sum(ahat_t[j - 1][m] * pow(i, m, Q) for j in range(1, n_t + 1) for m in range(k_t)) % Q
+             for i in range(1, n_t + 1)}
+    K_hat_jm = [[pow(G, e_, P) for e_ in row] for row in ahat_t]
+    cd_dec_cases = [
+        (2, [1, 3], {1: 6001007, 3: 6003007}),
+        (3, [1, 2, 3], {1: 7001007, 2: Q - 2, 3: 7003007}),
+        (5, [2, 3], {2: 8002007, 3: 8003007}),
+    ]
+    cd_dec_summary = []
+    for ind_c, U, u in cd_dec_cases:
+        e = cd[ind_c]
+        C0, C1, C2 = e["C0"], e["C1"], (e["c"], e["v"])
+        # Each guardian first checks the Schnorr proof C2 (p.49-50).
+        assert contest_data_challenge(H_I, ind_c, pow(G, C2[1], P) * pow(C0, C2[0], P) % P, C0, C1)[1] == e["raw_c"]
+        w = {i: lagrange_coefficient(i, U) for i in U}
+        assert sum(w[i] * z_hat[i] for i in U) % Q == s_hat
+        m_i = {i: pow(C0, z_hat[i], P) for i in U}                       # eq. (96)
+        beta = 1
+        for i in U:                                                      # eq. (97)
+            beta = beta * pow(m_i[i], w[i], P) % P
+        assert beta == e["beta"] == pow(K_hat, e["xi"], P), "beta must equal K_hat^xi of eq. (65)"
+        a_i = {i: pow(G, u[i], P) for i in U}                            # eq. (98)
+        b_i = {i: pow(C0, u[i], P) for i in U}
+        u_label = ", ".join(f"u_{i}={'q-2' if u[i] == Q - 2 else u[i]}" for i in U)
+        d = {}
+        for i in U:
+            b1, d_i, layout = contest_data_decryption_commitment_hash(H_I, ind_c, i, C0, C1, C2,
+                                                                       a_i[i], b_i[i], m_i[i], U)
+            d[i] = d_i
+            v = vec("contest_data_decryption_commitment_hash",
+                    "(99) d_i = H(H_I; 0x32, ind_c(Lambda), i, C0, C1, C2, a_i, b_i, m_i, U)",
+                    f"contest data d_{i} ind_c={ind_c} b_Lambda={e['b']} U={U}", "H_I", H_I, b1, d_i,
+                    {"H_I_hex": hx(H_I), "ind_c": ind_c, "i": i, "U": U, "b_Lambda": e["b"],
+                     "C0_hex": hp(C0), "C1_hex": hx(C1), "C2_hex": hx(b_c2(*C2)),
+                     "a_i_hex": hp(a_i[i]), "b_i_hex": hp(b_i[i]), "m_i_hex": hp(m_i[i]),
+                     "u_i_hex": hq(u[i]), "z_hat_i_hex": hq(z_hat[i]),
+                     "U_encoding_hex": hx(b"".join(p_ for p_, _ in b_index_set(U))),
+                     "derivation": f"main_chain election (n=3, k=2, K_hat=g^7, s_hat=7); z_hat_i = P_hat(i) from the "
+                                   f"n=3,k=2 guardian_record_hash K_hat polynomials; (C0, C1, C2) = the "
+                                   f"contest_data_encryption_challenge vector with ind_c = {ind_c}; m_i = C0^z_hat_i "
+                                   f"(96); a_i = g^u_i, b_i = C0^u_i (98); {u_label}"},
+                    2125 + 32 * e["b"] + 4 * len(U),
+                    notes="B0 = H_I per eq. (99) and user decision Q5; the §5.5.4 table (p.77) prints B0 = H_E, "
+                          "treated as an erratum (its B1 layout and length are used as printed). U is encoded "
+                          "b(#U, 4) || b(j_1, 4) || ... in ascending index (Q10). len(B1) = 2125 + 32*b_Lambda + "
+                          "4*#U = 1 + 4 + 4 + 512 + 64 + 3*512 + 4 + 32*b_Lambda + 4*#U. C2 = b(c, 32) || b(v, 32).")
+            v["b1_layout"] = layout
+            vectors.append(v)
+        a_acc, b_acc = 1, 1
+        for i in U:                                                      # eq. (100)
+            a_acc, b_acc = a_acc * a_i[i] % P, b_acc * b_i[i] % P
+        b1, raw_c, layout = contest_data_decryption_challenge(H_I, ind_c, C0, C1, C2, a_acc, b_acc, beta)
+        c = int.from_bytes(raw_c, "big") % Q
+        c_i = {i: c * w[i] % Q for i in U}
+        v_i = {i: (u[i] - c_i[i] * z_hat[i]) % Q for i in U}             # eq. (102)
+        v_resp = sum(v_i.values()) % Q                                   # eq. (103)
+        # Verification 12: 12.1, 12.2 recompute a, b; 12.A, 12.B; 12.3, 12.4 h and k_i; 12.C D.
+        a_ver = pow(G, v_resp, P) * pow(K_hat, c, P) % P
+        b_ver = pow(C0, v_resp, P) * pow(beta, c, P) % P
+        assert (a_ver, b_ver) == (a_acc, b_acc), "Verification 12.1, 12.2"
+        assert 0 <= v_resp < Q, "Verification 12.A"
+        assert contest_data_decryption_challenge(H_I, ind_c, C0, C1, C2, a_ver, b_ver, beta)[1] == raw_c, "12.B"
+        h_dec = contest_data_secret_key(H_I, ind_c, C0, beta)[1]
+        assert h_dec == e["h"], "12.3 h = H(H_I; 0x26, ind_c, C0, beta) must equal eq. (65) h"
+        keys_dec = [k for _, k in contest_data_kdf_keys(h_dec, ind_c, e["b"])]
+        D_dec = xor_blocks(C1, keys_dec)                                 # eqs. (105), (106)
+        assert D_dec == e["D"], "Verification 12.C"
+        for i in U:  # per-guardian analogue of Note 3.7: g^z_hat_i from the K_hat_{j,m} commitments
+            g_zi = 1
+            for j in range(n_t):
+                for m in range(k_t):
+                    g_zi = g_zi * pow(K_hat_jm[j][m], pow(i, m), P) % P
+            assert g_zi == pow(G, z_hat[i], P)
+            assert pow(g_zi, c_i[i], P) * pow(G, v_i[i], P) % P == a_i[i]
+            assert pow(C0, v_i[i], P) * pow(m_i[i], c_i[i], P) % P == b_i[i]
+        v = vec("contest_data_decryption_challenge",
+                "(101) c = H_q(H_I; 0x33, ind_c(Lambda), C0, C1, C2, a, b, beta) [= Verification 12.B]",
+                f"contest data c ind_c={ind_c} b_Lambda={e['b']} U={U}", "H_I", H_I, b1, raw_c,
+                {"H_I_hex": hx(H_I), "ind_c": ind_c, "b_Lambda": e["b"],
+                 "C0_hex": hp(C0), "C1_hex": hx(C1), "C2_hex": hx(b_c2(*C2)),
+                 "a_hex": hp(a_acc), "b_hex": hp(b_acc), "beta_hex": hp(beta),
+                 "proof": {
+                     "U": U, "c_hex": hq(c), "v_hex": hq(v_resp),
+                     "guardians": [{"i": i, "w_i_hex": hq(w[i]), "z_hat_i_hex": hq(z_hat[i]), "u_i_hex": hq(u[i]),
+                                    "m_i_hex": hp(m_i[i]), "a_i_hex": hp(a_i[i]), "b_i_hex": hp(b_i[i]),
+                                    "d_i_hex": hx(d[i]), "c_i_hex": hq(c_i[i]), "v_i_hex": hq(v_i[i])}
+                                   for i in U]},
+                 "decryption": {"h_hex": hx(h_dec), "k_hex": [hx(k) for k in keys_dec],
+                                "D_hex": hx(D_dec), "contest_data_string": e["s"]},
+                 "derivation": "beta = prod m_i^w_i (97) = K_hat^xi; a = prod a_i, b = prod b_i (100); c_i = c*w_i; "
+                               "v_i = u_i - c_i*z_hat_i (102); v = sum v_i (103). The script asserts Verification "
+                               "12.1-12.2 recompute exactly a, b from (c, v), 12.A-12.C hold, h of (12.3) equals the "
+                               "encryption-side h of (65), and the per-guardian relations a_i = (g^z_hat_i)^c_i g^v_i, "
+                               "b_i = m_i^c_i C0^v_i."},
+                2117 + 32 * e["b"], hq_out=True,
+                notes="B0 = H_I (eq. 101, Verification 12.B and §5.5.4 table, p.77). len(B1) = 2117 + 32*b_Lambda "
+                      "= 1 + 4 + 512 + 64 + 3*512 + 32*b_Lambda. No U in B1. b1_layout gives [offset, length, label].")
+        v["b1_layout"] = layout
+        vectors.append(v)
+        cd_dec_summary.append({"ind_c": ind_c, "b_Lambda": e["b"], "U": U, "c_hex": hq(c), "v_hex": hq(v_resp),
+                               "beta_hex": hp(beta)})
+
+    # The Q7 helper's rejection boundary (not spec; recorded, not a hash vector).
+    cd_rejections = []
+    for b_lambda, s in ((1, full1 + "!"), (3, full3 + "x"), (1, "Write-in: Grace Hopper (US)é")):
+        try:
+            encode_contest_data_string(s, b_lambda)
+            raise AssertionError("must be rejected")
+        except ValueError:
+            cd_rejections.append({"b_Lambda": b_lambda, "string": s, "utf8_len": len(s.encode("utf-8")),
+                                  "capacity_utf8_bytes": 32 * b_lambda - 4})
+
     doc = {
         "description": "ElectionGuard v2.1.0 hash-chain KAT vectors, generated by test/kat/eg_kat.py "
                        "from the specification only (not from the C# implementation).",
@@ -848,6 +1239,20 @@ def build():
             "z_i": [{"i": i, "hex": hq(z[i])} for i in sorted(z)],
             "U_encoding": "b(#U, 4) || b(j_1, 4) || ... || b(j_#U, 4), j ascending (order not stated by the spec)",
             "proofs": tally_summary,
+        },
+        "contest_data": {
+            "election": "main_chain ballot (H_I = main_chain.H_I_hex, xi_B = main_chain.xi_B_hex, K_hat = g^7)",
+            "kdf": {"Label_hex": hx(KDF_LABEL), "Label": "data_enc_keys",
+                    "Context_prefix_hex": hx(KDF_CONTEXT_STR), "Context_prefix": "contest_data",
+                    "message": "b(i, 4) || Label || 0x00 || Context || b(b_Lambda * 256, 4), 1 <= i <= b_Lambda"},
+            "C2_encoding": "b(C2, 64) = b(c, 32) || b(v, 32) (order c then v, per C2 = (c, v); not spelled out)",
+            "string_helper": "NOT SPEC (user decision Q7): D = b(len_utf8(s), 4) || UTF-8(s) || 0x00 padding, exactly "
+                             "32*b_Lambda bytes; rejected when 4 + len_utf8(s) > 32*b_Lambda",
+            "string_helper_rejections": cd_rejections,
+            "guardian_polynomials": "ahat_{i,j} of the n=3,k=2 guardian_record_hash vector: ahat_{i,0} = (30, 40, "
+                                    "q-63), ahat_{i,1} = 100i + 15; s_hat = 7",
+            "z_hat_i": [{"i": i, "hex": hq(z_hat[i])} for i in sorted(z_hat)],
+            "decryption_proofs": cd_dec_summary,
         },
     }
     return doc

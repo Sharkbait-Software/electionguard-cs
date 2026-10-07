@@ -1,6 +1,5 @@
 {
   "electionId": "perf-single-contest",
-  "optionalContestDataMaxLength": 0,
   "chainingMode": 0,
   "contests": [
     {
@@ -22,7 +21,8 @@
         { "id": "undervote-difference", "name": "Undervote difference", "index": 8, "kind": "UndervoteDifferenceCount" },
         { "id": "write-ins", "name": "Write-ins", "index": 9, "kind": "WriteInCount" }
       ],
-      "writeInFieldCount": 1
+      "writeInFieldCount": 1,
+      "contestDataBlocks": 2
     }
   ],
   "ballotStyles": [

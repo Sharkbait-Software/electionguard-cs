@@ -256,6 +256,46 @@ try
     var serializedDecryptedTally = JsonSerializer.Serialize(decryptedTally, tallyJsonOptions);
     File.WriteAllBytes(Path.Combine(outputDirectory, "tally.json"), System.Text.Encoding.UTF8.GetBytes(serializedDecryptedTally));
 
+    // Contest data (§3.6.6): every ballot carries an encrypted contest data field in each contest
+    // whose manifest entry declares one (b_Λ >= 1), empty or not, so its write-in text can only be
+    // found by decrypting it. The guardians decrypt each field with the same three rounds as the
+    // tally, using their ballot data key shares; each guardian first checks the field's Schnorr
+    // proof (eq. 69). The administrator publishes β, the proof (c, v) and the data D, which
+    // Verification 12 checks. A real election would decrypt only the fields it needs, through a
+    // mixnet when the ballots are cast (§3.6.6 p.49); here every field of every ballot is decrypted.
+    var contestDataDecryptionVerification = new ContestDataDecryptionVerification();
+    var decryptedContestData = new List<object>();
+    foreach (var encryptedBallot in encryptedBallots.OrderBy(x => x.Id, StringComparer.Ordinal))
+    {
+        foreach (var contest in encryptedBallot.Contests.Where(x => x.ContestData is not null))
+        {
+            var decrypted = tallyAdmin.DecryptContestData(tallyGuardians, encryptedBallot, contest.Id, encryptionRecord);
+
+            // Verification 12
+            contestDataDecryptionVerification.Verify(encryptionRecord, encryptedBallot, decrypted);
+
+            var text = decrypted.DecodeText();
+            if (text.Length > 0)
+            {
+                Console.WriteLine($"Ballot {decrypted.BallotId}, contest {decrypted.ContestId}: contest data \"{text}\".");
+            }
+
+            decryptedContestData.Add(new
+            {
+                decrypted.BallotId,
+                decrypted.ContestId,
+                decrypted.ContestIndex,
+                decrypted.Beta,
+                decrypted.Challenge,
+                decrypted.Response,
+                Data = Convert.ToHexString(decrypted.Data),
+                Text = text,
+            });
+        }
+    }
+
+    File.WriteAllBytes(Path.Combine(outputDirectory, "contest-data.json"), JsonSerializer.SerializeToUtf8Bytes(decryptedContestData, tallyJsonOptions));
+
     Console.WriteLine("Done.");
 }
 catch (Exception ex)

@@ -22,7 +22,7 @@ namespace ElectionGuard.Core.UnitTests.Kat;
 /// value in the hash chain, that value is itself recomputed through the constructors and checked
 /// against the vector's input first, so the chain is checked link by link.
 /// </summary>
-public class KnownAnswerTests
+public partial class KnownAnswerTests
 {
     public KnownAnswerTests()
     {
@@ -175,6 +175,13 @@ public class KnownAnswerTests
             "chain_init",
             "tally_decryption_commitment_hash",
             "tally_decryption_challenge",
+            "contest_data_nonce",
+            "contest_data_secret_key",
+            "contest_data_kdf_key",
+            "contest_data_encryption_challenge",
+            "contest_hash_with_contest_data",
+            "contest_data_decryption_commitment_hash",
+            "contest_data_decryption_challenge",
         };
 
         var families = AllVectors.Select(x => x.GetProperty("family").GetString()!).ToHashSet();
@@ -495,7 +502,6 @@ public class KnownAnswerTests
                 ElectionId = "kat",
                 Contests = contests,
                 BallotStyles = [new BallotStyle { Id = "style", Name = "Style", ContestIds = contests.Select(x => x.Id).ToList() }],
-                OptionalContestDataMaxLength = 0,
                 ChainingMode = ChainingMode.None,
             };
             var record = new EncryptionRecord
@@ -677,7 +683,6 @@ public class KnownAnswerTests
                 Choices = Enumerable.Range(1, 3).Select(o => new Choice { Id = $"contest-{c}-option-{o}", Name = $"Option {o}", Index = o }).ToList(),
             }).ToList(),
             BallotStyles = [new BallotStyle { Id = "style", Name = "Style", ContestIds = ["contest-1", "contest-2"] }],
-            OptionalContestDataMaxLength = 0,
         };
         var record = new EncryptionRecord
         {

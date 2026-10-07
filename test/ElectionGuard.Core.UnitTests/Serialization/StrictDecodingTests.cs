@@ -138,12 +138,12 @@ public class StrictDecodingTests
     });
 
     /// <summary>Each non-canonical encoding, applied to a ballot's alpha, a response, or id_B.</summary>
-    public static TheoryData<string> JsonTamperings() => new() { "alpha padded to 513 bytes", "alpha = p", "response = q", "response padded to 33 bytes", "id_B of 31 bytes" };
+    public static TheoryData<string> JsonTamperings() => new() { "alpha padded to 513 bytes", "alpha = p", "response = q", "response padded to 33 bytes", "id_B of 31 bytes", "contest data C0 = p" };
 
     private static byte[] Tamper(string tampering, byte[] original) => tampering switch
     {
         "alpha padded to 513 bytes" or "response padded to 33 bytes" => [0, .. original],
-        "alpha = p" => Encode(EGParameters.P, 512),
+        "alpha = p" or "contest data C0 = p" => Encode(EGParameters.P, 512),
         "response = q" => Encode(EGParameters.Q, 32),
         "id_B of 31 bytes" => original[1..],
         _ => throw new ArgumentOutOfRangeException(nameof(tampering)),
@@ -166,12 +166,14 @@ public class StrictDecodingTests
         {
             "id_B of 31 bytes" => json,
             "alpha padded to 513 bytes" or "alpha = p" => json["contests"]![0]!["choices"]![0]!,
+            "contest data C0 = p" => json["contests"]![0]!["contestData"]!,
             _ => json["contests"]![0]!["choices"]![0]!["proof"]![0]!,
         };
         string property = tampering switch
         {
             "id_B of 31 bytes" => "selectionEncryptionIdentifier",
             "alpha padded to 513 bytes" or "alpha = p" => "alpha",
+            "contest data C0 = p" => "c0",
             _ => "v",
         };
         byte[] bytes = Convert.FromBase64String(owner[property]!.GetValue<string>());
@@ -246,10 +248,10 @@ public class StrictDecodingTests
         Status = dto.Status,
     };
 
-    private static ProtobufEncryptedData WithContestData(ProtobufEncryptedData data, byte[]? challenge = null, byte[]? response = null) => new()
+    private static ProtobufEncryptedData WithContestData(ProtobufEncryptedData data, byte[]? challenge = null, byte[]? response = null, byte[]? c0 = null, Func<byte[], byte[]?>? c1 = null) => new()
     {
-        C0 = data.C0,
-        C1 = data.C1,
+        C0 = c0 ?? data.C0,
+        C1 = c1 is null ? data.C1 : c1(data.C1)!,
         Challenge = challenge ?? data.Challenge,
         Response = response ?? data.Response,
     };
@@ -270,6 +272,13 @@ public class StrictDecodingTests
             ["contest proof response = q"] = dto => WithFirstContest(dto, c => c with { Proofs = WithFirstProof(c.Proofs, p => p with { Response = NotBelowQ }) }),
             ["contest data challenge = q"] = dto => WithFirstContest(dto, c => c with { ContestData = WithContestData(c.ContestData!, challenge: NotBelowQ) }),
             ["contest data response = q"] = dto => WithFirstContest(dto, c => c with { ContestData = WithContestData(c.ContestData!, response: NotBelowQ) }),
+            // S6: C_0 is an element of Z_p, decoded strictly; C_1 is a whole, nonzero number of
+            // 32-byte blocks (BallotStructure then requires exactly 32·b_Λ).
+            ["contest data C0 = p"] = dto => WithFirstContest(dto, c => c with { ContestData = WithContestData(c.ContestData!, c0: NotBelowP) }),
+            ["contest data C0 padded to 513 bytes"] = dto => WithFirstContest(dto, c => c with { ContestData = WithContestData(c.ContestData!, c0: [0, .. c.ContestData!.C0]) }),
+            ["contest data C1 of 31 bytes"] = dto => WithFirstContest(dto, c => c with { ContestData = WithContestData(c.ContestData!, c1: x => x[1..32]) }),
+            ["contest data C1 one byte over a block"] = dto => WithFirstContest(dto, c => c with { ContestData = WithContestData(c.ContestData!, c1: x => [.. x, 0]) }),
+            ["contest data C1 missing"] = dto => WithFirstContest(dto, c => c with { ContestData = WithContestData(c.ContestData!, c1: _ => null) }),
             ["undervote difference proof challenge = q"] = dto => WithFirstContest(dto, c => c with { UndervoteDifferenceProof = WithFirstProof(c.UndervoteDifferenceProof!, p => p with { Challenge = NotBelowQ }) }),
             ["undervote difference proof response = q"] = dto => WithFirstContest(dto, c => c with { UndervoteDifferenceProof = WithFirstProof(c.UndervoteDifferenceProof!, p => p with { Response = NotBelowQ }) }),
             ["null-vote proof challenge = q"] = dto => WithFirstContest(dto, c => c with { NullVoteProof = WithFirstProof(c.NullVoteProof!, p => p with { Challenge = NotBelowQ }) }),

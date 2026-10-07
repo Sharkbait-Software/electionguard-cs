@@ -267,11 +267,13 @@ public class BallotEncryptorTests
         AssertEncrypts(writeIns, 1, guardianSet.ElectionPublicKeys.VoteEncryptionKey);
 
         Assert.NotNull(contest.ContestData);
-        Assert.NotEmpty(contest.ContestData!.C0);
-        // "Write-In Candidate" is 18 UTF-8 bytes -- exactly one 32-byte block once right-padded, so
-        // C1 (the XOR of that padded block with the derived keystream) must be exactly 32 bytes,
-        // not merely non-empty.
-        Assert.Equal(32, contest.ContestData!.C1.Length);
+        Assert.NotEqual(new IntegerModP(0), contest.ContestData!.C0);
+        // §3.3.10 (G11, user decision Q7): C1 is exactly 32·b_Λ bytes, b_Λ from the manifest, however
+        // long the text is ("Write-In Candidate" is 18 UTF-8 bytes; the fixture declares b_Λ = 2), so
+        // its length reveals nothing. Before S6 the encryptor padded to the next 32-byte block of the
+        // text itself and this pinned 32.
+        Assert.Equal(32 * manifestContest.ContestDataBlocks, contest.ContestData!.C1.Length);
+        Assert.Equal(64, contest.ContestData!.C1.Length);
 
         // Assertion-quality strengthening: algebraically verify the contest-data ciphertext's
         // Schnorr proof of knowledge (BallotEncryptor.EncryptContestData) instead of only checking
@@ -280,7 +282,7 @@ public class BallotEncryptorTests
         // sign flip in `response`, a swapped hash input, or a wrong base/exponent.
         var contestData = contest.ContestData!;
         var recomputedCommitment = IntegerModP.PowModP(encryptionRecordResult.EncryptionRecord.CryptographicParameters.G, contestData.Response)
-            * IntegerModP.PowModP(new IntegerModP(contestData.C0), contestData.Challenge);
+            * IntegerModP.PowModP(contestData.C0, contestData.Challenge);
         var expectedChallenge = EGHash.HashModQ(
             encryptedBallot.SelectionEncryptionIdentifierHash,
             new byte[] { 0x27 },

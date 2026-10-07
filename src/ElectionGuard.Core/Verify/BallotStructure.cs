@@ -8,7 +8,9 @@ namespace ElectionGuard.Core.Verify;
 /// The shape a ballot must have before any per-selection verification means anything: its ballot
 /// style is in the manifest, it lists exactly that style's contests, each once, and each contest
 /// lists exactly the manifest's options for that contest, each once, and exactly the supplemental
-/// fields the manifest declares for it (§3.3.9), each once.
+/// fields the manifest declares for it (§3.3.9), each once; and it carries an encrypted contest data
+/// field exactly where the manifest declares contest data for the contest, with C_1 of exactly
+/// 32·b_Λ bytes (§3.3.10).
 ///
 /// The spec has no lettered sub-check for this. It is implicit in its index-keyed model: one
 /// ciphertext per (contest index, option index) (§3.1.3 p.17; §3.4 "unique contest index"), and
@@ -128,6 +130,11 @@ public static class BallotStructure
             {
                 return fieldViolation;
             }
+
+            if (ContestDataViolation(ballot.Id, contest, manifestContest) is string contestDataViolation)
+            {
+                return contestDataViolation;
+            }
         }
 
         return MissingStyleContest(ballot.Id, style, manifestContests, inStyle, onBallot);
@@ -182,6 +189,38 @@ public static class BallotStructure
         if (FirstUnset(seen) is int missing and >= 0)
         {
             return $"Contest {contest.Id} on ballot {ballotId} has no encryption of supplemental field {declared[missing].Id}, which the manifest declares.";
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// §3.3.10 with user decision Q7: a contest whose manifest entry declares b_Λ >= 1 carries one
+    /// encrypted contest data field on every ballot, its C_1 exactly 32·b_Λ bytes (eq. 68; the
+    /// length is fixed so that it reveals nothing about the data); a contest that declares none
+    /// carries none. Eq. (70) hashes the field into the contest hash only when it is present, so a
+    /// field the manifest does not call for, or one of another length, would be hashed and
+    /// decrypted as something the manifest does not define.
+    /// </summary>
+    private static string? ContestDataViolation(string ballotId, EncryptedContest contest, Contest manifestContest)
+    {
+        var data = contest.ContestData;
+        int blocks = manifestContest.ContestDataBlocks;
+        if (blocks == 0)
+        {
+            return data is null
+                ? null
+                : $"Contest {contest.Id} on ballot {ballotId} carries contest data, but the manifest declares none for that contest (b_Λ = 0).";
+        }
+
+        if (data is null)
+        {
+            return $"Contest {contest.Id} on ballot {ballotId} carries no contest data; the manifest declares b_Λ = {blocks} for that contest, so every ballot carries the field (§3.3.10).";
+        }
+
+        if (data.C1 is null || data.C1.Length != manifestContest.ContestDataLength())
+        {
+            return $"Contest {contest.Id} on ballot {ballotId} has a contest data C_1 of {data.C1?.Length ?? 0} bytes; with b_Λ = {blocks} it is exactly {manifestContest.ContestDataLength()} (§3.3.10 eq. 68).";
         }
 
         return null;

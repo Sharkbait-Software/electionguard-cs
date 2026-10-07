@@ -113,7 +113,7 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
                 }).ToArray(),
                 ContestData = c.ContestData != null ? new ProtobufEncryptedData
                 {
-                    C0 = c.ContestData.C0,
+                    C0 = c.ContestData.C0.ToByteArray(),
                     C1 = c.ContestData.C1,
                     Challenge = c.ContestData.Challenge,
                     Response = c.ContestData.Response
@@ -192,10 +192,10 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
                         Response = IntegerModQ.FromCanonicalBytes(p.Response)
                     }).ToArray()
                     : null,
-                ContestData = c.ContestData != null ? new EncryptedData
+                ContestData = c.ContestData != null ? new EncryptedContestData
                 {
-                    C0 = c.ContestData.C0,
-                    C1 = c.ContestData.C1,
+                    C0 = IntegerModP.FromCanonicalBytes(c.ContestData.C0),
+                    C1 = ContestDataC1(c.ContestData.C1),
                     Challenge = IntegerModQ.FromCanonicalBytes(c.ContestData.Challenge),
                     Response = IntegerModQ.FromCanonicalBytes(c.ContestData.Response)
                 } : null,
@@ -207,6 +207,21 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
         };
 
         return encryptedBallot;
+    }
+
+    /// <summary>
+    /// C_1 of a contest data field: a whole, nonzero number of 32-byte blocks (§3.3.10 eq. 68).
+    /// Exactly 32·b_Λ depends on the manifest, which the decoder does not see;
+    /// <see cref="Verify.BallotStructure"/> checks that.
+    /// </summary>
+    private static byte[] ContestDataC1(byte[]? c1)
+    {
+        if (c1 is null || c1.Length == 0 || c1.Length % ContestDataEncryption.BlockBytes != 0)
+        {
+            throw new NonCanonicalEncodingException($"C_1 of a contest data field is a nonzero whole number of {ContestDataEncryption.BlockBytes}-byte blocks; got {c1?.Length ?? 0} bytes.");
+        }
+
+        return c1;
     }
 
     [ProtoContract]

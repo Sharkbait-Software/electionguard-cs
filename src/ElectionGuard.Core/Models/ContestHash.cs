@@ -17,14 +17,17 @@ public struct ContestHash : IEquatable<ContestHash>
     /// over the encryptions E_1..E_ml of every verifiable field of the contest "in order specified by
     /// the election manifest": the selectable options, then the supplemental fields the manifest
     /// declares (§3.3.9), and no others. <paramref name="verifiableFields"/> is that ordered list; the
-    /// caller puts it in manifest order. C_0, C_1, C_2 = (c, v) are omitted when there is no contest
-    /// data.
+    /// caller puts it in manifest order. With contest data (§3.3.10) B1 continues
+    /// b(C_0, 512) ‖ C_1 ‖ b(C_2, 64), len(B1) = 69 + (2m + 1)·512 + 32·b_Λ (§5.5.3 table, p.76),
+    /// b(C_2, 64) being b(c, 32) ‖ b(v, 32) (the spec writes C_2 = (c, v) and does not spell out
+    /// the split; the KAT oracle uses the same order). C_0, C_1, C_2 are omitted when there is no
+    /// contest data.
     /// </summary>
     public ContestHash(
         SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash,
         int contestIndex,
         IEnumerable<EncryptedValueWithProofs> verifiableFields,
-        EncryptedData? encryptedContestData)
+        EncryptedContestData? encryptedContestData)
     {
         // Built in one pooled buffer rather than as a list of freshly allocated 512-byte arrays; the
         // bytes hashed are the same. Both the encryptor and Verification 8 come through here.
@@ -34,7 +37,7 @@ public struct ContestHash : IEquatable<ContestHash>
         int length = 1 + sizeof(int) + ModPBytes * 2 * choices.Count;
         if (encryptedContestData != null)
         {
-            length += encryptedContestData.C0.Length + encryptedContestData.C1.Length + 2 * ModQBytes;
+            length += ModPBytes + encryptedContestData.C1.Length + 2 * ModQBytes;
         }
 
         byte[] buffer = ArrayPool<byte>.Shared.Rent(length);
@@ -52,12 +55,12 @@ public struct ContestHash : IEquatable<ContestHash>
 
             if (encryptedContestData != null)
             {
-                encryptedContestData.C0.CopyTo(message[offset..]);
-                offset += encryptedContestData.C0.Length;
+                encryptedContestData.C0.WriteBigEndian(message.Slice(offset, ModPBytes));
+                offset += ModPBytes;
                 encryptedContestData.C1.CopyTo(message[offset..]);
                 offset += encryptedContestData.C1.Length;
 
-                // These 2 values are called for in the spec but really don't seem like they belong.
+                // b(C_2, 64) = b(c, 32) ‖ b(v, 32).
                 encryptedContestData.Challenge.WriteBigEndian(message.Slice(offset, ModQBytes));
                 offset += ModQBytes;
                 encryptedContestData.Response.WriteBigEndian(message.Slice(offset, ModQBytes));

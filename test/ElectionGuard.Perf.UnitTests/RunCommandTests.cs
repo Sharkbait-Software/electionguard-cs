@@ -84,7 +84,6 @@ public class RunCommandTests : IDisposable
         const string brokenManifest = """
         {
           "electionId": "broken-manifest-election",
-          "optionalContestDataMaxLength": 0,
           "chainingMode": 0,
           "contests": [
             {
@@ -150,7 +149,6 @@ public class RunCommandTests : IDisposable
         const string brokenManifest = """
         {
           "electionId": "broken-manifest-election",
-          "optionalContestDataMaxLength": 0,
           "chainingMode": 0,
           "contests": [
             {

@@ -77,7 +77,7 @@ public sealed class BallotGenerator
         var contests = new List<BallotContest>(ballotStyle.ContestIds.Count);
         foreach (var contestId in ballotStyle.ContestIds)
         {
-            contests.Add(GenerateContest(_contestsById[contestId], random));
+            contests.Add(GenerateContest(_contestsById[contestId], random, index));
         }
 
         return new Ballot
@@ -88,7 +88,7 @@ public sealed class BallotGenerator
         };
     }
 
-    private BallotContest GenerateContest(Contest contest, Random random)
+    private BallotContest GenerateContest(Contest contest, Random random, int ballotIndex)
     {
         var roll = random.Next(100);
 
@@ -175,7 +175,33 @@ public sealed class BallotGenerator
             Id = contest.Id,
             Choices = choices,
             NumWriteinsSelected = numWriteIns,
-            ContestData = null,
+            ContestData = WriteInText(contest, numWriteIns, ballotIndex),
         };
+    }
+
+    /// <summary>
+    /// The contest data field (§3.3.10) of a contest whose voter used <paramref name="writeIns"/>
+    /// write-in fields: the write-in text, encoded with <see cref="ContestDataEncoding"/> to the
+    /// contest's b_Λ and cut to fit it. Null (the encryptor then encrypts an empty field) when the
+    /// voter wrote nothing or the contest declares no contest data. Derived from the ballot index
+    /// and the contest, never from the random stream, so adding it moved no other generated value.
+    /// </summary>
+    private static byte[]? WriteInText(Contest contest, int writeIns, int ballotIndex)
+    {
+        if (writeIns == 0 || contest.ContestDataBlocks == 0)
+        {
+            return null;
+        }
+
+        var names = string.Join(", ", Enumerable.Range(1, writeIns).Select(i => "Candidate " + i));
+        var text = "Write-in " + ballotIndex + "/" + contest.Id + ": " + names;
+        int capacity = ContestDataEncoding.Capacity(contest.ContestDataBlocks);
+        if (System.Text.Encoding.UTF8.GetByteCount(text) > capacity)
+        {
+            // ASCII only, so a byte count is a character count.
+            text = text[..capacity];
+        }
+
+        return ContestDataEncoding.Encode(text, contest.ContestDataBlocks);
     }
 }

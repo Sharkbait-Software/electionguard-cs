@@ -124,6 +124,35 @@ User answers (2026-10-04):
     from a blank contest, so u = L. The S5b behavior is kept, and Validate does not require the overvote indicator
     when u is tracked.
   - **Q19 (S5b question B), write-in fields without a write-in count:** "Reject manifest". Kept as built.
+- **S6 design and API choices** (2026-10-05; the first by the orchestrator, the rest low-stakes implementer
+  choices; none changes bytes the spec or Q5-Q7 fix):
+  - **Every ballot carries the field (orchestrator).** A contest that declares `ContestDataBlocks` > 0 carries
+    contest data on every ballot; no text encrypts 32·b_Λ zero bytes (the Q7 encoding of ""). A contest that
+    declares 0 carries none. `BallotStructure` enforces both (`"N.structure"`), so the ballot's shape never
+    shows whether write-in text was entered, and Verification 8 hashes the field into chi whenever it is
+    declared.
+  - **The 0x27 proof has no numbered verification.** The spec checks it only where guardians decrypt (§3.6.6
+    p.49-50); no Verification 6.x/8.x/12.x covers it. The library checks it in
+    `TallyGuardian.CommitContestData` and again in `TallyAdmin.CombineContestData` before publishing, and adds no
+    sub-check to Verifications 6-8 (it would cost two full-width exponentiations per ballot on the verify path).
+  - **C_0 must be in Z_p^r before anyone decrypts it (S6 review round 1; library hardening, no bytes change).**
+    The eq. (69) proof accepts C_0 = 0 (with a = 0) and C_0 = -g^ξ (whenever c is even), and nothing else checks
+    C_0. So the guardians and the administrator (`ContestDataStatement.RequireDecryptable`) require
+    `SubgroupMembership.IsMember(C_0)` before the proof, refusing with a `TallyDecryptionException` that names no
+    guardian. Verification 12 does not add it: the spec states no such check.
+  - `BallotContest.ContestData` is `byte[]?` (exactly 32·b_Λ raw bytes, Q7); `ContestDataEncoding` is the Q7
+    string helper. A new `EncryptedContestData` type carries C_0 as `IntegerModP` (so both decoders read it
+    strictly; its JSON form is unchanged, base64 of 512 bytes); `EncryptedData` stays for the ballot nonce.
+  - Guardians, the administrator and Verification 12 recompute H_I = H(H_E; 0x20, id_B) and refuse a ballot whose
+    stored H_I differs.
+  - One ballot contest per contest data decryption (three rounds); messages name the ballot and contest, and a
+    message for another one is refused naming its sender. A guardian holds one session of one kind (tally or
+    contest data) at a time.
+  - Fixtures: `ElectionFixtureBuilder.CreateMinimalManifest(includeWriteIns: true)` and every committed manifest
+    contest that offers write-in fields declare b_Λ = 2. The console decrypts every field of every ballot.
+  - No egperf contest data phase (the harness streams and discards ballots; see carry-overs).
+- **Q20 (S6) Byte layout of b(C2, 64) in eqs (70), (99) and (101), answered 2026-10-06:** "c then v": b(c,32) ∥ b(v,32).
+  The §5.5 tables do not say how the 64 bytes split. S6 already uses this order, and so does the KAT oracle.
 - **Cadence:** "Keep going". After each stage: commit, update this tracker, push, start the next stage. Stop only
   for a new spec contradiction or question.
 
@@ -136,8 +165,8 @@ User answers (2026-10-04):
 | S3 Ballot verification strictness | G4, G13, G33, G23, G24, G36; plus the push security-review findings on V8 (missing completeness/validation checks: ballot contest set vs ballot style, option set vs manifest, duplicates) | — | done | 7ae4cfc |
 | S4 Tally soundness | G2, G27, G28, G20, G21, G30, G38, G16 | — | done | c549325 |
 | S5 Supplemental fields redesign (with S5b: user follow-up decisions Q11-Q16) | G3, G8, G22, G29, G10 | — | done | 27e75e2 (+ S5b f8a0699, S5c) |
-| S5c Null-vote relation gains the overvote term (Q17) | G22 (Q17 follow-up) | S5b | done | see next commit |
-| S6 Contest data | G11, G32 | after S4 | todo | |
+| S5c Null-vote relation gains the overvote term (Q17) | G22 (Q17 follow-up) | S5b | done | 567e7a6 |
+| S6 Contest data | G11, G32 | after S4 | done | see next commit |
 | S7 Ballot nonce and challenged ballots | G17, G18 | after S4 | todo | |
 | S8 Chain closing | G19, G37 | — | todo | |
 | S9 Pre-encrypted recording tool | G31 | after S5, S7 | todo | |
@@ -260,7 +289,264 @@ overvote), the new `NullVoteProof_WithoutAnOvervoteIndicator_HasNoOvervoteTerm` 
 `RelationCiphertexts_MatchTheirDefinitions_OnTheScalarEngine`/`_OnTheAvx512Engine` pin it by recomputation. The
 console's `tally.json` counts are unchanged.
 
+S6: no existing KAT value moved (every pre-S6 family passed before and after). What moved, by design:
+- C_1 of every contest data field (G11: KDF counter 1..b_Λ and constant length field; fixed 32·b_Λ length), and
+  so the contest hash and confirmation code of every ballot whose contest declares contest data. Every committed
+  manifest now declares b_Λ = 2 on its write-in contests, so every such ballot of `smoke`, `limits`,
+  `famous-names` and the console carries the field and its chi and H_C differ from S5c.
+- The hash input of eq. (70) with contest data now writes C_0 as b(C_0, 512) (it was the raw byte array, 512 bytes
+  from the encryptor anyway).
+
+The new digests are pinned only by the oracle's seven contest data families (`contest_data_nonce` 7,
+`contest_data_secret_key` 5, `contest_data_kdf_key` 7, `contest_data_encryption_challenge` 5,
+`contest_hash_with_contest_data` 3, `contest_data_decryption_commitment_hash` 7, `contest_data_decryption_challenge`
+3) and the appended `confirmation_code` vector, through `KnownAnswerTests.ContestData.cs`; no test holds a literal.
+One test literal was re-pinned: `BallotEncryptorTests.Encrypt_WriteInCounter_ProofIsWellFormed` pinned C_1 = 32 bytes
+(the pre-S6 "pad to the next block of the text" length) and now pins 32·b_Λ = 64. The committed manifests'
+`manifestHash` changed (every scenario); the console's `tally.json` counts are unchanged and it now also writes
+`contest-data.json`.
+
 ## Log
+
+### 2026-10-05 — S6 review round 2 (G32: administrator zero-share and misaddressed-message tests)
+One finding (tests lens, minor), accepted. Tests only; no library code, interoperable byte or pinned value
+changed. Nothing staged or committed.
+
+**The administrator's zero-m_j branch on the contest data path was untested.** This is correct. The only zero-share
+test, `TallyGuardianTests.Decrypt_ZeroPartialDecryption_ThrowsNamingTheGuardian`, covers the tally path.
+The contest-data tamper tests multiply m by g, so they never produce 0. The round-1 C_0 membership fix exists so
+that `CombineContestData`'s check (TallyGuardian.cs ~590) blames only a guardian that really sent 0. A regression
+removing that check would have gone unnoticed: β = 0 would reach the combined-proof check and Note 3.7's attribution,
+which give a different message. New tests in `ContestDataDecryptionTests`:
+- `CombineContestData_ZeroPartialDecryption_NamesTheGuardian`. Guardian 3 (second of {1, 3}) sends m_i = 0 via
+  `PartialDecryptionTamperForTesting`. The test asserts a `TallyDecryptionException` naming that guardian, a message
+  that starts "Contest data did not decrypt successfully" and contains "is 0", and no "Note 3.7".
+- `CombineContestData_MessageForAnotherBallotOrContest_NamesTheSender` (6 cases). This is the finding's optional
+  suggestion. It first checks that the honest messages combine. Then it re-addresses guardian 2's round-1, round-2
+  or round-3 message to ballot-2 or contest-2, and asserts the administrator's `statement.Read` names that sender.
+  Before this test, that path was exercised only from the guardian side.
+
+Mutation check: not run. The permission classifier denied building and testing with the zero-share branch disabled,
+and the edit was reverted with no trace in the diff. The test still pins the branch by construction. Line 593 is the
+only contest-data message containing "is 0", and every other way to reach a `TallyDecryptionException` with β = 0
+(the combined-proof failure and Note 3.7) produces a message that lacks "is 0" or contains "Note 3.7".
+
+Gate (Release), after the change; no test failed at any point, so nothing was re-pinned:
+- Build: 0 Warning(s), 0 Error(s).
+- Smoke: `correctness passed`. dkg 142 ms. EncryptBallots 242 ms, 0.242 ms/ballot, 170.9 MB. VerifyBallots 972 ms,
+  0.972 ms/ballot, 12.4 MB. Tally 8, VerifyTally 4, DecryptTally 37, VerifyDecryption 8 ms. These are within run
+  noise of round 1 (0.244 / 0.996 ms/ballot), and no hot path changed.
+- Console: `Ballot 0, contest 0: contest data "Write-in: Ada Lovelace".`, `Done.`, then the expected
+  Console.ReadKey InvalidOperationException. tally.json and contest-data.json were rewritten at 23:08:13;
+  "0-0" VoteCount 3 and "0-1" VoteCount 0.
+- Tests: Core 1418/1418 (was 1411; +1 zero-share, +6 misaddressed), Perf 226/226.
+
+Carry-overs: unchanged from round 1. These are the C2 byte-order question (pending the user), the S7 nonce-decryption
+membership check, and no egperf contest-data phase.
+
+### 2026-10-05 — S6 review round 1 (G32: C_0 subgroup membership; G11/G32 test gaps)
+Five findings (two major, three minor), all accepted. Worktree changes only; nothing staged or committed. No
+interoperable byte and no pinned value moved.
+
+**C_0 not checked for subgroup membership (spec lens and code lens, major; the same defect).** Confirmed against
+§3.6.6 p.49-50: the guardians verify only the eq. (69) proof before computing m_i = C_0^{ẑ_i}, and nothing else
+checks C_0 (it is not in Verifications 6-8, `BallotStructure` checks only C_1's length, and
+`IntegerModP.FromCanonicalBytes` accepts any value in [0, p)). The proof accepts non-members. With C_0 = 0, a = 0
+and any v, every honest m_i is 0, and the administrator's zero-share check blamed `participants[0]`, an honest
+guardian. With C_0 = p - g^ξ and an even c (about two draws of u), C_0^c = g^{cξ}, so the proof verifies; then
+p ≡ 3 (mod 4) (p - 1 = 2·q·r', with q and r' odd) and m_i = (-1)^{ẑ_i}·g^{ξẑ_i}, so each guardian leaks the parity
+of its share. The spec states no membership check, so this is a hardening and not a byte-level deviation, but the
+misattribution is a bug in the library's own blame logic. Fix: `ContestDataStatement.RequireEncryptionProof` is
+renamed `RequireDecryptable`. It first requires `SubgroupMembership.IsMember(C_0)`, which checks 0 < C_0 < p and
+C_0^q = 1 with the `BigInteger` exponent, and then the proof. Both the guardian (`CommitContestData`) and the
+administrator (`CombineContestData`) call it, and it throws `TallyDecryptionException(null, ...)` ("... is not in
+the order-q subgroup Z_p^r ..."). Cost: one full-width exponentiation per field per guardian and once for the
+administrator, off every perf phase. Verification 12 is unchanged. It is a spec verification, and adding the check
+would reject records the spec accepts; its class remarks now say so. Doc comments on `CommitContestData`,
+`CombineContestData` and CLAUDE.md are updated.
+
+**Tests added (Core 1399 -> 1411):**
+- `CommitContestData_C0NotInTheSubgroupWithAValidProof_RefusesNamingNoGuardian` (zero, negated). Each first
+  asserts that the forged proof holds and that C_0 is not a member, so the test reaches the new check and not the
+  proof check. The guardian refuses with `OffendingGuardian` null and "Z_p^r" in the message.
+- `CombineContestData_FieldTheGuardiansWouldRefuse_RefusesNamingNoGuardian` (response + 1 -> "eq. 69"; zero and
+  negated -> "Z_p^r"). The test builds valid three-round messages for a good ballot and checks that they combine.
+  It then calls `CombineContestData` with the bad field and expects no guardian named and "the administrator" in
+  the message. This answers the tests-lens minor finding: deleting the administrator's check now fails all three
+  cases. Without it, the "response" case reaches the d_j check, which hashes C_2, and names a guardian.
+- `Verification12_StructureFault_Fails12Structure` (unknown contest, b_Λ = 0 in the record's manifest, C_1 one
+  block short, H_I replaced by 32 other bytes) -> `"12.structure"`. With the two existing cases, all six branches
+  are now covered.
+- `CommitContestData_StructureFault_Throws` (unknown contest, C_1 one block short, H_I replaced) ->
+  `ArgumentException`. The b_Λ = 0 case was already covered.
+- `ContestDataEncryptionTests.Encrypt_FieldDecryptsUnderTheBallotNoncesKey` now also asserts that two
+  encryptions under the same ξ have different c and v, and that both proofs hold. A u derived from ξ_B or ξ would
+  repeat, and v - v' = (c' - c)·ξ would reveal ξ.
+- Mutation checks (run, then reverted): with the membership check disabled, the 4 non-member cases fail. With the
+  administrator's `RequireDecryptable` call removed, all 3 `CombineContestData` cases fail.
+
+Gate (no pinned expectation broke, so there was nothing to re-pin):
+- Build: `0 Warning(s)`, `0 Error(s)`.
+- Smoke: `correctness passed`. dkg 136 ms. EncryptBallots 0.244 ms/ballot, 170.9 MB. VerifyBallots 0.996 ms/ballot,
+  12.4 MB. Tally 7, VerifyTally 4, DecryptTally 34, VerifyDecryption 8 ms. These match the S6 numbers: no smoke
+  phase decrypts contest data.
+- Console: `Ballot 0, contest 0: contest data "Write-in: Ada Lovelace".`, then `Done.`, then the expected ReadKey
+  `InvalidOperationException`. `tally.json` and `contest-data.json` were rewritten at 22:46:05, with 0-0: 3 and
+  0-1: 0.
+- Tests: Core `Passed: 1411, Total: 1411`; Perf `Passed: 226, Total: 226`.
+
+Carry-over for S7: §3.6.7's decryption of the ballot nonce (Verifications 13.6/13.7) has the same C_0 shape and
+the same Schnorr gate, so it needs the same membership check before any guardian exponentiates with its share.
+
+### 2026-10-05 — S6 (contest data: G11, G32)
+Worktree changes only; nothing staged or committed. The KAT oracle (`test/kat/*`) was extended by the orchestrator
+before this stage with seven contest data families; this stage makes them pass through the library.
+
+**G11 (contest data encryption, §3.3.10 eqs. 63-70):**
+- `Contest.ContestDataBlocks` (b_Λ, per contest, Q7) replaces `Manifest.OptionalContestDataMaxLength` (removed;
+  it was never read). `Manifest.Validate` requires 0 <= b_Λ < 2^24.
+- `ContestDataEncryption` (new, public static) holds every shared derivation: ξ (eq. 64), h (eq. 65), the KDF key
+  k_i (eq. 66) with block counter i = 1..b_Λ (Q6) and the constant length field b(b_Λ·256, 4) (unsigned, since
+  b_Λ·256 can exceed `int.MaxValue`), Label/Context `data_enc_keys`/`contest_data` ‖ b(ind_c, 4), the XOR, the 0x27
+  challenge (eq. 69) and its check (`ProofHolds`), and the decryption of eqs. (104)-(106). The encryptor's private
+  `EncryptContestData` is gone. The old one used the byte offset as the counter and i·256 as the length field, and
+  padded to the text's own length plus an extra zero block when the text filled one.
+- `BallotContest.ContestData` is now `byte[]?`, exactly 32·b_Λ raw bytes (Q7); `ContestDataEncoding` is the Q7
+  helper (b(len,4) ‖ UTF-8 ‖ zero padding; rejects, never truncates, text over 32·b_Λ - 4 bytes or invalid
+  Unicode; `Decode` rejects a bad prefix, nonzero padding or invalid UTF-8). The encryptor refuses contest data on
+  a contest declaring none, or of another length (`InvalidBallotException`), and encrypts 32·b_Λ zero bytes when a
+  declaring contest's data is null (orchestrator design: every ballot carries the field).
+- `EncryptedContestData` (new) replaces `EncryptedData` on `EncryptedContest.ContestData`; C_0 is an `IntegerModP`.
+  `ContestHash` writes b(C_0,512) ‖ C_1 ‖ b(c,32) ‖ b(v,32) (the stale "don't seem like they belong" comment is
+  gone). Verification 8 recomputes chi with the field through the same constructor.
+- `BallotStructure` (so Verifications 6, 7, 8 and `AddBallot`/9) requires the field exactly where the manifest
+  declares it, with C_1 of exactly 32·b_Λ bytes (`"N.structure"`).
+- Serialization: JSON reads C_0 through the strict `IntegerModP` converter (same base64 shape as before); protobuf
+  decodes C_0 with `IntegerModP.FromCanonicalBytes` and rejects a C_1 that is null or not a nonzero whole number of
+  32-byte blocks. No new field, so no DTO member was added.
+- Test seam: `BallotEncryptor.ContestDataProofNonceForTesting` fixes u of eq. (69) for the KAT.
+
+**The 0x27 proof.** Searched the spec (text and §5.5/§6.2 pages): eq. (69)'s proof is verified only in §3.6.6
+(p.49-50, "before each available guardian ... computes a partial decryption, it verifies that the Schnorr proof is
+valid"); Verifications 6, 8 and 12 do not mention it and 12.A-12.C do not include it. So the guardians check it
+(`TallyGuardian.CommitContestData`, a `TallyDecryptionException` naming no guardian), the administrator checks it
+again before publishing, and no numbered sub-check was invented.
+
+**G32 (contest data decryption, §3.6.6 eqs. 96-106, Verification 12):**
+- The S4 machinery is generalized, not duplicated: `VerifiableDecryption` (new, internal) holds round 1 (u_i, the
+  partial decryption, (a_i, b_i), d_i), the check of every d_j and the combination into a, b, the combined
+  decryption and c, the responses, the proof check and Note 3.7's attribution, over `IDecryptionStatement`s.
+  `TallyOption` (now carrying H_E) is the tally's statement (eqs. 88/90), `ContestDataStatement` the contest data's
+  (eqs. 99/101 in the new `ContestDataDecryptionHashes`, keyed with H_I per Q5; U ascending per Q10; C_2 as
+  b(c,32) ‖ b(v,32)). `TallyDecryptionMessages` keeps only the tally's message mapping. The refactor was
+  checkpointed before any contest data wiring: all 276 tally and KAT tests passed unchanged.
+- `TallyGuardian.CommitContestData`/`RevealContestData`/`RespondContestData` (m_i = C_0^{ẑ_i} with the ballot data
+  key share, a_i = g^{u_i}, b_i = C_0^{u_i}; the existing `NonceSourceForTesting`/`PartialDecryptionTamperForTesting`
+  seams are called with ind_o = 0). The guardian session is generic (`Session<T>`), so a tally session cannot be
+  revealed or answered with contest data messages or the other way round.
+- `TallyAdmin.DecryptContestData`/`CombineContestData`: quorum, one message per participant per round for this
+  ballot contest, no zero m_j, d_j checks, β (eq. 97), v (eq. 103), the proof checked against K-hat before
+  publishing (Note 3.7 with the guardians' K-hat commitments names a bad share), then h (12.3), the keys (eq. 104)
+  and D (eq. 106). Publishes `DecryptedContestData` (ballot, contest, ind_c, β, c, v, D; `DecodeText()`).
+- `ContestDataDecryptionVerification` = Verification 12: `"12.structure"` (other ballot, unknown contest or one
+  without contest data, wrong published index, malformed ballot, H_I not H(H_E; 0x20, id_B)), then 12.A, 12.B
+  (a = g^v·K-hat^c, b = C_0^v·β^c, eq. 101), 12.C (D against C_1 XOR the eq. 104 keys).
+- Console: every ballot's contest data is decrypted by all three guardians and checked by Verification 12; ballot 0
+  carries "Write-in: Ada Lovelace" (printed), and `contest-data.json` is written. Secret exponents (ξ, u, u_i, ẑ_i)
+  all go through `MontgomeryModP.PowModP`.
+
+Fixtures and consumers: the four committed manifests (b_Λ = 2 on every write-in contest; the key
+`optionalContestDataMaxLength` removed, which `ManifestLoader` would now reject), `famous-names/ballots/1.json` and
+`2.json` (their `contestData` strings re-encoded as base64 of the Q7 encoding), `ElectionFixtureBuilder`
+(`contestDataBlocks` parameter, default `DefaultContestDataBlocks` = 2 with write-ins; `CreateBallot` encodes its
+string with the helper), `Testing.Cli` (b_Λ = 2 per contest), `BallotGenerator` (text on each contest whose voter
+used a write-in, derived from the ballot index so the random stream is untouched), the console. Outside the
+worktree: `C:\temp\eg\data\1\manifest.json` (backup `manifest.json.pre-s6.bak`: key removed, `contestDataBlocks: 2`)
+and `C:\temp\eg\data\1\ballots\0.json` (backup `C:\temp\eg\data\1\ballot-0.json.pre-s6.bak`, kept out of
+`ballots\` because the console reads every file there: `contestData` set to the encoding of "Write-in: Ada
+Lovelace"; its selections and `numWriteinsSelected` 0 unchanged, so the tally does not move).
+
+Gate before re-pinning (code, fixtures and the new KAT tests in; no existing expectation edited):
+- Build: `0 Warning(s)`, `0 Error(s)`.
+- Smoke: `correctness passed`. dkg 139 ms; EncryptBallots 0.237 ms/ballot, 170.9 MB; VerifyBallots 0.975 ms/ballot,
+  12.4 MB; Tally 7; VerifyTally 3; DecryptTally 34; VerifyDecryption 8 ms; `tallyVerification: ran`,
+  `decryptionVerification: ran`.
+- Console: `Ballot 0, contest 0: contest data "Write-in: Ada Lovelace".`, `Done.`, then the expected ReadKey
+  `InvalidOperationException`; `tally.json` rewritten at 22:18 with 0-0: 3, 0-1: 0, every supplemental field 0.
+- Tests: Core `Failed: 1, Passed: 1328, Total: 1329` (`BallotEncryptorTests.Encrypt_WriteInCounter_ProofIsWellFormed`:
+  C_1 length 64, expected 32); Perf `Failed: 2, Passed: 223, Total: 225`
+  (`RunCommandTests.Execute_ReturnsExitCodeOneAndAppendsAnErrorRecordWhenTheRunThrows` and
+  `...WhenSetupFails`: exit 2 instead of 1, because their inline manifests still carried the removed
+  `optionalContestDataMaxLength` key and failed configuration loading before reaching the failure they test).
+  All KAT families, including the seven new ones, passed.
+
+Re-pinned, and why (nothing weakened, skipped or deleted):
+- `Encrypt_WriteInCounter_ProofIsWellFormed`: C_1 = 32·b_Λ (= 64), not 32. The old value was the length leak G11
+  removes.
+- `RunCommandTests` (two inline manifests): the removed key dropped from the fixture JSON; the assertions are
+  unchanged and test the same broken-ballot-style failure again.
+
+New tests (Core 1329 -> 1399, Perf 225 -> 226):
+- KAT (`KnownAnswerTests.ContestData.cs`, the class is now partial): `ContestDataNonce_Eq64` (7),
+  `ContestDataSecretKey_Eq65` (5), `ContestDataKdfKey_Eq66` (7), `ContestDataEncryption_Eq64To69` (5: C_0, C_1, c, v
+  through `ContestDataEncryption.Encrypt` with the oracle's u, each k_i, the Q7 D, the proof check and the
+  decryption), `ContestDataEncoding_RejectsTheOraclesTooLongStrings`, `ContestHashWithContestData_Eq70` (3),
+  `Encryption_WithContestData_ReproducesTheContestHashAndConfirmationCodeVectors` (the oracle's three-contest
+  ballot through `BallotEncryptor`: chi_1..3 and H_C, then Verification 8), `ContestDataDecryptionCommitmentHash_Eq99`
+  (7, both orders of U), `ContestDataDecryptionProof_Eq96To106_AndVerification12` (3: the whole protocol with the
+  oracle's ẑ_i and u_i; every m_i, d_i, a_i, b_i, w_i, v_i, then β, c, v, h, D and the string; Verification 12
+  accepts).
+- `ContestDataDecryptionTests` (20): any quorum decrypts and V12 accepts; an empty field decrypts to ""; wrong m_i
+  named by Note 3.7 (and 12.B when published unchecked); tampered c, v, β -> 12.B; tampered or short D -> 12.C;
+  D from a 0-based counter or the old per-block length field -> 12.C; another ballot/index -> 12.structure, another
+  ballot's field -> 12.B; an invalid 0x27 proof (v, C_1 or C_0 tampered) refused by the guardian; a contest
+  without contest data -> `ArgumentException`; a reveal not matching d_j names the guardian (eq. 99); a message for
+  another ballot names its sender; sessions of the other kind are refused and a response ends the session.
+- `ContestDataEncryptionTests` (24): the field is always 32·b_Λ bytes (null, "", short, two-block text); none and
+  refused where undeclared; wrong lengths refused; determinism from ξ_B and decryption under K-hat^ξ;
+  `Manifest.Validate` bounds; the Q7 encoding's round trip, capacity edge, invalid surrogate and four malformed
+  decodings.
+- `BallotStructureTests`: contest B now declares b_Λ = 1; five new shapes × V6/7/8/9 (field on an undeclared
+  contest, missing field, C_1 one block long, one byte short, null).
+- `StrictDecodingTests`: JSON `contest data C0 = p`; protobuf C_0 = p, C_0 of 513 bytes, C_1 of 31 bytes, C_1 one byte
+  over a block, C_1 missing.
+- Perf `BallotGeneratorTests.Generate_WritesWriteInTextIntoTheContestDataOfBallotsThatUseAWriteIn` (text exactly on
+  write-in ballots, 32·b_Λ bytes, and the same selections as a manifest without contest data).
+
+Gate after:
+- Build: `0 Warning(s)`, `0 Error(s)`.
+- Smoke ×3, each `correctness passed`: dkg 135-138 ms; EncryptBallots 0.242 / 0.243 / 0.246 ms/ballot, 170.9-171.0 MB;
+  VerifyBallots 0.996 / 0.994 / 0.965 ms/ballot, 12.3-12.4 MB; Tally 8; VerifyTally 4; DecryptTally 35-41;
+  VerifyDecryption 8-9 ms.
+- `limits`: `correctness passed`; EncryptBallots 0.898 ms/ballot, 1,329.2 MB; VerifyBallots 3.450 ms/ballot, 93.6 MB;
+  DecryptTally 45; VerifyDecryption 13 ms.
+- Console: `Ballot 0, contest 0: contest data "Write-in: Ada Lovelace".`, `Done.`, then the expected ReadKey
+  exception; `tally.json` and `contest-data.json` rewritten at 22:28:53, counts 0-0: 3, 0-1: 0, fields 0;
+  `contest-data.json` has ballots 0 ("Write-in: Ada Lovelace"), 1 and 2 ("").
+- Tests: Core `Passed: 1399, Total: 1399`; Perf `Passed: 226, Total: 226`.
+
+Perf against S5c (same machine; S5c: Encrypt 0.236, Verify 1.004 ms/ballot):
+
+| Scenario | Phase | S5c | S6 |
+|---|---|---|---|
+| smoke | EncryptBallots | 0.236 ms, 168.7 MB | 0.242-0.246 ms, 170.9-171.0 MB |
+| smoke | VerifyBallots | 1.004 ms, 12.4 MB | 0.965-0.996 ms, 12.3-12.4 MB |
+| limits | EncryptBallots | 0.876 ms, 1,310.7 MB | 0.898 ms, 1,329.2 MB |
+| limits | VerifyBallots | 3.455 ms, 93.7 MB | 3.450 ms, 93.6 MB |
+
+Encryption costs about 3% more by design: each contest that declares contest data now encrypts a field on every
+ballot (g^ξ, K-hat^ξ and g^u, all three bases tabled). Verification does not move: no ballot verification checks
+the field's proof, and the structure check and the extra hash input in chi are cheap. The manifests' hashes
+changed, so `compare` treats S5c records as incomparable (perf/README updated).
+
+Carry-overs:
+- No egperf contest data phase: the runner streams and discards ballots, so a phase would mean retaining ballots
+  with text, plus a new `PhaseSettings` flag, CLI override, result-schema key and report support. Unit tests and the
+  console exercise the path; its cost is about 3k + 4 full-width exponentiations per field for k guardians plus
+  V12's four.
+- §3.6.7 (challenged ballots, S7) will derive ξ of eq. (64) from the decrypted ξ_B and check D against it
+  (Verification 13.6/13.7); `ContestDataEncryption.Nonce`/`SecretKey`/`Apply` are public for that.
+- A `DecryptedContestData` record serializer (with the S4 `DecryptedTally` carry-over, S10).
 
 ### 2026-10-05 — S5c review round 1 (open-question wording left outside the S5c diff)
 Both review lenses (spec, code) found the same minor issue. The S5c entry below said every "open S5b question"

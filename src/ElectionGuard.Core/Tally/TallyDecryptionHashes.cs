@@ -116,14 +116,14 @@ public static class TallyDecryptionHashes
     private const int ChallengeLength = 1 + 2 * sizeof(int) + 5 * IntegerModP.ByteLength;
 
     /// <summary>b(value, 4): the same 4 big-endian bytes as <c>int.ToByteArray()</c>.</summary>
-    private static void WriteIndex(Span<byte> message, ref int offset, int value)
+    internal static void WriteIndex(Span<byte> message, ref int offset, int value)
     {
         BinaryPrimitives.WriteInt32BigEndian(message.Slice(offset, sizeof(int)), value);
         offset += sizeof(int);
     }
 
     /// <summary>b(value, 512): the same bytes as <see cref="IntegerModP.ToByteArray"/>.</summary>
-    private static void WriteElement(Span<byte> message, ref int offset, IntegerModP value)
+    internal static void WriteElement(Span<byte> message, ref int offset, IntegerModP value)
     {
         value.WriteBigEndian(message.Slice(offset, IntegerModP.ByteLength));
         offset += IntegerModP.ByteLength;
