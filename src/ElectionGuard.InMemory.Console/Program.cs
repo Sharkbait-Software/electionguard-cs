@@ -365,9 +365,18 @@ try
     var challengedBallotDecryptionVerification = new ChallengedBallotDecryptionVerification();
     var challengedBallotWellFormednessVerification = new ChallengedBallotWellFormednessVerification();
     var decryptedChallengedBallots = new List<DecryptedChallengedBallot>();
+
+    // The guardians refuse any nonce whose id_B, H_I or C_ξB,0 matches a cast ballot of the
+    // published record (user decision Q31): a ballot's status is only the requester's claim. Here
+    // every guardian is in-process, so one view of the record's cast ballots stands in for each
+    // guardian's own copy.
+    var castBallots = PublishedCastBallots.FromRecord(encryptionRecord.ExtendedBaseHash, encryptedBallots);
+
+    // This election issues no pre-encrypted ballots, so the printer-committed issued list is empty.
+    var issuedPreEncryptedBallots = new ElectionGuard.Core.PreEncryption.IssuedPreEncryptedBallots(encryptionRecord.ExtendedBaseHash, []);
     foreach (var encryptedBallot in encryptedBallots.Where(x => x.Status == BallotStatus.Challenged).OrderBy(x => x.Id, StringComparer.Ordinal))
     {
-        var decrypted = tallyAdmin.DecryptChallengedBallot(tallyGuardians, encryptedBallot, encryptionRecord);
+        var decrypted = tallyAdmin.DecryptChallengedBallot(tallyGuardians, encryptedBallot, encryptionRecord, castBallots, issuedPreEncryptedBallots);
 
         // Verification 13
         challengedBallotDecryptionVerification.Verify(encryptionRecord, encryptedBallot, decrypted);

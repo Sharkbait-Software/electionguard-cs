@@ -82,24 +82,57 @@ internal static class PreEncryptedElectionDemo
         var printed = preEncryptedVotes.Select(vote => preEncryptor.PreEncryptNext(vote.Id, "style-1", printerChain)).ToList();
         var printerRecord = printerChain.Close();
 
+        // Before voting the printer commits to the list of ballots it issued (user decision Q31; a
+        // library format, not the spec's). Every guardian holds the same list, which it confirms by
+        // the commitment, and its own view of the record's cast ballots, which grows as ballots are
+        // published. In-process, one copy of each stands in for every guardian's.
+        var issued = IssuedPreEncryptedBallots.FromPrintedBallots(record.ExtendedBaseHash, printed);
+        var publishedCast = PublishedCastBallots.FromRecord(record.ExtendedBaseHash, regularBallots);
+
         // The recording tool's wrapper has the guardians decrypt each ballot nonce (§4.3.1), then
-        // records the ballot as cast with the voter's selections, or as uncast (§4.3).
+        // records the ballot as cast with the voter's selections, or as uncast (§4.3). A guardian
+        // decrypts an issued ballot's nonce once, and never one that matches a cast ballot.
         var admin = new TallyAdmin();
         var tool = new BallotRecordingTool(record);
         var castBallots = new List<EncryptedBallot>();
         var uncastBallots = new List<PreEncryptedUncastBallot>();
         foreach (var (ballot, vote) in printed.Zip(preEncryptedVotes))
         {
-            var ballotNonce = admin.DecryptPreEncryptedBallotNonce(tallyGuardians, ballot, record);
+            var ballotNonce = admin.DecryptPreEncryptedBallotNonce(tallyGuardians, ballot, record, publishedCast, issued);
             if (vote.Id == UncastId)
             {
                 uncastBallots.Add(tool.RecordUncast(ballot, ballotNonce));
             }
             else
             {
-                castBallots.Add(tool.RecordCast(ballot, ballotNonce, Selections(manifest, vote.Id, vote.Mayor, vote.Council)));
+                var cast = tool.RecordCast(ballot, ballotNonce, Selections(manifest, vote.Id, vote.Mayor, vote.Council));
+                castBallots.Add(cast);
+                publishedCast.Add(cast);
             }
         }
+
+        // A second request for a recorded ballot's nonce, or one for a regular cast ballot's values
+        // dressed as a pre-encrypted ballot, would reveal its votes; the guardians refuse both.
+        var regularDressedAsPreEncrypted = printed[0] with
+        {
+            Id = regularBallots[0].Id,
+            SelectionEncryptionIdentifier = regularBallots[0].SelectionEncryptionIdentifier,
+            SelectionEncryptionIdentifierHash = regularBallots[0].SelectionEncryptionIdentifierHash,
+            EncryptedBallotNonce = regularBallots[0].EncryptedBallotNonce,
+        };
+        foreach (var request in new[] { printed[0], regularDressedAsPreEncrypted })
+        {
+            try
+            {
+                admin.DecryptPreEncryptedBallotNonce(tallyGuardians, request, record, publishedCast, issued);
+                throw new InvalidOperationException($"Pre-encrypted demo: the guardians decrypted ballot {request.Id}'s nonce a second time.");
+            }
+            catch (BallotNonceDecryptionRefusedException)
+            {
+            }
+        }
+
+        Console.WriteLine($"Issued list of {issued.Count} pre-encrypted ballots, commitment {Convert.ToHexString(issued.Commitment)[..16]}...; the guardians refused a repeated request and a regular ballot dressed as pre-encrypted.");
 
         // Verifications 1-4.
         new ParameterVerification().Verify(record);

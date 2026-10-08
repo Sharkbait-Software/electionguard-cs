@@ -1,4 +1,5 @@
 using ElectionGuard.Core.BallotEncryption;
+using ElectionGuard.Core.KeyGeneration;
 using ElectionGuard.Core.Models;
 using ElectionGuard.Core.PreEncryption;
 using ElectionGuard.Core.Tally;
@@ -31,15 +32,36 @@ public sealed class PreEncryptedElection
         var manifestFile = new ManifestFile { Bytes = JsonSerializer.SerializeToUtf8Bytes(Manifest) };
         var guardianSet = ElectionFixtureBuilder.CreateGuardianSet(manifestFile: manifestFile);
         Record = ElectionFixtureBuilder.CreateEncryptionRecord(guardianSet, Manifest, manifestFile).EncryptionRecord;
-        Guardians = guardianSet.Guardians
-            .Select(x => new TallyGuardian(x.Index, guardianSet.SecretShares[x.Index]))
-            .ToList();
+        _guardianSet = guardianSet;
         DeviceHash = VotingDeviceInformationHash.ForPreEncryptedBallots(Record.ExtendedBaseHash, DeviceId);
     }
 
     public Manifest Manifest { get; }
     public EncryptionRecord Record { get; }
-    public List<TallyGuardian> Guardians { get; }
+    private readonly ElectionFixtureBuilder.GuardianSetResult _guardianSet;
+
+    /// <summary>
+    /// The decryption handles of the 3-of-2 guardian set, built fresh on every read: each guardian
+    /// remembers the pre-encrypted ballots whose nonce it decrypted, at most once each (user decision
+    /// Q31), and this election is shared by many tests. A test that needs one guardian's memory
+    /// across calls keeps the list it reads.
+    /// </summary>
+    public List<TallyGuardian> Guardians => _guardianSet.Guardians
+        .Select(x => new TallyGuardian(x.Index, _guardianSet.SecretShares[x.Index]))
+        .ToList();
+
+    /// <summary>The secret key shares of the guardian with index <paramref name="index"/>, to build a guardian with state of its own.</summary>
+    public GuardianSecretShares SecretShares(GuardianIndex index) => _guardianSet.SecretShares[index];
+
+    /// <summary>A view of the published record with no cast ballot (user decision Q31).</summary>
+    public PublishedCastBallots NoCastBallots => new(Record.ExtendedBaseHash);
+
+    /// <summary>An issued list with no ballot on it (user decision Q31).</summary>
+    public IssuedPreEncryptedBallots NoIssuedBallots => new(Record.ExtendedBaseHash, []);
+
+    /// <summary>A printer-committed issued list holding exactly <paramref name="ballots"/> (user decision Q31).</summary>
+    public IssuedPreEncryptedBallots IssuedFor(params PreEncryptedBallot[] ballots) =>
+        IssuedPreEncryptedBallots.FromPrintedBallots(Record.ExtendedBaseHash, ballots);
 
     /// <summary>H_DI of <see cref="DeviceId"/> for pre-encrypted ballots (eq. 119).</summary>
     public VotingDeviceInformationHash DeviceHash { get; }
@@ -80,7 +102,7 @@ public sealed class PreEncryptedElection
 
     /// <summary>ξ_B of <paramref name="ballot"/>, decrypted by the guardians (§3.6.7, §4.3.1).</summary>
     public BallotNonce DecryptNonce(PreEncryptedBallot ballot) =>
-        new TallyAdmin().DecryptPreEncryptedBallotNonce(Guardians, ballot, Record);
+        new TallyAdmin().DecryptPreEncryptedBallotNonce(Guardians, ballot, Record, NoCastBallots, IssuedFor(ballot));
 
     /// <summary>
     /// The voter's selections as a plaintext ballot: the options of contest-1 and contest-2 given

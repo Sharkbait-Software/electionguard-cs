@@ -351,7 +351,7 @@ public class PreEncryptedRecordVerificationTests
         var challenged = Copy(cast, status: BallotStatus.Challenged);
         var decrypted = new DecryptedChallengedBallot { BallotId = challenged.Id, Contests = [] };
 
-        var guardianException = Assert.Throws<ArgumentException>(() => election.Guardians[0].DecryptBallotNonce(challenged, election.Record));
+        var guardianException = Assert.Throws<ArgumentException>(() => election.Guardians[0].DecryptBallotNonce(challenged, election.Record, election.NoCastBallots, election.NoIssuedBallots));
         Assert.Contains("pre-encrypted", guardianException.Message);
         Assert.Throws<ArgumentException>(() => new TallyAdmin().CombineChallengedBallot(challenged, election.Record, []));
         Assert.Equal("13.structure", Fails(() => new ChallengedBallotDecryptionVerification().Verify(election.Record, challenged, decrypted, election.DeviceHash, null)));

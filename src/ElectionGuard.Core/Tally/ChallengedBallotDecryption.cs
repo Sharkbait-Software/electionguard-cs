@@ -106,10 +106,11 @@ internal sealed class ChallengedBallotStatement
     /// (<see cref="EncryptedBallot.IsPreEncrypted"/>: always a cast ballot's, §4.3.1), is malformed
     /// (<see cref="BallotStructure"/>, which also requires C_ξB with a 32-byte C_ξB,1), or its H_I is
     /// not H(H_E; 0x20, id_B) (Verification 5.B), since every hash of the decryption is keyed with H_I.
-    /// Every check reads the ballot object it is given, so it cannot tell a cast ballot copied under a
-    /// new string id and marked challenged from a challenged one (see
-    /// <see cref="TallyGuardian.DecryptBallotNonce"/>): against the published record, match on id_B
-    /// (or H_I, or C_ξB,0), not on <see cref="EncryptedBallot.Id"/>.
+    /// Every check reads the ballot object it is given, so it cannot tell a cast ballot copied (under
+    /// its own or a new string id) and marked challenged from a challenged one; the status check is a
+    /// sanity check only. The guardian's authorization check against the published record's cast
+    /// ballots, on id_B, H_I and C_ξB,0 (<see cref="IPublishedCastBallots"/>, user decision Q31), runs
+    /// before this and is what refuses such a copy.
     /// </summary>
     public static ChallengedBallotStatement For(EncryptionRecord encryptionRecord, EncryptedBallot ballot)
     {
@@ -200,22 +201,24 @@ internal sealed class ChallengedBallotStatement
 /// that is §4.3's design (the recording tool is given the selections anyway), not a choice of this
 /// library.
 ///
-/// Trust boundary (spec-silent; S9 open question S9-6): apart from the ballot's shape, which anyone
-/// can fabricate, every check here depends only on id_B, H_I and C_ξB, and every published ballot
-/// carries those: regular ballots, cast or not, as well as cast pre-encrypted records. §4.2
-/// encrypts the pre-encrypted nonce "as shown in Section 3.3.4", with no domain separation from a
-/// regular ballot's. So anyone can wrap a published ballot's (id_B, H_I, C_ξB) in a made-up
-/// pre-encrypted ballot of the right shape, and k guardians that answer it return shares that
-/// combine (eq. 108) to that ballot's ξ_B, and so (eq. 33 for a regular ballot, eq. 121 for a
-/// pre-encrypted one) to its votes. For a regular cast ballot this bypasses the challenged-only gate
-/// of <see cref="ChallengedBallotStatement.For"/> without changing any status. The administrator's
-/// regeneration check (<see cref="TallyAdmin.CombinePreEncryptedBallotNonce"/>) does not help:
-/// whoever collects the shares can combine them. What the library enforces: the manifest must name
-/// a hash-trimming function (<see cref="BallotStructure"/>), so the path is closed in every election
-/// without pre-encrypted ballots. In an election that has both kinds, a distributed guardian must
-/// refuse a request whose id_B (or H_I, or C_ξB,0) matches any published ballot, regular or
-/// pre-encrypted, cast or not; matching on cast pre-encrypted records alone is not enough, and
-/// neither is a printed-ballot list on its own (a cast pre-encrypted ballot's id_B is on it).
+/// Threat model (spec-silent; S9-6, closed by user decision Q31 in S9b): apart from the ballot's
+/// shape, which anyone can fabricate, every check here depends only on id_B, H_I and C_ξB, and every
+/// published ballot carries those: regular ballots, cast or not, as well as cast pre-encrypted
+/// records. §4.2 encrypts the pre-encrypted nonce "as shown in Section 3.3.4", with no domain
+/// separation from a regular ballot's. So anyone can wrap a published ballot's (id_B, H_I, C_ξB) in
+/// a made-up pre-encrypted ballot of the right shape, and k guardians that answered it would return
+/// shares that combine (eq. 108) to that ballot's ξ_B, and so (eq. 33 for a regular ballot, eq. 121
+/// for a pre-encrypted one) to its votes. The administrator's regeneration check
+/// (<see cref="TallyAdmin.CombinePreEncryptedBallotNonce"/>) does not help: whoever collects the
+/// shares can combine them. These checks are therefore not the gate. The guardian's authorization
+/// step, before them, is
+/// (<see cref="TallyGuardian.DecryptBallotNonce(PreEncryption.PreEncryptedBallot, EncryptionRecord, IPublishedCastBallots, PreEncryption.IssuedPreEncryptedBallots)"/>):
+/// the id_B must be on the printer-committed issued list with its committed C_ξB,0 (a regular
+/// ballot's never is), each guardian decrypts each id_B at most once (a recorded ballot is not
+/// decrypted again by a quorum that includes a guardian that answered; every quorum does when
+/// n &lt; 2k), and nothing in the request may match a cast ballot of the published record. The manifest
+/// must also name a hash-trimming function (<see cref="BallotStructure"/>), so the path is closed
+/// outright in every election without pre-encrypted ballots.
 /// </summary>
 internal sealed class PreEncryptedBallotNonceStatement
 {

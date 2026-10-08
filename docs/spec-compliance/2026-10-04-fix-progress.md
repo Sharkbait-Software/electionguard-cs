@@ -180,7 +180,38 @@ User answers (2026-10-04):
       cast ballot in the published record.
     - This also closes the background security review finding on S7's `TallyGuardian.DecryptBallotNonce` (trusting
       the caller's Status field).
-    - Implemented in S9b.
+    - Implemented in S9b (done; see the S9b log entry). S9-6 and the security review finding are closed.
+    - *Implementer reading (S9b, awaiting the user's acceptance; open question S9b-1):* the at-most-once clause is
+      also enforced on the challenged path: a challenged-ballot request whose id_B is on the issued list is refused
+      (`IssuedPreEncryptedBallot`), since otherwise a printed ballot not yet recorded could be opened there, ahead of
+      its voter and outside the once-only rule.
+    - *Scope as built (S9b review round 1; open question S9b-3):* "each at most once (guardian-side state)" is per
+      guardian. It binds every later quorum only when more than n - k guardians answered (always when n < 2k, as in
+      the default 3-of-2); with n >= 2k a disjoint quorum can answer the same id_B again until the ballot is
+      published as cast.
+    - The record check also refuses, by design, nonce decryption of cast ballots selected for a risk-limiting audit
+      (§3.3.4 p.30). An audit flow (Q22, "Not yet") needs its own authorization path.
+- **S9b decisions and scope change, answered 2026-10-08:**
+  - **Q32 (S9b-1), the challenged path refuses issued pre-encrypted id_Bs:** "Keep". This is superseded by Q35: the
+    issued list goes away with the guardian pre-encrypted path.
+  - **Q33 (S9b-2), retries under once-only:** the user wrote: "This doesn't make any sense. The guardians are not
+    required for the preencryption phase, the encryption package already exists. The guardians will have no knowledge
+    of preencryptions until they are submitted as part of the tally process."
+  - **Q34 (S9b-3), the once-only rule's reach when n ≥ 2k:** the user wrote: "There will pretty much never be more than
+    about 9 guardians." Moot after Q35.
+  - **Q35, scope of pre-encryption in this library:** the user wrote: "I think we should only be implementing the
+    primitives needed for the preencryption process. Do not implement (and remove if already implemented) the
+    encrypting tool and recordin tool. This question about databases is relevant for context of creating those, but
+    those tools themselves are out of scope for the current state of this library." The scope line was then
+    confirmed: "Yes, that line".
+    - KEEP in Core: the spec formulas (eqs 113-116 selection, null-vector and contest hashes and the confirmation
+      code; eqs 117-120 chaining; eq 121 deterministic nonces; hash trimming and short codes Ω), the published
+      pre-encrypted record models, and Verifications 15-19.
+    - REMOVE from Core: `BallotPreEncryptor` (the encrypting tool), `BallotRecordingTool`, the guardian
+      pre-encrypted nonce path with its issued list and once-only state, and the console's pre-encrypted demo.
+    - Ballot generation that tests need moves into test-only fixtures (`test/ElectionGuard.Testing.Common`).
+    - The guardian check of challenged regular ballots against cast ballots (Q31 part 2) stays.
+    - Done in S9c.
 - **Cadence:** "Keep going". After each stage: commit, update this tracker, push, start the next stage. Stop only
   for a new spec contradiction or question.
 - **S7 design and API choices** (2026-10-06; implementer choices, none changes bytes the spec fixes; the first two are
@@ -318,7 +349,9 @@ User answers (2026-10-04):
 | S6 Contest data | G11, G32 | after S4 | done | e6d7be0 |
 | S7 Ballot nonce and challenged ballots | G17, G18 | after S4 | done | 90ea38b |
 | S8 Chain closing | G19, G37 | — | done | d60a56b |
-| S9 Pre-encrypted recording tool | G31 | after S5, S7 | done (nonce-decryption gate: S9b) | see next commit |
+| S9 Pre-encrypted recording tool | G31 | after S5, S7 | done (nonce-decryption gate: S9b) | 97aac86 |
+| S9b Nonce-decryption authorization gate (Q31) | Q31 / S9-6; the security review finding on S7's `TallyGuardian.DecryptBallotNonce` (caller-controlled Status) | S9 | done (pre-encrypted half removed in S9c per Q35) | see next commit |
+| S9c Pre-encryption scope: primitives only (Q35) | remove encrypting/recording tools and guardian pre-encrypted nonce path | after S9b | todo | |
 | S10 Record metadata | G40 (G39 won't fix, per Q9); S2 carry-overs: bind the parsed `Manifest` to `ManifestFile` (S2 review R1), record JSON round trip; S4 carry-overs: a `DecryptedTally` record serializer, and a tally loaded from a record must carry or recompute each option's `MaximumCount` (S4 review R1) | — | todo | |
 
 ## Pinned-value inventory
@@ -491,6 +524,257 @@ subdirectory. Fixture default: `ElectionFixtureBuilder.CreateMinimalManifest(has
 declares no supplemental fields (the new Manifest rule), which the existing pre-encryption tests rely on.
 
 ## Log
+
+### 2026-10-07 — S9b review round 1 (once-only scope, RLA note, id_B aliasing, the consuming step's race guard)
+Worktree changes only; nothing committed. Five minor findings, all accepted (two are one defect). No hash input,
+KAT vector, pinned value or test expectation moved; the pinned-value inventory is unchanged. No hot path touched.
+
+**Once-only is per guardian (spec lens): accepted, documentation.** `_decryptedPreEncryptedBallots` is per
+`TallyGuardian` and guardians share nothing, as Q31's "guardian-side state" says, so "at most once per id_B" binds
+every later quorum only when more than n - k guardians answered: always when n < 2k (any two quorums share a
+guardian; the default 3-of-2), otherwise only when the request went to more than n - k guardians. With n >= 2k a
+disjoint quorum answers again (up to floor(n/k) quorums each recover ξ_B) until the ballot is published as cast.
+Stated in the `TallyGuardian` class summary and constructor, `DecryptedPreEncryptedBallots` (the old detection
+claim missed this case: it shows only by comparing the union of every guardian's list with the guardians the
+recording tool asked for each id_B), the pre-encrypted `DecryptBallotNonce`, `TallyAdmin.DecryptPreEncryptedBallotNonce`
+(its "pass exactly the guardians that will answer" advice replaced), `IssuedPreEncryptedBallots`,
+`PreEncryptedBallotNonceStatement`, CLAUDE.md, the Q31 decision notes and S9b-2. No code change: making the rule
+election-wide needs shared state or guardian-to-guardian messages, a design change (question S9b-3 below).
+
+**Q31 refuses RLA nonce decryption of cast ballots (spec lens): accepted, documentation.** §3.3.4 p.30 names
+"ballots that are selected in the context of a risk limiting audit" as a use of ballot nonce decryption; those
+are cast, so the record check refuses them by design. Stated in `IPublishedCastBallots`, the challenged
+`DecryptBallotNonce` trust model, CLAUDE.md's Tally bullet and the Q31 notes: an audit flow (Q22, "Not yet")
+needs its own authorization path, e.g. an audit-selection list committed after the record is final. Carried next
+to Q-S7b.
+
+**id_B aliasing in the once-only set and the issued list (code and tests lenses; one defect): accepted, fixed.**
+`SelectionEncryptionIdentifier` wraps its array without copying and hashes by content. The guardian now keeps its
+own copy wherever an id_B enters its state (`OwnedCopy`: the constructor import, which now throws
+`ArgumentException` for an id_B that is not 32 bytes, and the consuming step, which copies the issued list's entry
+after `RequireIssued`, now returning it, so every look-up and the insertion use one snapshot) and hands out copies
+(`DecryptedPreEncryptedBallots`, the write-ahead callback's argument). `IssuedPreEncryptedBallots` copies each
+id_B on construction, and `Ballots`, `TryGet` and `Commitment` return copies (`Count` and `ToCanonicalBytes` read
+the private sorted list). The struct's public constructor is unchanged (deserialization and encryption use it).
+
+**The consuming step's race guard was untested (tests lens): accepted, fixed structurally and tested.** The insertion
+is now the test (`if (!_decryptedPreEncryptedBallots.Add(identifier)) throw AlreadyDecrypted`), and the early look
+stays only to fail fast. New internal seam `TallyGuardian.BeforeConsumingForTesting`, called after every check and
+before the insertion, lets a test make a second request overtake the first in that window deterministically.
+
+Tests (Core 1892 -> 1895, +3):
+- `BallotRecordingToolTests.DecryptBallotNonce_TwoRequestsPastTheChecksForOneIssuedBallot_OnlyOneIsAnswered`: the
+  overtaking request gets the one share, the first is refused `AlreadyDecrypted` by the insertion.
+- `BallotRecordingToolTests.DecryptBallotNonce_OnceOnlyState_IsTheGuardiansOwnCopyOfEachIdentifier`: a request with
+  a byte-copied id_B is refused; changing the first request's array, an exported snapshot's, the callback's or one
+  passed to the constructor after a restart leaves the id_B consumed.
+- `IssuedPreEncryptedBallotsTests.List_HoldsItsOwnCopies_OfTheIdentifiersAndCommitment`: changing an input id_B,
+  an id_B read from `Ballots` or `TryGet`, or the returned `Commitment` moves no look-up and no commitment.
+- Mutation check (each fix undone in turn, `BallotRecordingToolTests` and `IssuedPreEncryptedBallotsTests` run,
+  plus `ChallengedBallotDecryptionTests` and `PublishedCastBallotsTests` for the first; both files restored and
+  their SHA-256 matched):
+  insertion result ignored -> the race test fails; the request's own array in the set -> the own-copy test; export
+  without copies -> the own-copy test; import without copies -> the own-copy test; the issued list keyed on the
+  caller's array -> the issued-list test and the own-copy test; the callback given the set's own entry -> the
+  own-copy test. (The last was run after the documentation edits; it was restored by hand and the full Core suite
+  re-run, 1895/1895, build 0 warnings.)
+
+Gate before re-pinning (code changes in, before the new tests): build `0 Warning(s)`, `0 Error(s)`; Perf `Passed:
+231, Total: 231`; Core `Passed: 1892, Total: 1892` (no test failed, nothing to re-pin); smoke `correctness passed`,
+EncryptBallots 0.249 ms/ballot 165.7 MB, VerifyBallots 0.987 ms/ballot 12.2 MB; console `Device Device 1: 4
+ballots, chaining mode None.`, the challenged-ballot line, the issued-list line, the pre-encrypted demo tally line
+unchanged, `Done.`, the expected ReadKey exception; `tally.json` 0-0: 3, 0-1: 0, every other count 0.
+
+Gate (all changes in): build `0 Warning(s)`, `0 Error(s)`; Perf `Passed: 231, Total: 231`; Core `Passed: 1895,
+Total: 1895`; smoke `correctness passed`, EncryptBallots 0.245 ms/ballot 165.8 MB, VerifyBallots 1.033 ms/ballot
+12.2 MB, JSON 21,193 bytes, protobuf 12,482 bytes; console lines as before (commitment `ADC9E0082FDD8840...`,
+random per run), `Done.`, the expected ReadKey exception; `tally.json` 0-0: 3, 0-1: 0. No input under
+`C:/temp/eg/data` changed, so no .bak.
+
+Perf: no ballot hot path changed. VerifyBallots 0.987 and 1.033 ms/ballot in this round's two runs vs 0.982 in S9b:
+run-to-run noise (V6-V9 untouched); allocation and protobuf size unchanged. The new cost is two 32-byte copies per
+pre-encrypted nonce request.
+
+Decisions taken (low-stakes API shape): copies on the way in and out rather than a copying struct constructor;
+`Commitment` stays `byte[]` (a copy per read); `TryGet` returns a copy; the race test uses a re-entrant seam, not
+threads, so it is deterministic.
+
+Open question (for the user):
+- **S9b-3: once-only scope when n >= 2k.** (a, built) per guardian, as Q31's "guardian-side state" reads,
+  documented, with detection by comparing every guardian's consumed list against the recording tool's log;
+  (b) the deployment always asks more than n - k guardians (all n) for a pre-encrypted nonce, which an honest
+  recording tool can do but a dishonest administrator can ignore; (c) S10 publishes each guardian's consumed list
+  in the record so that a verifier flags an id_B consumed by guardians outside one request's set; (d) guardians
+  share the consumed set (a coordination protocol this library does not have). Recommendation: (a) now, plus (b)
+  as the documented deployment rule, and (c) in S10.
+
+Carry-overs: the RLA authorization path (with Q-S7b / Q22); S9b-3 (c) for S10.
+
+### 2026-10-07 — S9b (nonce-decryption authorization gate: Q31 / S9-6, the S7 security review finding)
+Worktree changes only; nothing committed. Implements user decision Q31 ("Issued list + record check"). No hash
+input, KAT vector or pinned value moved; one test was flipped and renamed (below); the pinned-value inventory is
+unchanged. No ballot hot path was touched (encryption, V6-V9, the tally and its decryption are unchanged).
+
+**Q31 / S9-6 / the security review finding (S7's `TallyGuardian.DecryptBallotNonce` trusts the caller's Status):
+closed.** Both nonce-decryption entry points now decide whether a request is authorized before anything else, from
+lists the guardian holds itself, and refuse with the new `BallotNonceDecryptionRefusedException` (`GuardianIndex`,
+`BallotId`, `Reason`) before any exponentiation with ẑ_i and without producing a share:
+- `IPublishedCastBallots` / `PublishedCastBallots` (`Tally/PublishedCastBallots.cs`): the guardian's view of the
+  published record's cast ballots, regular and pre-encrypted. Three hash sets of 32-byte keys (id_B, H_I, and
+  SHA-256 of C_ξB,0's 512-byte encoding), with `HashCode`-seeded hashing (crafted ids cannot degrade the sets),
+  filled incrementally (`Add`, `AddRange`, `FromRecord`), thread-safe, about 3 x 32 bytes per cast ballot plus set
+  overhead. Bound to H_E: `Add` refuses a ballot not recorded `Cast`, without C_ξB, with a non-32-byte id_B/H_I,
+  or whose H_I is not H(H_E; 0x20, id_B) for the view's H_E (another election's ballot, or one failing 5.B).
+  `Match` reports each matching field as `CastBallotMatch` flags. The interface lets a deployment back it with
+  its own store.
+- `IssuedPreEncryptedBallots` (`PreEncryption/IssuedPreEncryptedBallots.cs`): the printer-committed list, one
+  `IssuedPreEncryptedBallot` (id_B, C_ξB,0) per printed ballot, bound to H_E, fixed at construction
+  (`FromPrintedBallots`), duplicates refused. Library (non-spec) canonical encoding: the 48 ASCII bytes
+  `electionguard-cs:issued-pre-encrypted-ballots:v1` ‖ H_E (32) ‖ n (4 bytes BE) ‖ entries in strictly increasing
+  id_B order, each b(id_B,32) ‖ b(C_ξB,0,512); `Commitment` = SHA-256 of those bytes (plain SHA-256, not the spec's
+  H, no §5.5 domain byte). `FromCanonicalBytes` reads it strictly (tag, H_E, exact length, order, C_ξB,0 < p;
+  `NonCanonicalEncodingException`). Guardians compare `Commitment` to confirm they hold the same list.
+- `TallyGuardian.DecryptBallotNonce(EncryptedBallot, record, castBallots, issuedBallots)` (challenged path, both
+  required, no overload without them): `ForeignElection` if either list's H_E differs; `CastBallot` if the
+  request's id_B, H_I or C_ξB,0 matches any cast ballot; `IssuedPreEncryptedBallot` if its id_B is on the issued
+  list (S9b-1 below). Then, unchanged, the Status check (kept as a non-authoritative sanity check), structure, H_I,
+  membership and the eq. (38) proof.
+- `TallyGuardian.DecryptBallotNonce(PreEncryptedBallot, record, castBallots, issuedBallots)` (pre-encrypted path):
+  `ForeignElection`; `CastBallot`; `NotIssued` if the id_B is not on the list; `IssuedNonceDiffers` if its C_ξB,0 is
+  not the committed one; `AlreadyDecrypted` if this guardian has decrypted that id_B before. Then structure, H_I,
+  membership and proof. The id_B is consumed only after every check passes, atomically with a last look (lock),
+  then the optional write-ahead callback runs, then the share is computed: a malformed request burns nothing.
+- Guardian-side state: `TallyGuardian(index, shares, decryptedPreEncryptedBallots = null,
+  recordPreEncryptedBallotDecryption = null)`; `DecryptedPreEncryptedBallots` exports the consumed id_Bs (a
+  snapshot to persist and pass back after a restart). The callback sees each id_B before the share exists; if it
+  throws, no share is computed and the id_B stays consumed (fail closed). Documented: a premature or duplicate
+  request burns a printed ballot, a detectable denial of service that the exported set records.
+- `TallyAdmin.DecryptChallengedBallot(guardians, ballot, record, castBallots, issuedBallots)` and
+  `DecryptPreEncryptedBallotNonce(guardians, ballot, record, castBallots, issuedBallots)` pass both lists to each
+  guardian. `CombineChallengedBallot` and `CombinePreEncryptedBallotNonce` take neither: the administrator is the
+  party the check guards against, and whoever holds k shares can combine without it (low-stakes API choice).
+- Trust model, documented in `TallyGuardian` (class and both methods), `IPublishedCastBallots`,
+  `IssuedPreEncryptedBallots`, `ChallengedBallotStatement.For`, the `PreEncryptedBallotNonceStatement` class
+  remarks (now "Threat model ... closed by Q31"), `TallyAdmin.CombinePreEncryptedBallotNonce`, `BallotStatus.Challenged`,
+  `BallotRecordingTool` and `BallotStructure`: everything in a request, Status included, is the requester's claim;
+  the lists are the guardian's own (a distributed guardian builds the cast view from its own copy of the record and
+  takes the issued list from the printer, never from the administrator). The cast view protects only what it holds,
+  so challenged ballots are decrypted once the record's cast ballots are final; the pre-encrypted path does not
+  depend on that (the issued list keeps regular ballots out, once-only keeps a recorded ballot out).
+- Console: `Program.cs` builds `PublishedCastBallots.FromRecord` over the submitted ballots and an empty issued
+  list (that election issues no pre-encrypted ballots). `PreEncryptedElectionDemo` commits the issued list after
+  printing, starts the cast view with the regular cast ballots, adds each `RecordCast` result as it is recorded, and
+  then shows the guardians refusing a second request for a recorded ballot and a regular ballot dressed as
+  pre-encrypted (it throws if either is answered). New console line: `Issued list of 4 pre-encrypted ballots,
+  commitment <16 hex>...; the guardians refused a repeated request and a regular ballot dressed as pre-encrypted.`
+- CLAUDE.md: the Tally bullet's challenged-ballot sentences and the pre-encryption bullet now state the gate and
+  the trust model (the "open question S9-6" text was false).
+
+**S9b-1 (implementer reading, a question for the user): the challenged path also consults the issued list.** Found
+while writing the record check: a printed pre-encrypted ballot not yet recorded is in no cast view, so its id_B, H_I
+and C_ξB, wrapped in a regular-shaped ballot marked challenged, pass every challenged-path check (structure, H_I,
+the eq. (38) proof, which binds the printed ballot's H_I) and k shares give its ξ_B ahead of the voter, outside
+Q31's once-only rule. Q31's pre-encrypted clause says an issued ballot's nonce is decrypted at most once; this
+reading makes that hold on both paths (a refusal, the conservative direction), so it is built: the challenged path
+refuses an id_B on the issued list (`IssuedPreEncryptedBallot`; matching id_B suffices, since an issued C_ξB under
+another id_B has another H_I and fails eq. (38)). In an election without pre-encrypted ballots the list is empty.
+Listed for the user's acceptance.
+
+**Test changes (Core 1862 -> 1892, +30).**
+- Mechanical (before the gate below): every caller passes the new arguments, an empty cast view and an issued list
+  holding the ballot under test (so each existing test still reaches the check it was written for):
+  `ChallengedBallotDecryptionTests` (`Election.NoCastBallots`, later `NoIssuedBallots`), `KnownAnswerTests.
+  ChallengedBallots` (empty lists; the KAT vectors are untouched), `PreEncryptedRecordVerificationTests:354`,
+  `BallotRecordingToolTests`, and the `PreEncryptedElection` fixture (`NoCastBallots`, `NoIssuedBallots`,
+  `IssuedFor(...)`, `SecretShares(index)`). The fixture's `Guardians` is now built fresh on every read: guardians
+  carry once-only state and the fixture is a shared singleton documented as read-only.
+- Flipped and renamed (not re-pinned to new output): `..._WithHashTrimming_OpensIt_KnownExposure_S9_6` ->
+  `DecryptBallotNonce_RegularCastBallotWrappedAsPreEncrypted_WithHashTrimming_IsRefused_S9_6`, as its own doc
+  comment instructed. It now uses the realistic lists (the printer's issued list, which the regular id_B is not on,
+  and a cast view holding the regular ballot): `CastBallot` refusal with the view, `NotIssued` without it, the
+  administrator's wrapper refused, no exponentiation, nothing consumed.
+- New, `BallotRecordingToolTests` (+9): honest issued uncast ballot decrypted once and recorded by the answering
+  guardians only; not on the issued list; issued id_B with another ballot's C_ξB (`IssuedNonceDiffers`, and the
+  issued ballot still decrypts); second request for the same issued id_B (both answering guardians, and the
+  administrator's wrapper with a quorum including one of them); restart persistence and the write-ahead callback
+  (recorded before the share; a throwing store means no share and the id_B stays consumed); a malformed request
+  (broken proof) for an issued id_B consumes nothing; an issued ballot already recorded cast refused by the record
+  check alone (guardians with no memory of it; all three fields match; the cast record relabelled challenged is
+  refused on the challenged path too); lists of another election; S9b-1 (shows the shares would open the printed
+  ballot without the issued-list check, then the refusal).
+- New, `ChallengedBallotDecryptionTests` (+7): a cast regular ballot relabelled challenged, under its own id and
+  under a new id (theory, 2), refused by the record check with no exponentiation (the test first asserts that
+  structure and proof would pass); a challenged ballot sharing only id_B+H_I, only H_I, or only C_ξB,0 with a
+  cast ballot (theory, 3); the honest challenged path with cast ballots in the view decrypts and passes V13/V14; a
+  cast view of another election.
+- New, `IssuedPreEncryptedBallotsTests` (+11): the documented byte layout and SHA-256 commitment; commitment
+  independent of input order and changed by any entry or H_E; `FromPrintedBallots` lookups and round trip;
+  duplicate or 31-byte id_B; seven malformed encodings.
+- New, `PublishedCastBallotsTests` (+3): `FromRecord` holds cast ballots only (regular and pre-encrypted); `Match`
+  per field, by content, missing or wrong-length values match nothing; `Add` refuses non-cast, a wrong H_I, another
+  election's ballot; re-adding is idempotent.
+- "No exponentiation" is shown with the existing `PartialDecryptionTamperForTesting` seam, which runs immediately
+  after `MontgomeryModP.PowModP(C_ξB,0, ẑ_i)` with no branch between: it never fires on a refusal.
+- Mutation check (each guard disabled in turn in `TallyGuardian.cs`, the four affected classes run, the file
+  restored and its SHA-256 compared): record check off -> 7 failures (the relabelled theory x2, the shared-value
+  theory x3, the recorded-cast test, the flipped S9-6 test); issued check off -> 2; issued C_ξB,0 comparison off ->
+  1; once-only off -> 2; consuming before the proof check -> 1; the challenged path's issued check off -> 1 (S9b-1);
+  the cast view's H_E check off -> 2.
+
+Gate before re-pinning (all source changes and the mechanical call-site updates in, before any test was flipped or
+added):
+- Build: `0 Warning(s)`, `0 Error(s)`.
+- Tests: Perf `Passed: 231, Total: 231`; Core `Failed: 1, Passed: 1861, Total: 1862`. Failing:
+  `BallotRecordingToolTests.DecryptBallotNonce_RegularCastBallotWrappedAsPreEncrypted_WithHashTrimming_OpensIt_KnownExposure_S9_6`
+  (`BallotNonceDecryptionRefusedException : Guardian 1 refuses to decrypt ballot wrapper's nonce: its id_B, H_I,
+  C_ξB,0 matches a cast ballot in the published record`), the expected flip.
+- Smoke: `correctness passed`. EncryptBallots 0.247 ms/ballot, 165.7 MB; VerifyBallots 1.016 ms/ballot, 12.2 MB;
+  JSON 21,233 bytes, protobuf 12,482 bytes.
+- Console: `Device Device 1: 4 ballots, chaining mode None.`, `Challenged ballot 0-challenged, contest 0: 0-0=1,
+  0-1=0, ...`, the new issued-list line, the pre-encrypted demo tally line (`mayor-ada: 2, mayor-grace: 2,
+  mayor-alan: 1, council-barbara: 2, council-claude: 2, council-donald: 2, council-edsger: 2. Verifications 1-11 and
+  15-19 passed.`), `Done.`, then the expected ReadKey `InvalidOperationException`. `tally.json`: 0-0: 3, 0-1: 0,
+  every field 0.
+(The S9b-1 check was added after this gate; it changed one more signature, again only call sites, and the gate
+below covers it.)
+
+Gate (all changes in):
+- Build: `0 Warning(s)`, `0 Error(s)`.
+- Tests: Perf `Passed: 231, Total: 231`; Core `Passed: 1892, Total: 1892` (S9 review round 3: 1862; +30).
+- Smoke: `correctness passed`. EncryptBallots 0.242 ms/ballot, 165.8 MB; VerifyBallots 0.982 ms/ballot, 12.2 MB;
+  JSON 21,368 bytes, protobuf 12,482 bytes.
+- Console: the same lines as above (commitment `FC14940AEAC4045F...`, random per run), `Done.`, the expected ReadKey
+  exception. `tally.json`: 0-0: 3, 0-1: 0, every field 0. No input under `C:/temp/eg/data` changed, so no .bak.
+
+Perf: no ballot hot path changed. Smoke Encrypt 0.242 / Verify 0.982 ms/ballot vs S9's 0.244 / 0.996 (and round
+3's 0.248 / 1.007): within noise; allocation and protobuf size unchanged. The new checks cost three hash-set
+lookups (one SHA-256 of 512 bytes) per nonce request, nothing per ballot elsewhere.
+
+Decisions taken (low-stakes API shape, recorded here):
+- The issued list commits C_ξB,0 with each id_B (not id_B alone): the guardian then also refuses an issued id_B
+  carrying another encrypted nonce, so a request cannot burn an issued ballot with a nonce of its own.
+- The once-only state lives in `TallyGuardian` (constructor import, `DecryptedPreEncryptedBallots` export, optional
+  write-ahead callback), not in a separate object.
+- One new exception type with a `Reason` discriminator, distinct from `ArgumentException` (malformed ballot) and
+  `TallyDecryptionException` (C_ξB fails its checks).
+- The administrator's `Combine*` methods take no lists (see above).
+
+Open questions (for the user):
+- **S9b-1:** accept the strict reading built above (the challenged path refuses an id_B on the issued list), or
+  drop it? Recommendation: keep it; it is the only thing that stops a printed ballot from being opened through the
+  challenged path before its voter uses it, and it costs one lookup.
+- **S9b-2: retries under once-only.** Every guardian that answers consumes the id_B, so if the administrator's
+  combine fails afterwards (a guardian's share lost, a network error, a wrong m_i), a retry is refused by those
+  guardians and the printed ballot is burned. Options: (a, built) strict once-only, the voter is issued another
+  ballot; (b) a guardian may re-send the same m_i (it is deterministic) to the same authenticated recording tool,
+  which needs requester identity this library does not model; (c) a short retry window per id_B. Recommendation:
+  keep (a) until the record format and transport (S10) can carry an authenticated requester, then consider (b).
+  (Review round 1: "those guardians" is exact; once-only is per guardian, so with n >= 2k a retry through a
+  quorum disjoint from the first is answered. See S9b-3 in the round-1 entry above.)
+
+Carry-overs: none blocking. S10 (record format) should carry the issued list's commitment in the published record
+so verifiers and guardians can compare it, and give guardians a way to build `PublishedCastBallots` from the
+record as it grows.
 
 ### 2026-10-07 — S9 review round 3 (G31: S9-6 restated, null device id, 15.A beta half, pre-encrypted JSON negatives)
 Worktree changes only; nothing committed. One source change (`BallotStructure`); no hash input, KAT vector or

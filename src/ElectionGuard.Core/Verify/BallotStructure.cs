@@ -291,7 +291,7 @@ public static class BallotStructure
         // §4.1.5: an election that uses pre-encrypted ballots names Ω in its manifest. Without one
         // there is no pre-encrypted ballot to verify or whose nonce to decrypt, and a request built
         // around a regular ballot's id_B, H_I and C_ξB (the same construction, §4.2) is refused
-        // here (S9 open question S9-6).
+        // here (S9-6; the guardians also check the issued list and the record, user decision Q31).
         if (manifest.HashTrimmingFunction is null)
         {
             return $"Pre-encrypted ballot {ballot.Id}: the manifest names no hash-trimming function, so the election does not use pre-encrypted ballots (§4.1.5).";

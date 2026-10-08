@@ -12,7 +12,8 @@ namespace ElectionGuard.Core.PreEncryption;
 /// It receives the pre-encrypted ballot as the encrypting tool produced it (§4.2: its ballot style,
 /// id_B, chaining field and confirmation code, which ξ_B alone does not determine), the decrypted
 /// ballot nonce ξ_B (obtained from the guardians with
-/// <see cref="Tally.TallyAdmin.DecryptPreEncryptedBallotNonce"/>, or from a local database, §4.3.1),
+/// <see cref="Tally.TallyAdmin.DecryptPreEncryptedBallotNonce"/>, once per ballot and only for one on
+/// the printer-committed <see cref="IssuedPreEncryptedBallots"/> list, or from a local database, §4.3.1),
 /// and, for a cast ballot, the voter's selections. It regenerates every encryption on the ballot
 /// from ξ_B (eq. 121) and refuses to go on unless the regenerated ballot is exactly the given one:
 /// otherwise a wrong ξ_B would yield proofs about other ciphertexts than the ones the voter's short

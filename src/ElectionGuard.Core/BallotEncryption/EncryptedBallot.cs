@@ -120,7 +120,9 @@ public enum BallotStatus
 
     /// <summary>
     /// Challenged (spoiled for audit): never tallied; decrypted and published instead (§3.6.7). Only
-    /// a challenged ballot's nonce is decrypted (<see cref="Tally.TallyGuardian.DecryptBallotNonce"/>).
+    /// a challenged ballot's nonce is decrypted (<see cref="Tally.TallyGuardian.DecryptBallotNonce"/>), and
+    /// the guardians decide that from the published record's cast ballots, not from this status (user
+    /// decision Q31: a status is the requester's claim).
     /// </summary>
     Challenged = 2,
 }

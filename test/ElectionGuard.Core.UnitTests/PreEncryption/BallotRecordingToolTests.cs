@@ -478,7 +478,7 @@ public class BallotRecordingToolTests
         var election = Election;
         var ballot = election.PreEncrypt("b");
 
-        var ballotNonce = new TallyAdmin().DecryptPreEncryptedBallotNonce(election.Guardians.Take(2).ToList(), ballot, election.Record);
+        var ballotNonce = new TallyAdmin().DecryptPreEncryptedBallotNonce(election.Guardians.Take(2).ToList(), ballot, election.Record, election.NoCastBallots, election.IssuedFor(ballot));
 
         Assert.Equal(ballot.ConfirmationCode, new BallotPreEncryptor(election.Record, PreEncryptedElection.DeviceId)
             .PreEncrypt(ballot.Id, ballot.BallotStyleId, ballot.SelectionEncryptionIdentifier, ballotNonce, null).ConfirmationCode);
@@ -490,7 +490,7 @@ public class BallotRecordingToolTests
         var election = Election;
         var ballot = election.PreEncrypt("b");
         var admin = new TallyAdmin();
-        var shares = election.Guardians.Take(2).Select(x => x.DecryptBallotNonce(ballot, election.Record)).ToList();
+        var shares = election.Guardians.Take(2).Select(x => x.DecryptBallotNonce(ballot, election.Record, election.NoCastBallots, election.IssuedFor(ballot))).ToList();
         shares[0] = new BallotNoncePartialDecryption { GuardianIndex = shares[0].GuardianIndex, BallotId = shares[0].BallotId, Mi = shares[0].Mi * new IntegerModP(EGParameters.G) };
 
         var exception = Assert.Throws<TallyDecryptionException>(() => admin.CombinePreEncryptedBallotNonce(ballot, election.Record, shares));
@@ -506,7 +506,7 @@ public class BallotRecordingToolTests
         var ballot = election.PreEncrypt("b");
         var tampered = ballot with { SelectionEncryptionIdentifierHash = new SelectionEncryptionIdentifierHash(new byte[32]) };
 
-        Assert.Throws<ArgumentException>(() => election.Guardians[0].DecryptBallotNonce(tampered, election.Record));
+        Assert.Throws<ArgumentException>(() => election.Guardians[0].DecryptBallotNonce(tampered, election.Record, election.NoCastBallots, election.IssuedFor(tampered)));
     }
 
     private static PreEncryptedBallot WithNonce(PreEncryptedBallot ballot, EncryptedBallotNonce nonce) => ballot with { EncryptedBallotNonce = nonce };
@@ -544,12 +544,12 @@ public class BallotRecordingToolTests
         Assert.False(BallotNonceEncryption.ProofHolds(ballot.SelectionEncryptionIdentifierHash, tampered));
         var bad = WithNonce(ballot, tampered);
 
-        var exception = Assert.Throws<TallyDecryptionException>(() => election.Guardians[0].DecryptBallotNonce(bad, election.Record));
+        var exception = Assert.Throws<TallyDecryptionException>(() => election.Guardians[0].DecryptBallotNonce(bad, election.Record, election.NoCastBallots, election.IssuedFor(bad)));
         Assert.Null(exception.OffendingGuardian);
         Assert.Contains("eq. 38", exception.Message);
 
         // The administrator checks it again before combining anything.
-        var shares = election.Guardians.Take(2).Select(x => x.DecryptBallotNonce(ballot, election.Record)).ToList();
+        var shares = election.Guardians.Take(2).Select(x => x.DecryptBallotNonce(ballot, election.Record, election.NoCastBallots, election.IssuedFor(ballot))).ToList();
         var adminException = Assert.Throws<TallyDecryptionException>(() => new TallyAdmin().CombinePreEncryptedBallotNonce(bad, election.Record, shares));
         Assert.Null(adminException.OffendingGuardian);
         Assert.Contains("eq. 38", adminException.Message);
@@ -598,11 +598,11 @@ public class BallotRecordingToolTests
         Assert.False(SubgroupMembership.IsMember(forged.C0));
         var bad = WithNonce(ballot, forged);
 
-        var exception = Assert.Throws<TallyDecryptionException>(() => election.Guardians[0].DecryptBallotNonce(bad, election.Record));
+        var exception = Assert.Throws<TallyDecryptionException>(() => election.Guardians[0].DecryptBallotNonce(bad, election.Record, election.NoCastBallots, election.IssuedFor(bad)));
         Assert.Null(exception.OffendingGuardian);
         Assert.Contains("Z_p^r", exception.Message);
 
-        var shares = election.Guardians.Take(2).Select(x => x.DecryptBallotNonce(ballot, election.Record)).ToList();
+        var shares = election.Guardians.Take(2).Select(x => x.DecryptBallotNonce(ballot, election.Record, election.NoCastBallots, election.IssuedFor(ballot))).ToList();
         var adminException = Assert.Throws<TallyDecryptionException>(() => new TallyAdmin().CombinePreEncryptedBallotNonce(bad, election.Record, shares));
         Assert.Null(adminException.OffendingGuardian);
         Assert.Contains("Z_p^r", adminException.Message);
@@ -615,9 +615,9 @@ public class BallotRecordingToolTests
         var election = Election;
         var ballot = election.PreEncrypt("b");
         var bad = WithNonce(ballot, WithNonce(ballot.EncryptedBallotNonce, c1: ballot.EncryptedBallotNonce.C1[1..]));
-        var shares = election.Guardians.Take(2).Select(x => x.DecryptBallotNonce(ballot, election.Record)).ToList();
+        var shares = election.Guardians.Take(2).Select(x => x.DecryptBallotNonce(ballot, election.Record, election.NoCastBallots, election.IssuedFor(ballot))).ToList();
 
-        Assert.Contains("C_ξB,1", Assert.Throws<ArgumentException>(() => election.Guardians[0].DecryptBallotNonce(bad, election.Record)).Message);
+        Assert.Contains("C_ξB,1", Assert.Throws<ArgumentException>(() => election.Guardians[0].DecryptBallotNonce(bad, election.Record, election.NoCastBallots, election.IssuedFor(bad))).Message);
         Assert.Throws<ArgumentException>(() => new TallyAdmin().CombinePreEncryptedBallotNonce(bad, election.Record, shares));
     }
 
@@ -643,18 +643,19 @@ public class BallotRecordingToolTests
         using var tampered = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(node.ToJsonString()));
         var bad = serializer.DeserializeBallot(tampered)!;
         Assert.Null(bad.DeviceId);
-        var shares = election.Guardians.Take(2).Select(x => x.DecryptBallotNonce(ballot, election.Record)).ToList();
+        var shares = election.Guardians.Take(2).Select(x => x.DecryptBallotNonce(ballot, election.Record, election.NoCastBallots, election.IssuedFor(ballot))).ToList();
 
-        Assert.Contains("names no device", Assert.Throws<ArgumentException>(() => election.Guardians[0].DecryptBallotNonce(bad, election.Record)).Message);
+        Assert.Contains("names no device", Assert.Throws<ArgumentException>(() => election.Guardians[0].DecryptBallotNonce(bad, election.Record, election.NoCastBallots, election.IssuedFor(bad))).Message);
         Assert.Contains("names no device", Assert.Throws<ArgumentException>(() => new TallyAdmin().CombinePreEncryptedBallotNonce(bad, election.Record, shares)).Message);
         Assert.Equal("16.structure", Assert.Throws<VerificationFailedException>(() => new PreEncryptedConfirmationCodeVerification().Verify(bad, election.DeviceHash, election.Record, null)).SubSection);
     }
 
     /// <summary>
     /// A regular cast ballot's published id_B, H_I and C_ξB, wrapped in a made-up pre-encrypted
-    /// ballot of the right shape (S9 open question S9-6). A regular ballot's C_ξB is made exactly as
-    /// a pre-encrypted ballot's (§4.2: "as shown in Section 3.3.4"), and the guardians' checks read
-    /// only id_B, H_I and C_ξB, so the wrapper passes them unless something else refuses it.
+    /// ballot of the right shape (S9-6). A regular ballot's C_ξB is made exactly as a pre-encrypted
+    /// ballot's (§4.2: "as shown in Section 3.3.4"), and the guardians' structural and proof checks
+    /// read only id_B, H_I and C_ξB, so the wrapper passes them; the authorization step (user
+    /// decision Q31) and the manifest's Ω are what refuse it.
     /// </summary>
     private static (EncryptedBallot Regular, PreEncryptedBallot Wrapper) RegularCastBallotWrappedAsPreEncrypted(PreEncryptedElection election)
     {
@@ -669,12 +670,12 @@ public class BallotRecordingToolTests
         };
 
         // The regular cast ballot itself is refused on the challenged path.
-        Assert.Throws<ArgumentException>(() => election.Guardians[0].DecryptBallotNonce(regular, election.Record));
+        Assert.Throws<ArgumentException>(() => election.Guardians[0].DecryptBallotNonce(regular, election.Record, election.NoCastBallots, election.NoIssuedBallots));
         return (regular, wrapper);
     }
 
     /// <summary>
-    /// The enforced part of S9-6: in an election whose manifest names no hash-trimming function,
+    /// One enforced part of S9-6: in an election whose manifest names no hash-trimming function,
     /// which therefore has no pre-encrypted ballots, a guardian and the administrator refuse the
     /// wrapper (§4.1.5).
     /// </summary>
@@ -696,45 +697,376 @@ public class BallotRecordingToolTests
             ExtendedBaseHash = election.Record.ExtendedBaseHash,
             Manifest = election.Manifest with { HashTrimmingFunction = null },
         };
-        var refused = Assert.Throws<ArgumentException>(() => election.Guardians[0].DecryptBallotNonce(wrapper, recordWithoutPreEncryption));
+        var refused = Assert.Throws<ArgumentException>(() => election.Guardians[0].DecryptBallotNonce(wrapper, recordWithoutPreEncryption, election.NoCastBallots, election.IssuedFor(wrapper)));
         Assert.Contains("hash-trimming", refused.Message);
         Assert.Throws<ArgumentException>(() => new TallyAdmin().CombinePreEncryptedBallotNonce(wrapper, recordWithoutPreEncryption, []));
     }
 
     /// <summary>
-    /// KNOWN EXPOSURE, NOT A DESIRED BEHAVIOR (open question S9-6). In an election that has both
-    /// kinds of ballot (its manifest names Ω), the guardians answer the wrapper, and their shares,
-    /// combined as the challenged-ballot path combines them, open the regular cast ballot to its
-    /// exact selections, bypassing its challenged-only gate.
-    ///
-    /// This test asserts that the attack succeeds so that the exposure stays visible and any change
-    /// to it is noticed. When it fails because the guardians or the administrator now refuse the
-    /// wrapper, S9-6 has been fixed: that is not a regression. Replace the open-the-ballot assertions
-    /// with an assertion of the refusal, and rename the test without the KnownExposure suffix.
+    /// S9-6, closed by user decision Q31 (S9b; until then this test pinned the exposure and was named
+    /// <c>..._OpensIt_KnownExposure_S9_6</c>). In an election that has both kinds of ballot (its
+    /// manifest names Ω), the guardians refuse the wrapper: with the regular ballot published as cast,
+    /// by the record check; before it is published, because its id_B is not on the printer's issued
+    /// list. Neither produces a share (the tamper seam, which runs right after the exponentiation with
+    /// ẑ_i, is never reached), and the administrator's wrapper refuses through the guardians.
     /// </summary>
     [Fact]
-    public void DecryptBallotNonce_RegularCastBallotWrappedAsPreEncrypted_WithHashTrimming_OpensIt_KnownExposure_S9_6()
+    public void DecryptBallotNonce_RegularCastBallotWrappedAsPreEncrypted_WithHashTrimming_IsRefused_S9_6()
     {
         var election = Election;
         var (regular, wrapper) = RegularCastBallotWrappedAsPreEncrypted(election);
+        var issued = election.IssuedFor(election.PreEncrypt("printed-1"), election.PreEncrypt("printed-2"));
+        var published = PublishedCastBallots.FromRecord(election.Record.ExtendedBaseHash, [regular]);
+        var guardians = election.Guardians;
+        bool exponentiated = false;
+        guardians.ForEach(x => x.PartialDecryptionTamperForTesting = (_, _, m) => { exponentiated = true; return m; });
 
-        var shares = election.Guardians.Take(2).Select(x => x.DecryptBallotNonce(wrapper, election.Record)).ToList();
-        var asChallenged = new EncryptedBallot
+        var cast = Assert.Throws<BallotNonceDecryptionRefusedException>(() => guardians[0].DecryptBallotNonce(wrapper, election.Record, published, issued));
+        Assert.Equal(BallotNonceDecryptionRefusal.CastBallot, cast.Reason);
+        Assert.Equal(guardians[0].Index, cast.GuardianIndex);
+        Assert.Contains("id_B, H_I, C_ξB,0", cast.Message);
+
+        var notIssued = Assert.Throws<BallotNonceDecryptionRefusedException>(() => guardians[1].DecryptBallotNonce(wrapper, election.Record, election.NoCastBallots, issued));
+        Assert.Equal(BallotNonceDecryptionRefusal.NotIssued, notIssued.Reason);
+
+        Assert.Equal(BallotNonceDecryptionRefusal.CastBallot, Assert.Throws<BallotNonceDecryptionRefusedException>(
+            () => new TallyAdmin().DecryptPreEncryptedBallotNonce(guardians.Take(2).ToList(), wrapper, election.Record, published, issued)).Reason);
+        Assert.False(exponentiated);
+        Assert.All(guardians, x => Assert.Empty(x.DecryptedPreEncryptedBallots));
+    }
+
+    // --- Who may have a pre-encrypted ballot's nonce decrypted (user decision Q31) ---------------
+
+    /// <summary>
+    /// The honest path: a printed ballot on the issued list, with nothing cast that matches it, is
+    /// decrypted once by each answering guardian, which then lists its id_B as decrypted.
+    /// </summary>
+    [Fact]
+    public void DecryptPreEncryptedBallotNonce_IssuedAndUncast_IsDecryptedOnce_AndRecorded()
+    {
+        var election = Election;
+        var ballot = election.PreEncrypt("b");
+        var issued = election.IssuedFor(election.PreEncrypt("other"), ballot);
+        var guardians = election.Guardians;
+
+        var ballotNonce = new TallyAdmin().DecryptPreEncryptedBallotNonce(guardians.Take(2).ToList(), ballot, election.Record, election.NoCastBallots, issued);
+
+        new BallotRecordingTool(election.Record).RecordUncast(ballot, ballotNonce);
+        Assert.Equal([ballot.SelectionEncryptionIdentifier], guardians[0].DecryptedPreEncryptedBallots);
+        Assert.Equal([ballot.SelectionEncryptionIdentifier], guardians[1].DecryptedPreEncryptedBallots);
+        Assert.Empty(guardians[2].DecryptedPreEncryptedBallots);
+    }
+
+    /// <summary>A printed ballot that is not on the issued list (printed later, or by another printer) is refused.</summary>
+    [Fact]
+    public void DecryptBallotNonce_PreEncryptedBallotNotOnTheIssuedList_IsRefused()
+    {
+        var election = Election;
+        var ballot = election.PreEncrypt("b");
+        var issued = election.IssuedFor(election.PreEncrypt("other-1"), election.PreEncrypt("other-2"));
+        var guardian = election.Guardians[0];
+        bool exponentiated = false;
+        guardian.PartialDecryptionTamperForTesting = (_, _, m) => { exponentiated = true; return m; };
+
+        var refused = Assert.Throws<BallotNonceDecryptionRefusedException>(() => guardian.DecryptBallotNonce(ballot, election.Record, election.NoCastBallots, issued));
+
+        Assert.Equal(BallotNonceDecryptionRefusal.NotIssued, refused.Reason);
+        Assert.Equal(ballot.Id, refused.BallotId);
+        Assert.False(exponentiated);
+        Assert.Empty(guardian.DecryptedPreEncryptedBallots);
+    }
+
+    /// <summary>
+    /// An issued id_B carrying another C_ξB than the printer committed for it is refused: here another
+    /// printed ballot's encrypted nonce (whose proof is keyed with the other ballot's H_I and would fail
+    /// anyway), so the request cannot burn the issued ballot or swap in a nonce of its own.
+    /// </summary>
+    [Fact]
+    public void DecryptBallotNonce_IssuedIdentifierWithAnotherEncryptedNonce_IsRefused()
+    {
+        var election = Election;
+        var ballot = election.PreEncrypt("b");
+        var other = election.PreEncrypt("other");
+        var issued = election.IssuedFor(ballot, other);
+        var guardian = election.Guardians[0];
+
+        var refused = Assert.Throws<BallotNonceDecryptionRefusedException>(() => guardian.DecryptBallotNonce(
+            ballot with { EncryptedBallotNonce = other.EncryptedBallotNonce }, election.Record, election.NoCastBallots, issued));
+
+        Assert.Equal(BallotNonceDecryptionRefusal.IssuedNonceDiffers, refused.Reason);
+        Assert.Empty(guardian.DecryptedPreEncryptedBallots);
+
+        // The issued ballot itself is still decryptable.
+        guardian.DecryptBallotNonce(ballot, election.Record, election.NoCastBallots, issued);
+    }
+
+    /// <summary>
+    /// At most once per id_B: a second request is refused by every guardian that answered the first,
+    /// before any exponentiation; the administrator's wrapper, with any quorum that includes one of
+    /// them, is refused as soon as it reaches it.
+    /// </summary>
+    [Fact]
+    public void DecryptBallotNonce_SecondRequestForTheSameIssuedBallot_IsRefused()
+    {
+        var election = Election;
+        var ballot = election.PreEncrypt("b");
+        var issued = election.IssuedFor(ballot);
+        var guardians = election.Guardians;
+        new TallyAdmin().DecryptPreEncryptedBallotNonce(guardians.Take(2).ToList(), ballot, election.Record, election.NoCastBallots, issued);
+        bool exponentiated = false;
+        guardians.ForEach(x => x.PartialDecryptionTamperForTesting = (_, _, m) => { exponentiated = true; return m; });
+
+        foreach (var guardian in guardians.Take(2))
         {
-            Id = wrapper.Id,
+            var refused = Assert.Throws<BallotNonceDecryptionRefusedException>(() => guardian.DecryptBallotNonce(ballot, election.Record, election.NoCastBallots, issued));
+            Assert.Equal(BallotNonceDecryptionRefusal.AlreadyDecrypted, refused.Reason);
+            Assert.Equal(guardian.Index, refused.GuardianIndex);
+        }
+
+        Assert.Equal(BallotNonceDecryptionRefusal.AlreadyDecrypted, Assert.Throws<BallotNonceDecryptionRefusedException>(
+            () => new TallyAdmin().DecryptPreEncryptedBallotNonce([guardians[0], guardians[2]], ballot, election.Record, election.NoCastBallots, issued)).Reason);
+        Assert.False(exponentiated);
+    }
+
+    /// <summary>
+    /// The once-only state survives a restart: a guardian rebuilt from another's
+    /// <see cref="TallyGuardian.DecryptedPreEncryptedBallots"/> refuses those id_Bs. The write-ahead
+    /// callback sees each id_B before the share exists, and when it throws (the store is down) no
+    /// share is computed and the id_B stays consumed.
+    /// </summary>
+    [Fact]
+    public void DecryptBallotNonce_ConsumedIdentifiers_SurviveARestart_AndAreRecordedBeforeTheShare()
+    {
+        var election = Election;
+        var ballot = election.PreEncrypt("b");
+        var second = election.PreEncrypt("c");
+        var issued = election.IssuedFor(ballot, second);
+        var index = election.Guardians[0].Index;
+        var shares = election.SecretShares(index);
+
+        var persisted = new List<SelectionEncryptionIdentifier>();
+        bool shareComputedBeforeRecord = false;
+        var guardian = new TallyGuardian(index, shares, recordPreEncryptedBallotDecryption: persisted.Add);
+        guardian.PartialDecryptionTamperForTesting = (_, _, m) => { shareComputedBeforeRecord |= persisted.Count == 0; return m; };
+        guardian.DecryptBallotNonce(ballot, election.Record, election.NoCastBallots, issued);
+        Assert.Equal([ballot.SelectionEncryptionIdentifier], persisted);
+        Assert.False(shareComputedBeforeRecord);
+
+        var restarted = new TallyGuardian(index, shares, guardian.DecryptedPreEncryptedBallots);
+        Assert.Equal(BallotNonceDecryptionRefusal.AlreadyDecrypted, Assert.Throws<BallotNonceDecryptionRefusedException>(
+            () => restarted.DecryptBallotNonce(ballot, election.Record, election.NoCastBallots, issued)).Reason);
+
+        bool exponentiated = false;
+        var failingStore = new TallyGuardian(index, shares, recordPreEncryptedBallotDecryption: _ => throw new IOException("store unavailable"));
+        failingStore.PartialDecryptionTamperForTesting = (_, _, m) => { exponentiated = true; return m; };
+        Assert.Throws<IOException>(() => failingStore.DecryptBallotNonce(second, election.Record, election.NoCastBallots, issued));
+        Assert.False(exponentiated);
+        Assert.Equal([second.SelectionEncryptionIdentifier], failingStore.DecryptedPreEncryptedBallots);
+    }
+
+    /// <summary>
+    /// Of two requests for one id_B that both pass every check, exactly one is answered: here the
+    /// second overtakes the first after its checks and before it consumes the id_B (the window two
+    /// concurrent requests share), consumes it and gets the share, and the first is then refused by
+    /// the consuming step itself, not by the early look.
+    /// </summary>
+    [Fact]
+    public void DecryptBallotNonce_TwoRequestsPastTheChecksForOneIssuedBallot_OnlyOneIsAnswered()
+    {
+        var election = Election;
+        var ballot = election.PreEncrypt("b");
+        var issued = election.IssuedFor(ballot);
+        var guardian = election.Guardians[0];
+        int shares = 0;
+        guardian.PartialDecryptionTamperForTesting = (_, _, m) => { shares++; return m; };
+        bool overtaken = false;
+        guardian.BeforeConsumingForTesting = () =>
+        {
+            if (!overtaken)
+            {
+                overtaken = true;
+                guardian.DecryptBallotNonce(ballot, election.Record, election.NoCastBallots, issued);
+            }
+        };
+
+        var refused = Assert.Throws<BallotNonceDecryptionRefusedException>(() => guardian.DecryptBallotNonce(ballot, election.Record, election.NoCastBallots, issued));
+
+        Assert.Equal(BallotNonceDecryptionRefusal.AlreadyDecrypted, refused.Reason);
+        Assert.True(overtaken);
+        Assert.Equal(1, shares);
+        Assert.Equal([ballot.SelectionEncryptionIdentifier], guardian.DecryptedPreEncryptedBallots);
+    }
+
+    /// <summary>
+    /// The once-only state holds the guardian's own copy of each id_B: a request whose id_B is a
+    /// byte-for-byte copy in another array is the same id_B, and changing the first request's array,
+    /// an exported snapshot's, the array the write-ahead callback was given or one passed back to the
+    /// constructor after a restart leaves the id_B consumed.
+    /// </summary>
+    [Fact]
+    public void DecryptBallotNonce_OnceOnlyState_IsTheGuardiansOwnCopyOfEachIdentifier()
+    {
+        var election = Election;
+        var ballot = election.PreEncrypt("b");
+        var issued = election.IssuedFor(ballot);
+        var index = election.Guardians[0].Index;
+        var shares = election.SecretShares(index);
+        byte[] original = ((byte[])ballot.SelectionEncryptionIdentifier).ToArray();
+        var copy = ballot with { SelectionEncryptionIdentifier = SelectionEncryptionIdentifier.FromCanonicalBytes(original) };
+        var guardian = new TallyGuardian(index, shares, recordPreEncryptedBallotDecryption: x => ((byte[])x)[2] ^= 0xFF);
+
+        guardian.DecryptBallotNonce(ballot, election.Record, election.NoCastBallots, issued);
+        Assert.Equal(BallotNonceDecryptionRefusal.AlreadyDecrypted, Assert.Throws<BallotNonceDecryptionRefusedException>(
+            () => guardian.DecryptBallotNonce(copy, election.Record, election.NoCastBallots, issued)).Reason);
+
+        ((byte[])ballot.SelectionEncryptionIdentifier)[0] ^= 0xFF;
+        var exported = guardian.DecryptedPreEncryptedBallots.ToList();
+        ((byte[])guardian.DecryptedPreEncryptedBallots.Single())[1] ^= 0xFF;
+        Assert.Equal(BallotNonceDecryptionRefusal.AlreadyDecrypted, Assert.Throws<BallotNonceDecryptionRefusedException>(
+            () => guardian.DecryptBallotNonce(copy, election.Record, election.NoCastBallots, issued)).Reason);
+        Assert.Equal([copy.SelectionEncryptionIdentifier], guardian.DecryptedPreEncryptedBallots);
+
+        var restarted = new TallyGuardian(index, shares, exported);
+        ((byte[])exported[0])[3] ^= 0xFF;
+        Assert.Equal(BallotNonceDecryptionRefusal.AlreadyDecrypted, Assert.Throws<BallotNonceDecryptionRefusedException>(
+            () => restarted.DecryptBallotNonce(copy, election.Record, election.NoCastBallots, issued)).Reason);
+    }
+
+    /// <summary>
+    /// A refused malformed request burns nothing: a broken eq. (38) proof on an issued id_B (with its
+    /// committed C_ξB,0) is refused by the proof check, the id_B is not consumed, and the honest
+    /// request then succeeds.
+    /// </summary>
+    [Fact]
+    public void DecryptBallotNonce_MalformedRequestForAnIssuedBallot_DoesNotConsumeIt()
+    {
+        var election = Election;
+        var ballot = election.PreEncrypt("b");
+        var issued = election.IssuedFor(ballot);
+        var guardian = election.Guardians[0];
+        var bad = WithNonce(ballot, WithNonce(ballot.EncryptedBallotNonce, response: ballot.EncryptedBallotNonce.Response + 1));
+
+        Assert.Throws<TallyDecryptionException>(() => guardian.DecryptBallotNonce(bad, election.Record, election.NoCastBallots, issued));
+        Assert.Empty(guardian.DecryptedPreEncryptedBallots);
+
+        guardian.DecryptBallotNonce(ballot, election.Record, election.NoCastBallots, issued);
+        Assert.Equal([ballot.SelectionEncryptionIdentifier], guardian.DecryptedPreEncryptedBallots);
+    }
+
+    /// <summary>
+    /// An issued ballot already recorded as cast and published is refused by the record check alone:
+    /// here by guardians that have no memory of decrypting it (a restart that lost its state, or a
+    /// guardian that did not take part). Every one of id_B, H_I and C_ξB,0 matches.
+    /// </summary>
+    [Fact]
+    public void DecryptBallotNonce_IssuedBallotAlreadyRecordedCast_IsRefusedByTheRecordCheck()
+    {
+        var election = Election;
+        var (printed, cast) = election.Cast("b", [1], [2, 3]);
+        var issued = election.IssuedFor(printed);
+        var published = PublishedCastBallots.FromRecord(election.Record.ExtendedBaseHash, [cast]);
+        var guardians = election.Guardians;
+        bool exponentiated = false;
+        guardians.ForEach(x => x.PartialDecryptionTamperForTesting = (_, _, m) => { exponentiated = true; return m; });
+
+        // These guardians never decrypted it, so it is the record check, not once-only, that refuses.
+        Assert.All(guardians, x => Assert.Empty(x.DecryptedPreEncryptedBallots));
+        var refused = Assert.Throws<BallotNonceDecryptionRefusedException>(() => guardians[0].DecryptBallotNonce(printed, election.Record, published, issued));
+
+        Assert.Equal(BallotNonceDecryptionRefusal.CastBallot, refused.Reason);
+        Assert.Contains("id_B, H_I, C_ξB,0", refused.Message);
+        Assert.Equal(CastBallotMatch.SelectionEncryptionIdentifier | CastBallotMatch.SelectionEncryptionIdentifierHash | CastBallotMatch.EncryptedBallotNonce,
+            published.Match(printed.SelectionEncryptionIdentifier, printed.SelectionEncryptionIdentifierHash, printed.EncryptedBallotNonce.C0));
+
+        // The cast record relabelled challenged is refused on the challenged path by the same check,
+        // before its status or its pre-encrypted shape is looked at.
+        var relabelled = Relabel(cast, BallotStatus.Challenged);
+        Assert.Equal(BallotNonceDecryptionRefusal.CastBallot, Assert.Throws<BallotNonceDecryptionRefusedException>(
+            () => guardians[1].DecryptBallotNonce(relabelled, election.Record, published, issued)).Reason);
+        Assert.False(exponentiated);
+    }
+
+    /// <summary>
+    /// S9b-1, the other direction of the S9-6 wrapper: a printed pre-encrypted ballot that is not yet
+    /// recorded (so in no cast-ballot view), its id_B, H_I and C_ξB wrapped in a regular-shaped ballot
+    /// marked challenged. It passes the challenged path's status, structure, H_I and eq. (38) checks,
+    /// and k shares would give the printed ballot's ξ_B ahead of the voter, outside the once-only
+    /// rule. The guardians refuse it because its id_B is on the issued list, before any
+    /// exponentiation. Shown first: with an issued list that lacks it, the shares do open it.
+    /// </summary>
+    [Fact]
+    public void DecryptBallotNonce_IssuedPreEncryptedBallotWrappedAsChallenged_IsRefused_S9b_1()
+    {
+        var election = Election;
+        var printed = election.PreEncrypt("printed");
+        var deviceHash = new VotingDeviceInformationHash(election.Record.ExtendedBaseHash, "regular-device");
+        var regular = ElectionFixtureBuilder.CreateEncryptedBallot(election.Record, "regular-device", deviceHash, election.Selections("regular-1", [2], [1, 4]));
+        var wrapper = new EncryptedBallot
+        {
+            Id = printed.Id,
             BallotStyleId = regular.BallotStyleId,
             DeviceId = regular.DeviceId,
-            SelectionEncryptionIdentifier = regular.SelectionEncryptionIdentifier,
-            SelectionEncryptionIdentifierHash = regular.SelectionEncryptionIdentifierHash,
+            SelectionEncryptionIdentifier = printed.SelectionEncryptionIdentifier,
+            SelectionEncryptionIdentifierHash = printed.SelectionEncryptionIdentifierHash,
             Contests = regular.Contests,
             ConfirmationCode = regular.ConfirmationCode,
             ChainingField = regular.ChainingField,
-            EncryptedBallotNonce = regular.EncryptedBallotNonce,
+            EncryptedBallotNonce = printed.EncryptedBallotNonce,
             Weight = regular.Weight,
             Status = BallotStatus.Challenged,
         };
-        var opened = new TallyAdmin().CombineChallengedBallot(asChallenged, election.Record, shares);
-        Assert.Equal([0, 1, 0], opened.Contests[0].Choices.Select(x => x.Value));
-        Assert.Equal([1, 0, 0, 1], opened.Contests[1].Choices.Select(x => x.Value));
+
+        // Without the issued list's check the guardians would answer, and the shares open the printed ballot.
+        var shares = election.Guardians.Take(2).Select(x => x.DecryptBallotNonce(wrapper, election.Record, election.NoCastBallots, election.IssuedFor(election.PreEncrypt("other")))).ToList();
+        var ballotNonce = new TallyAdmin().CombinePreEncryptedBallotNonce(printed, election.Record, shares);
+        Assert.Equal(printed.ConfirmationCode, new BallotPreEncryptor(election.Record, PreEncryptedElection.DeviceId)
+            .PreEncrypt(printed.Id, printed.BallotStyleId, printed.SelectionEncryptionIdentifier, ballotNonce, null).ConfirmationCode);
+
+        var guardians = election.Guardians;
+        bool exponentiated = false;
+        guardians.ForEach(x => x.PartialDecryptionTamperForTesting = (_, _, m) => { exponentiated = true; return m; });
+        var issued = election.IssuedFor(printed);
+        var refused = Assert.Throws<BallotNonceDecryptionRefusedException>(() => guardians[0].DecryptBallotNonce(wrapper, election.Record, election.NoCastBallots, issued));
+        Assert.Equal(BallotNonceDecryptionRefusal.IssuedPreEncryptedBallot, refused.Reason);
+        Assert.Equal(BallotNonceDecryptionRefusal.IssuedPreEncryptedBallot, Assert.Throws<BallotNonceDecryptionRefusedException>(
+            () => new TallyAdmin().DecryptChallengedBallot(guardians.Take(2).ToList(), wrapper, election.Record, election.NoCastBallots, issued)).Reason);
+        Assert.False(exponentiated);
+
+        // An issued list of another election is refused on this path too.
+        Assert.Equal(BallotNonceDecryptionRefusal.ForeignElection, Assert.Throws<BallotNonceDecryptionRefusedException>(
+            () => guardians[0].DecryptBallotNonce(wrapper, election.Record, election.NoCastBallots, PreEncryptedElection.Get(ChainingMode.Simple).NoIssuedBallots)).Reason);
     }
+
+    /// <summary>A cast-ballot view or an issued list made for another election vouches for nothing here.</summary>
+    [Fact]
+    public void DecryptBallotNonce_ListsOfAnotherElection_AreRefused()
+    {
+        var election = Election;
+        var foreign = PreEncryptedElection.Get(ChainingMode.Simple);
+        Assert.False(((byte[])foreign.Record.ExtendedBaseHash).AsSpan().SequenceEqual((byte[])election.Record.ExtendedBaseHash));
+        var ballot = election.PreEncrypt("b");
+        var guardian = election.Guardians[0];
+
+        Assert.Equal(BallotNonceDecryptionRefusal.ForeignElection, Assert.Throws<BallotNonceDecryptionRefusedException>(
+            () => guardian.DecryptBallotNonce(ballot, election.Record, foreign.NoCastBallots, election.IssuedFor(ballot))).Reason);
+        Assert.Equal(BallotNonceDecryptionRefusal.ForeignElection, Assert.Throws<BallotNonceDecryptionRefusedException>(
+            () => guardian.DecryptBallotNonce(ballot, election.Record, election.NoCastBallots, IssuedPreEncryptedBallots.FromPrintedBallots(foreign.Record.ExtendedBaseHash, [ballot]))).Reason);
+        Assert.Empty(guardian.DecryptedPreEncryptedBallots);
+    }
+
+    private static EncryptedBallot Relabel(EncryptedBallot ballot, BallotStatus status) => new()
+    {
+        Id = ballot.Id,
+        BallotStyleId = ballot.BallotStyleId,
+        DeviceId = ballot.DeviceId,
+        SelectionEncryptionIdentifier = ballot.SelectionEncryptionIdentifier,
+        SelectionEncryptionIdentifierHash = ballot.SelectionEncryptionIdentifierHash,
+        Contests = ballot.Contests,
+        ConfirmationCode = ballot.ConfirmationCode,
+        ChainingField = ballot.ChainingField,
+        EncryptedBallotNonce = ballot.EncryptedBallotNonce,
+        Weight = ballot.Weight,
+        PreEncryptedContests = ballot.PreEncryptedContests,
+        Status = status,
+    };
 }
