@@ -591,8 +591,15 @@ public class BallotEncryptor
     /// <paramref name="firstValue"/> is 0 except for the one-value proof of the undervote difference
     /// relation (Note 3.4). <paramref name="weight"/>, when given, is hashed as b(weight, 4) after the
     /// option index: the null-vote relation's format.
+    ///
+    /// Also the proof code of the pre-encrypted ballot recording tool (§4.3: "generates proofs of
+    /// ballot-correctness as in standard ElectionGuard section 3.3.7"), on its combined vectors.
+    /// <paramref name="proofNoncesForTesting"/>, when given, supplies for the commitment to the
+    /// value <c>firstValue + j</c> its u_j and, for every value but the true one, its simulated
+    /// challenge c_j, in place of fresh random values; the known-answer tests use it to reproduce
+    /// the oracle's proofs. Null outside tests.
     /// </summary>
-    private ChallengeResponsePair[] GenerateProofs(
+    internal static ChallengeResponsePair[] GenerateProofs(
         int valueToEncrypt,
         int firstValue,
         int lastValue,
@@ -601,15 +608,27 @@ public class BallotEncryptor
         SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash,
         int contestIndex,
         int? optionIndex,
-        int? weight = null)
+        int? weight = null,
+        Func<int, (IntegerModQ U, IntegerModQ C)>? proofNoncesForTesting = null)
     {
         List<(IntegerModQ u, IntegerModP a, IntegerModP b, IntegerModQ? cj)> commitments = new();
 
         for (int i = firstValue; i <= lastValue; i++)
         {
-            var keyPair = KeyPair.GenerateRandom();
-            IntegerModQ u = keyPair.SecretKey;
-            IntegerModP a = keyPair.PublicKey;
+            var testNonces = proofNoncesForTesting?.Invoke(i - firstValue);
+            IntegerModQ u;
+            IntegerModP a;
+            if (testNonces is { } fixedNonces)
+            {
+                u = fixedNonces.U;
+                a = MontgomeryModP.PowModP(EGParameters.G, u);
+            }
+            else
+            {
+                var keyPair = KeyPair.GenerateRandom();
+                u = keyPair.SecretKey;
+                a = keyPair.PublicKey;
+            }
 
             IntegerModP b;
             IntegerModQ? cj = null;
@@ -619,7 +638,7 @@ public class BallotEncryptor
             }
             else
             {
-                cj = ElectionGuardRandom.GetIntegerModQ();
+                cj = testNonces?.C ?? ElectionGuardRandom.GetIntegerModQ();
                 var t = u + (valueToEncrypt - i) * cj.Value;
                 b = MontgomeryModP.PowModP(electionPublicKeys.VoteEncryptionKey, t);
             }

@@ -11,7 +11,8 @@ namespace ElectionGuard.Core.Verify;
 /// fields the manifest declares for it (§3.3.9), each once; and it carries an encrypted contest data
 /// field exactly where the manifest declares contest data for the contest, with C_1 of exactly
 /// 32·b_Λ bytes (§3.3.10); and it carries the encrypted ballot nonce C_ξB, with C_ξB,1 of exactly
-/// 32 bytes (§3.3.4), and its 36-byte chaining field B_C (§3.4.4).
+/// 32 bytes (§3.3.4), its 36-byte chaining field B_C (§3.4.4), and the device id S_device it was
+/// encrypted on (§3.4.3).
 ///
 /// The spec has no lettered sub-check for this. It is implicit in its index-keyed model: one
 /// ciphertext per (contest index, option index) (§3.1.3 p.17; §3.4 "unique contest index"), and
@@ -52,7 +53,8 @@ public static class BallotStructure
     }
 
     /// <summary>
-    /// Verification 16's structure for a pre-encrypted ballot (eqs. 112-116, 16.A-16.C): its ballot
+    /// Verification 16's structure for a pre-encrypted ballot (eqs. 112-116, 16.A-16.C): the manifest
+    /// names a hash-trimming function, so the election uses pre-encrypted ballots (§4.1.5); its ballot
     /// style is in the manifest; it lists exactly that style's contests, each once, under the
     /// manifest's contest index; and each contest with m options and selection limit L has m + L
     /// selection vectors of m encryptions each, one for each option exactly once and L null vectors.
@@ -143,7 +145,24 @@ public static class BallotStructure
             return missingContest;
         }
 
-        return BallotNonceViolation(ballot) ?? ChainingFieldViolation(ballot.Id, ballot.ChainingField);
+        return BallotNonceViolation(ballot.Id, ballot.EncryptedBallotNonce)
+            ?? ChainingFieldViolation(ballot.Id, ballot.ChainingField)
+            ?? DeviceIdViolation(ballot.Id, ballot.DeviceId);
+    }
+
+    /// <summary>
+    /// The ballot names the device it was encrypted on, S_device (§3.4.3 eq. 72; §4.1.4 eq. 119):
+    /// Verifications 8 and 16 hash it into H_DI, and the recording tool regenerates a pre-encrypted
+    /// ballot on its device. The property is required, but a JSON document that writes null (or a
+    /// protobuf message without the field) yields a ballot without it, which would otherwise surface
+    /// as an <see cref="ArgumentNullException"/> far from the cause, or, on the pre-encrypted nonce
+    /// path, after the guardians had already decrypted their shares (S9 review round 3).
+    /// </summary>
+    private static string? DeviceIdViolation(string ballotId, string? deviceId)
+    {
+        return deviceId is null
+            ? $"Ballot {ballotId} names no device; every ballot carries the S_device it was encrypted on (§3.4.3 eq. 72, §4.1.4 eq. 119)."
+            : null;
     }
 
     /// <summary>
@@ -165,17 +184,16 @@ public static class BallotStructure
     /// (which refuses a missing field) nor the JSON one (which refuses a missing property) yields
     /// one without it; a JSON document that writes null does.
     /// </summary>
-    private static string? BallotNonceViolation(EncryptedBallot ballot)
+    private static string? BallotNonceViolation(string ballotId, EncryptedBallotNonce? nonce)
     {
-        var nonce = ballot.EncryptedBallotNonce;
         if (nonce is null)
         {
-            return $"Ballot {ballot.Id} has no encrypted ballot nonce C_ξB; every ballot carries one (§3.3.4).";
+            return $"Ballot {ballotId} has no encrypted ballot nonce C_ξB; every ballot carries one (§3.3.4, §4.2).";
         }
 
         if (nonce.C1 is not { Length: BallotNonceEncryption.NonceBytes })
         {
-            return $"Ballot {ballot.Id} has an encrypted ballot nonce whose C_ξB,1 is {nonce.C1?.Length ?? 0} bytes; it is exactly {BallotNonceEncryption.NonceBytes} (eq. 37).";
+            return $"Ballot {ballotId} has an encrypted ballot nonce whose C_ξB,1 is {nonce.C1?.Length ?? 0} bytes; it is exactly {BallotNonceEncryption.NonceBytes} (eq. 37).";
         }
 
         return null;
@@ -270,6 +288,15 @@ public static class BallotStructure
     /// <summary>A description of the first structural violation, or null when there is none.</summary>
     internal static string? FindViolation(PreEncryptedBallot ballot, Manifest manifest)
     {
+        // §4.1.5: an election that uses pre-encrypted ballots names Ω in its manifest. Without one
+        // there is no pre-encrypted ballot to verify or whose nonce to decrypt, and a request built
+        // around a regular ballot's id_B, H_I and C_ξB (the same construction, §4.2) is refused
+        // here (S9 open question S9-6).
+        if (manifest.HashTrimmingFunction is null)
+        {
+            return $"Pre-encrypted ballot {ballot.Id}: the manifest names no hash-trimming function, so the election does not use pre-encrypted ballots (§4.1.5).";
+        }
+
         var style = FindBallotStyle(manifest, ballot.BallotStyleId);
         if (style is null)
         {
@@ -285,6 +312,7 @@ public static class BallotStructure
 
         Span<bool> onBallot = Flags(manifestContests.Count, stackalloc bool[MaxStackAllocCount]);
         Span<bool> optionBuffer = stackalloc bool[MaxStackAllocCount];
+        Span<bool> nullBuffer = stackalloc bool[MaxStackAllocCount];
         int contestHint = 0;
         foreach (var contest in ballot.Contests)
         {
@@ -308,6 +336,7 @@ public static class BallotStructure
             }
 
             Span<bool> seen = Flags(m, optionBuffer);
+            Span<bool> nullSeen = Flags(limit, nullBuffer);
             int nullVectors = 0;
             int optionHint = 0;
             foreach (var selection in contest.Selections)
@@ -319,7 +348,15 @@ public static class BallotStructure
 
                 if (selection.ChoiceId is null)
                 {
+                    // Eq. (121): the l-th null vector is j = m + l (§4.2.1 p.61, "the sequence of
+                    // indices should be extended accordingly"), each once.
                     nullVectors++;
+                    if (selection.SelectionIndex <= m || selection.SelectionIndex > m + limit || nullSeen[selection.SelectionIndex - m - 1])
+                    {
+                        return $"Null vector {selection.SelectionIndex} of contest {contest.ContestId} on pre-encrypted ballot {ballot.Id} does not have its own index among m + 1..m + L = {m + 1}..{m + limit} (eq. 121).";
+                    }
+
+                    nullSeen[selection.SelectionIndex - m - 1] = true;
                     continue;
                 }
 
@@ -332,6 +369,12 @@ public static class BallotStructure
                 if (seen[position])
                 {
                     return $"Contest {contest.ContestId} on pre-encrypted ballot {ballot.Id} has more than one selection vector for option {selection.ChoiceId}.";
+                }
+
+                // Eq. (121): an option's vector is j = its option index.
+                if (selection.SelectionIndex != options[position].Index)
+                {
+                    return $"The selection vector of option {selection.ChoiceId} in contest {contest.ContestId} on pre-encrypted ballot {ballot.Id} has index {selection.SelectionIndex}; its option index is {options[position].Index} (eq. 121).";
                 }
 
                 seen[position] = true;
@@ -349,7 +392,113 @@ public static class BallotStructure
         }
 
         return MissingStyleContest(ballot.Id, style, manifestContests, inStyle, onBallot)
-            ?? ChainingFieldViolation(ballot.Id, ballot.ChainingField);
+            ?? BallotNonceViolation(ballot.Id, ballot.EncryptedBallotNonce)
+            ?? ChainingFieldViolation(ballot.Id, ballot.ChainingField)
+            ?? DeviceIdViolation(ballot.Id, ballot.DeviceId);
+    }
+
+    /// <summary>
+    /// The structure of a cast pre-encrypted ballot (§4.3.1, §4.4), checked by Verifications 15, 16
+    /// and 17 before their lettered checks: the standard ballot structure
+    /// (<see cref="Require(EncryptedBallot, Manifest, int)"/>), and then that the ballot is a
+    /// pre-encrypted one of an election that uses them (the manifest names a hash-trimming function),
+    /// recorded as cast (an uncast one is published with its nonces, Verification 18), whose <see cref="EncryptedBallot.PreEncryptedContests"/> has one entry per contest of the
+    /// ballot, in the same order and under the same label, each with the contest's m + L selection
+    /// hashes (eqs. 113-115) in strictly increasing order (§4.4 "sorted numerically"; two equal
+    /// hashes would be one vector twice) and exactly L selected vectors (the recording tool pads an
+    /// undervote with null vectors) of m encryptions each, in strictly increasing order of their
+    /// selection hashes, each with a short code.
+    /// </summary>
+    public static void RequirePreEncryptedCast(EncryptedBallot ballot, Manifest manifest, int verification)
+    {
+        if ((FindViolation(ballot, manifest) ?? FindPreEncryptedCastViolation(ballot, manifest)) is string violation)
+        {
+            throw Failure(verification, violation);
+        }
+    }
+
+    /// <summary>The first violation of the pre-encryption part of a cast pre-encrypted ballot, or null.</summary>
+    internal static string? FindPreEncryptedCastViolation(EncryptedBallot ballot, Manifest manifest)
+    {
+        var preEncrypted = ballot.PreEncryptedContests;
+        if (preEncrypted is null)
+        {
+            return $"Ballot {ballot.Id} is not a pre-encrypted ballot: it carries no pre-encryption data (§4.4).";
+        }
+
+        // This record is what the recording tool makes of a cast ballot (§4.3.1, §4.4). A
+        // pre-encrypted ballot that is not cast is published as the ballot with its released nonces
+        // (PreEncryptedUncastBallot) and audited by Verification 18; under any other status this
+        // record would leave the tally silently and be audited by nothing.
+        if (ballot.Status != BallotStatus.Cast)
+        {
+            return $"Pre-encrypted ballot {ballot.Id} is recorded as {ballot.Status}; a pre-encrypted ballot's record is a cast ballot's, and an uncast one is published with its nonces and checked by Verification 18 (§4.3, §4.4).";
+        }
+
+        if (manifest.HashTrimmingFunction is null)
+        {
+            return $"Ballot {ballot.Id} is a pre-encrypted ballot, but the manifest names no hash-trimming function, so the election does not use pre-encrypted ballots (§4.1.5).";
+        }
+
+        if (preEncrypted.Count != ballot.Contests.Count)
+        {
+            return $"Pre-encrypted ballot {ballot.Id} has pre-encryption data for {preEncrypted.Count} contests; it lists {ballot.Contests.Count}.";
+        }
+
+        for (int i = 0; i < preEncrypted.Count; i++)
+        {
+            var contest = preEncrypted[i];
+            if (contest is null || !string.Equals(contest.ContestId, ballot.Contests[i].Id, StringComparison.Ordinal))
+            {
+                return $"Entry {i + 1} of pre-encrypted ballot {ballot.Id}'s pre-encryption data is for contest {contest?.ContestId}; the ballot's contest {i + 1} is {ballot.Contests[i].Id}.";
+            }
+
+            // FindViolation has already found the contest in the manifest.
+            var manifestContest = manifest.Contests.Single(x => x.Id == contest.ContestId);
+            int m = manifestContest.Choices.Count;
+            int limit = manifestContest.SelectionLimit;
+
+            var hashes = contest.SelectionHashes;
+            if (hashes is null || hashes.Count != m + limit)
+            {
+                return $"Contest {contest.ContestId} on pre-encrypted ballot {ballot.Id} publishes {hashes?.Count ?? 0} selection hashes; with {m} options and selection limit {limit} it has {m + limit} (§4.4).";
+            }
+
+            for (int h = 0; h < hashes.Count; h++)
+            {
+                if (!hashes[h].IsWellFormed)
+                {
+                    return $"Selection hash {h + 1} of contest {contest.ContestId} on pre-encrypted ballot {ballot.Id} is not {SelectionHash.ByteLength} bytes.";
+                }
+
+                if (h > 0 && hashes[h - 1].CompareTo(hashes[h]) >= 0)
+                {
+                    return $"The selection hashes of contest {contest.ContestId} on pre-encrypted ballot {ballot.Id} are not in strictly increasing order (§4.4: sorted numerically).";
+                }
+            }
+
+            var selected = contest.SelectedVectors;
+            if (selected is null || selected.Count != limit)
+            {
+                return $"Contest {contest.ContestId} on pre-encrypted ballot {ballot.Id} publishes {selected?.Count ?? 0} selected vectors; the recording tool combines exactly L = {limit} (null vectors pad an undervote).";
+            }
+
+            for (int v = 0; v < selected.Count; v++)
+            {
+                var vector = selected[v];
+                if (vector?.Vector is null || vector.Vector.Count != m || !vector.SelectionHash.IsWellFormed || vector.ShortCode.Value is null)
+                {
+                    return $"Selected vector {v + 1} of contest {contest.ContestId} on pre-encrypted ballot {ballot.Id} does not have {m} encryptions, a {SelectionHash.ByteLength}-byte selection hash and a short code.";
+                }
+
+                if (v > 0 && selected[v - 1].SelectionHash.CompareTo(vector.SelectionHash) >= 0)
+                {
+                    return $"The selected vectors of contest {contest.ContestId} on pre-encrypted ballot {ballot.Id} are not distinct and in increasing order of their selection hashes.";
+                }
+            }
+        }
+
+        return null;
     }
 
     private static BallotStyle? FindBallotStyle(Manifest manifest, string ballotStyleId)

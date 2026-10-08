@@ -105,6 +105,11 @@ public record Manifest
             }
         }
 
+        if (HashTrimmingFunction is { } omega)
+        {
+            ValidatePreEncryption(omega);
+        }
+
         if (FirstDuplicateId(Contests, static x => x.Id) is string duplicateContestId)
         {
             throw new InvalidManifestException($"Contest id {duplicateContestId} appears more than once in the manifest; contest labels must be unique (§3.1.3).");
@@ -113,6 +118,41 @@ public record Manifest
         if (BallotStyles != null && FirstDuplicateId(BallotStyles, static x => x.Id) is string duplicateBallotStyleId)
         {
             throw new InvalidManifestException($"Ballot style id {duplicateBallotStyleId} appears more than once in the manifest; ballot style labels must be unique (§3.1.3).");
+        }
+    }
+
+    /// <summary>
+    /// An election that uses pre-encrypted ballots (§4; <see cref="HashTrimmingFunction"/> set) names
+    /// one of the §4.6 functions Ω1-Ω8, and none of its contests declares supplemental fields
+    /// (§3.3.9), write-in fields or contest data (§3.3.10).
+    ///
+    /// §4.1's selection vectors have one entry per selectable option (eqs. 112-114) and a contest has
+    /// L null vectors, with no slot for a supplemental field, and p.66 says "contests on pre-encrypted
+    /// ballots do not have encrypted contest data". A recorded pre-encrypted ballot therefore carries
+    /// neither, while <see cref="Verify.BallotStructure"/> requires every ballot to carry every field
+    /// its contest declares, so that a ballot's shape does not reveal how it was made (S5, S6). The
+    /// spec does not say how the two kinds of ballot share such a contest; refusing the combination
+    /// is the safe reading until that is decided (S9 open question). A contest that offers write-in
+    /// fields must declare the write-in count (user decision Q19), so it is refused here as well.
+    /// </summary>
+    private void ValidatePreEncryption(HashTrimmingFunction omega)
+    {
+        if (omega is < PreEncryption.HashTrimmingFunction.TwoHex or > PreEncryption.HashTrimmingFunction.Number101To356)
+        {
+            throw new InvalidManifestException($"Manifest {ElectionId} names hash-trimming function {(int)omega}; the pre-specified functions are Ω1-Ω8 (§4.6), and Ω must be completely specified in the manifest (§4.1.5).");
+        }
+
+        foreach (var contest in Contests)
+        {
+            if (contest.SupplementalFields is { Count: > 0 } || contest.WriteInFieldCount > 0)
+            {
+                throw new InvalidManifestException($"Contest {contest.Id} declares supplemental fields or write-in fields, but the election uses pre-encrypted ballots (it names a hash-trimming function): a pre-encrypted selection vector has no slot for a supplemental field (§4.1, eqs. 112-114), so pre-encrypted and regular ballots could not share the contest's shape.");
+            }
+
+            if (contest.ContestDataBlocks > 0)
+            {
+                throw new InvalidManifestException($"Contest {contest.Id} declares contest data (b_Λ = {contest.ContestDataBlocks}), but the election uses pre-encrypted ballots (it names a hash-trimming function): \"contests on pre-encrypted ballots do not have encrypted contest data\" (p.66), so pre-encrypted and regular ballots could not share the contest's shape.");
+            }
         }
     }
 

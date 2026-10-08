@@ -148,6 +148,22 @@ public partial class KnownAnswerTests
             }
         }
 
+        // The pre-encrypted ballots P1 and P2 (section 4) carry their own id_B on the main-chain
+        // election; their H_I is not a selection_encryption_identifier_hash vector.
+        if (Root.TryGetProperty("preencrypted_ballots", out var preEncrypted))
+        {
+            var extendedBaseHash = ExtendedBaseHashFor(Root.GetProperty("main_chain").GetProperty("H_E_hex").GetString()!);
+            foreach (var ballot in preEncrypted.GetProperty("ballots").EnumerateArray())
+            {
+                var hash = new SelectionEncryptionIdentifierHash(extendedBaseHash, new SelectionEncryptionIdentifier(Hex(ballot, "id_B_hex")));
+                Assert.Equal(ballot.GetProperty("H_I_hex").GetString(), ToHex(hash));
+                if (ToHex(hash) == hex)
+                {
+                    return hash;
+                }
+            }
+        }
+
         throw new Xunit.Sdk.XunitException($"No selection_encryption_identifier_hash vector input gives the library an H_I of {hex}.");
     }
 
@@ -193,6 +209,12 @@ public partial class KnownAnswerTests
             "preencrypted_chain_init",
             "preencrypted_chain_close_inner",
             "preencrypted_chain_close",
+            "preencrypted_encryption_nonce",
+            "preencrypted_selection_hash",
+            "preencrypted_null_selection_hash",
+            "preencrypted_contest_hash",
+            "preencrypted_range_proof_challenge",
+            "preencrypted_selection_limit_challenge",
         };
 
         var families = AllVectors.Select(x => x.GetProperty("family").GetString()!).ToHashSet();

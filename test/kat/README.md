@@ -2,7 +2,7 @@
 
 `eg_kat.py` is an independent reference implementation of the ElectionGuard v2.1.0 hash chain,
 used as a known-answer-test oracle for `ElectionGuard.Core`. It was written from the
-specification text only (sections 3.1-3.4, 3.6.2-3.6.7, 4.1.4 and 5, and Verifications 10, 12, 13, 14 and 16, including the section 5.5
+specification text only (sections 3.1-3.4, 3.6.2-3.6.7, 4.1-4.4 and 5, and Verifications 6, 7, 10 and 12-18, including the section 5.5
 domain-separation tables) and the user's recorded decisions on spec contradictions (Q4, Q5, Q6, Q7, Q10 and Q20 in
 `docs/spec-compliance/2026-10-04-fix-progress.md`), without reading the C# source or its existing test expectations, so its outputs are not
 shaped by any encoding bug in the C# code.
@@ -58,6 +58,12 @@ This rewrites `test/kat/vectors.json` and prints H_P for n = 3, k = 2.
 | `preencrypted_confirmation_code` | (116) H_C = H(H_I; 0x42, chi_1, ..., chi_mB, B_C), B_C per 16.E (no chaining) and 16.F (j = 1, 2), len(B1) = 37 + 32 * m_B |
 | `preencrypted_chain_init` | (117) H_0 = H(H_E; 0x42, B_C,0), B_C,0 = 0x00000001 \|\| H_DI with the 0x43 H_DI of (119), len(B1) = 37 |
 | `preencrypted_chain_close_inner`, `preencrypted_chain_close` | (120) H(H_E; 0x44, H_l, B_C,0), body form (Q4), len(B1) = 69; (118) H-bar = H(H_E; 0x42, B-bar_C), len(B1) = 37 |
+| `preencrypted_encryption_nonce` | (121) xi_{i,j,k} = H_q(H_I; 0x45, i, j, k, xi_B), len(B1) = 45; i = ind_c, null vector l is j = m + l |
+| `preencrypted_selection_hash`, `preencrypted_null_selection_hash` | (113), (114) psi = H(H_I; 0x40, alpha_1, beta_1, ..., alpha_m, beta_m), len(B1) = 1 + 2m * 512 (Verification 16.A, 18.3) |
+| `preencrypted_contest_hash` | (115) chi_l = H(H_I; 0x41, ind_c(Lambda_l), psi_pi(1), ..., psi_pi(m+L)), hashes sorted ascending, len(B1) = 5 + (m + L) * 32 (16.B, 18.4) |
+| `preencrypted_confirmation_code` (2 more) | (116) over real eq. (115) contest hashes (16.C, 18.A) |
+| `preencrypted_range_proof_challenge` | (59) with R = 1 (= (41)/(50)), 0x24, on the recording tool's combined vector, len(B1) = 3081 (Verification 6) |
+| `preencrypted_selection_limit_challenge` | (62), 0x24, no ind_o, on the combined vector, len(B1) = 5 + (2L + 4) * 512 (Verification 7) |
 
 ## Vector format
 
@@ -170,3 +176,49 @@ Encoding choices to know about:
 - The regular-ballot chain families `chain_init`, `chain_close_inner` and `chain_close` (eqs. 74, 78, 77; separators
   0x29, 0x2B, 0x29; lengths 37, 69, 37) were rechecked against p.43, the section 5.5.3 table (p.76) and Verification
   8.F/8.G and are unchanged.
+
+### Pre-encrypted ballots (sections 4.1-4.4, Verifications 15-18)
+
+These families are appended after all earlier families; the top-level `preencrypted_ballots` key (after
+`preencrypted_chain`) summarizes them, including every contest's selection hashes in generation order, pi, short
+codes and, for the cast ballot, the recording tool's combined vector. Both ballots sit on the `main_chain` election
+(K = g^5) with their own labelled id_B and xi_B:
+
+- P1 (cast): contests (ind_c, m, L) = (1, 3, 1), (3, 4, 2), (4, 2, 2) at positions 1, 2, 3. The voter selects option 2,
+  options 1 and 4, and option 2 alone. No chaining (B_C = 0x00000000 || the 0x43 H_DI of `main_chain`).
+- P2 (uncast): contests (2, 2, 1), (5, 3, 2) at positions 1, 2, xi_B = q + 11 (at least q, never reduced). Simple
+  chaining as ballot j = 1 on its own device (`kat pre-encrypted ballot printer 2`, whose eq. (119) H_DI and eq. (117)
+  H_0 are appended to `preencrypted_device_info_hash` and `preencrypted_chain_init`). Every released nonce
+  xi_{i,j,k} is an eq. (121) vector, and the script runs Verification 18 (18.1-18.4, 18.A) from them.
+
+For each contest the encrypting tool builds m selection vectors (eq. 112: Enc(1; xi_{i,j,j}) at position j, Enc(0;
+xi_{i,j,k}) elsewhere) and L null vectors, hashes each (113, 114), sorts the m + L hashes as big-endian integers
+(lexicographic byte order) and hashes them with b(ind_c, 4) (115). Each `preencrypted_contest_hash` vector carries
+`diagnostics` with the hash of the unsorted form and, where position and ind_c differ, of the position form
+(16.B's literal l); these are `"expected": false`.
+
+For the cast ballot the recording tool (section 4.3) multiplies the chosen vectors componentwise and adds their
+nonces mod q, then proves each component with eq. (59), R = 1, and the contest total with eq. (62), R = L. The spec
+gives these no new domain separator or table row ("as in standard ElectionGuard section 3.3.7"), so they are the
+section 5.5.3 rows for (41)/(50)/(59) and (62), keyed with the pre-encrypted ballot's H_I. These are also the oracle's
+first 0x24 vectors. The prover's random u_j and c_j (j != l) are fixed labelled inputs. The script asserts
+Verification 15.A (the product), 6.1-6.3 and 6.A-6.D, and 7.1-7.5 and 7.A-7.D for each proof.
+
+Short codes: Omega is defined by the manifest, not the spec. `short_codes` lists three spec examples per selection
+hash (last byte as two hex characters, last byte as a three-digit number, and the 1-based sorted ordinal of section
+4.2.2). The script asserts that the last-byte codes are unique within each contest.
+
+Spec ambiguities, also listed under `preencrypted_ballots.spec_ambiguities`:
+
+- 16.B writes `l` (the contest's sequence number) where eq. (115) and the table write ind_c(Lambda_l). ind_c is used
+  (precedent: the S7 decision on 13.3).
+- Verification 18.2-18.4 make each vector m_i long and hash only m_i selection hashes; eqs. (114), (115), the table
+  and 16.B include the L null hashes. Eq. (115) is followed.
+- Eq. (121) indexes the contest by its index i (section 4.2.1) while (18.1) indexes it by position. ind_c is used.
+  Option indices are contiguous 1..m, so option index and position agree for j and k.
+- Null vector l uses j = m + l in eq. (121) ("the sequence of indices should be extended accordingly").
+- On an undervote the recording tool is taken to pad the combination with null vectors, so exactly L vectors are
+  always combined. The spec does not say so explicitly (P1's ind_c = 4 contest).
+- Section 4.4 publishes an uncast ballot's xi_B; section 4.3 and Verification 18 release the xi_{i,j,k}.
+- The earlier `preencrypted_confirmation_code` vectors (section 4.1.4) use opaque contest-hash stand-ins and keep
+  their values; their notes predate these families.

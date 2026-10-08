@@ -55,7 +55,8 @@ public class ChallengedBallotDecryptionVerification
     /// as Verification 8 forms it. Throws <see cref="VerificationFailedException"/>:
     /// <list type="bullet">
     /// <item>"13.structure" if the decryption is for another ballot, the ballot is not recorded as
-    /// challenged, is malformed (<see cref="BallotStructure"/>) or its H_I is not H(H_E; 0x20, id_B)
+    /// challenged, is a pre-encrypted ballot's record (always cast, §4.3.1), is malformed
+    /// (<see cref="BallotStructure"/>) or its H_I is not H(H_E; 0x20, id_B)
     /// (Verification 5.B), or a decrypted contest is not on the ballot, is listed twice, does not
     /// release exactly one nonce and value for each of the contest's options and declared
     /// supplemental fields, or releases contest data exactly where the ballot carries none (or none
@@ -108,6 +109,11 @@ public class ChallengedBallotDecryptionVerification
         if (ballot.Status != BallotStatus.Challenged)
         {
             throw Structure($"{where} is recorded as {ballot.Status}, not as challenged; only challenged ballots are decrypted and published (§3.6.7).");
+        }
+
+        if (ballot.IsPreEncrypted)
+        {
+            throw Structure($"{where} is a pre-encrypted ballot's record, always a cast ballot's (§4.3.1); an uncast pre-encrypted ballot is published with its nonces and checked by Verification 18.");
         }
 
         var manifest = encryptionRecord.Manifest;

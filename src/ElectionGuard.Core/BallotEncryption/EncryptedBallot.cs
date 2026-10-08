@@ -40,6 +40,30 @@ public class EncryptedBallot
     public required int Weight { get; init; }
     public required string DeviceId { get; init; }
 
+    /// <summary>
+    /// Present exactly on a cast pre-encrypted ballot (§4.3, §4.4), which the pre-encrypted ballot
+    /// recording tool (<see cref="PreEncryption.BallotRecordingTool.RecordCast"/>) produces: one
+    /// entry per contest, in the order of <see cref="Contests"/>, with the contest's sorted selection
+    /// hashes and the selected pre-encryption vectors with their short codes. Null on a regular
+    /// ballot; JSON leaves it out then, and protobuf (field 12) writes nothing, so regular ballots
+    /// serialize as before.
+    ///
+    /// On such a ballot <see cref="Contests"/> holds the combined selection vectors with their
+    /// standard proofs, so Verifications 5, 6, 7 and 9 to 11 and the tally treat it like any other
+    /// ballot (§4.4: "Selection vectors generated from pre-encrypted ballots are indistinguishable
+    /// from those produced by standard ElectionGuard"). Its contest hashes are eq. (115)'s and its
+    /// confirmation code eq. (116)'s, computed by the encrypting tool before any selection was made,
+    /// with the pre-encrypted <see cref="ChainingField"/> and <see cref="DeviceId"/>. So Verification
+    /// 8 refuses it ("8.structure": "Verification 8 is only used for regular ElectionGuard
+    /// ballots", p.64), and Verifications 15, 16 and 17 check it instead.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public List<PreEncryption.PreEncryptedCastContest>? PreEncryptedContests { get; init; }
+
+    /// <summary>Whether this is a cast pre-encrypted ballot (<see cref="PreEncryptedContests"/> present).</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool IsPreEncrypted => PreEncryptedContests is not null;
+
     private BallotStatus _status;
 
     /// <summary>

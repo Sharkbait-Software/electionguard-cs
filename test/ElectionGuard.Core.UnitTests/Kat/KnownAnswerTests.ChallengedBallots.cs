@@ -1,4 +1,4 @@
-using ElectionGuard.Core.BallotEncryption;
+﻿using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.KeyGeneration;
 using ElectionGuard.Core.Models;
@@ -535,8 +535,12 @@ public partial class KnownAnswerTests
         return (record, ballot, new VotingDeviceInformationHash(Hex(Root.GetProperty("main_chain"), "H_DI_hex")), guardians, contestVectors);
     }
 
-    /// <summary>The main-chain election record over <paramref name="contests"/>, one ballot style "style".</summary>
-    private static EncryptionRecord MainChainRecord(List<Contest> contests, ChainingMode chainingMode, List<string>? styleContests = null)
+    /// <summary>
+    /// The main-chain election record over <paramref name="contests"/>, one ballot style "style". Its
+    /// H_E hashes the oracle's fixed manifest bytes, so the manifest object here only shapes the
+    /// ballots (contests, style, chaining mode, hash-trimming function).
+    /// </summary>
+    private static EncryptionRecord MainChainRecord(List<Contest> contests, ChainingMode chainingMode, List<string>? styleContests = null, Core.PreEncryption.HashTrimmingFunction? hashTrimmingFunction = null)
     {
         var chain = Root.GetProperty("main_chain");
         var keys = new ElectionPublicKeys([IntegerModP.PowModP(EGParameters.G, new BigInteger(5))], [MainChainBallotDataKey]);
@@ -562,6 +566,7 @@ public partial class KnownAnswerTests
                 Contests = contests,
                 BallotStyles = [new BallotStyle { Id = "style", Name = "Style", ContestIds = styleContests ?? contests.Select(x => x.Id).ToList() }],
                 ChainingMode = chainingMode,
+                HashTrimmingFunction = hashTrimmingFunction,
             },
         };
     }

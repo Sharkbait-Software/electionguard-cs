@@ -2,7 +2,7 @@
 """ElectionGuard v2.1.0 hash-chain known-answer-test (KAT) oracle.
 
 Written from the ElectionGuard Design Specification v2.1.0 ONLY (sections 3.1-3.4, 3.6.2-3.6.7,
-4.1.4 and 5, and Verifications 10, 12, 13, 14 and 16), plus the user's recorded decisions Q4-Q7, Q10 and Q20 on spec
+4.1-4.4 and 5, and Verifications 6, 7, 10 and 12-18), plus the user's recorded decisions Q4-Q7, Q10 and Q20 on spec
 contradictions (docs/spec-compliance/2026-10-04-fix-progress.md), without reference to the C# implementation in this repository,
 so that its outputs can be used as independent expected values. Standard library only.
 
@@ -552,6 +552,129 @@ def small_dlog(base, target, bound=64):
             return s
         acc = acc * base % P
     raise ValueError("no small discrete log")
+
+
+# ---------------------------------------------------------------------------------------------
+# §3.3.7 / §3.3.8 range-proof and selection-limit challenges (eqs. 41, 50, 59, 62), used here for the
+# recording tool's combined pre-encrypted selection vectors (§4.3). §5.5.3 table (p.75).
+# ---------------------------------------------------------------------------------------------
+
+
+def range_proof_challenge(h_i, ind_c, ind_o, alpha, beta, commits):
+    """Eqs. (41)/(50) (R = 1) and (59): c = H_q(H_I; 0x24, ind_c(Lambda), ind_o(lambda), alpha, beta, a_0, b_0, ...,
+    a_R, b_R). §5.5.3 table (p.75): len(B1) = 9 + (2R + 4)*512 (3081 for R = 1). Returns (B1, raw HMAC, layout)."""
+    R = len(commits) - 1
+    parts = [(b"\x24", "0x24"), (b_small(ind_c), "ind_c"), (b_small(ind_o), "ind_o"),
+             (b_p(alpha), "alpha"), (b_p(beta), "beta")]
+    for j, (a_j, b_j) in enumerate(commits):
+        parts += [(b_p(a_j), f"a_{j}"), (b_p(b_j), f"b_{j}")]
+    b1, layout = _layout(parts)
+    assert len(b1) == 9 + (2 * R + 4) * 512
+    return b1, H(h_i, b1), layout
+
+
+def selection_limit_challenge(h_i, ind_c, alpha_bar, beta_bar, commits):
+    """Eq. (62): c = H_q(H_I; 0x24, ind_c(Lambda), alpha-bar, beta-bar, a_0, b_0, ..., a_L, b_L). No ind_o.
+    §5.5.3 table (p.75): len(B1) = 5 + (2L + 4)*512. Returns (B1, raw HMAC, layout)."""
+    L = len(commits) - 1
+    parts = [(b"\x24", "0x24"), (b_small(ind_c), "ind_c"), (b_p(alpha_bar), "alpha_bar"), (b_p(beta_bar), "beta_bar")]
+    for j, (a_j, b_j) in enumerate(commits):
+        parts += [(b_p(a_j), f"a_{j}"), (b_p(b_j), f"b_{j}")]
+    b1, layout = _layout(parts)
+    assert len(b1) == 5 + (2 * L + 4) * 512
+    return b1, H(h_i, b1), layout
+
+
+def make_range_proof(challenge, K_pub, alpha, beta, xi, ell, R, u, c_fake):
+    """§3.3.7 general range proof (eqs. 57-61) that (alpha, beta) = (g^xi, K^(xi + ell)) encrypts ell in 0..R.
+    u[j] (0 <= j <= R) and c_fake[j] (j != ell) are the prover's random values, fixed here. challenge(commits)
+    returns (B1, raw, layout). The script then runs the verifier's recomputation (6.1-6.3 / 7.3-7.5) and 6.D/7.D.
+    Returns dict with commits, c, c_j, v_j, B1, raw, layout."""
+    assert 0 <= ell <= R
+    assert pow(G, xi, P) == alpha and pow(K_pub, (xi + ell) % Q, P) == beta
+    commits = []
+    for j in range(R + 1):
+        if j == ell:
+            commits.append((pow(G, u[j], P), pow(K_pub, u[j], P)))                       # eq. (57)
+        else:
+            t_j = (u[j] + (ell - j) * c_fake[j]) % Q
+            commits.append((pow(G, u[j], P), pow(K_pub, t_j, P)))                        # eq. (58)
+    b1, raw, layout = challenge(commits)
+    c = int.from_bytes(raw, "big") % Q
+    cs = [c_fake[j] if j != ell else None for j in range(R + 1)]
+    cs[ell] = (c - sum(cs[j] for j in range(R + 1) if j != ell)) % Q                    # eq. (60)
+    vs = [(u[j] - cs[j] * xi) % Q for j in range(R + 1)]                                # eq. (61)
+    # Verifier: a_j = g^v_j alpha^c_j, b_j = K^w_j beta^c_j, w_j = (v_j - j c_j) mod q; c recomputed; sum c_j = c.
+    ver = [(pow(G, vs[j], P) * pow(alpha, cs[j], P) % P,
+            pow(K_pub, (vs[j] - j * cs[j]) % Q, P) * pow(beta, cs[j], P) % P) for j in range(R + 1)]
+    assert ver == commits, "6.1-6.2 / 7.3-7.4 must recompute the commitments"
+    assert challenge(ver)[1] == raw, "6.3 / 7.5"
+    assert sum(cs) % Q == c, "6.D / 7.D"
+    assert all(0 <= x < Q for x in cs + vs), "6.B-6.C / 7.B-7.C"
+    return {"commits": commits, "c": c, "cs": cs, "vs": vs, "b1": b1, "raw": raw, "layout": layout}
+
+
+# ---------------------------------------------------------------------------------------------
+# §4.1-4.2 pre-encrypted ballots: eqs. (112)-(115), (121); §5.5.5 table (p.78).
+# ---------------------------------------------------------------------------------------------
+
+
+def preencrypted_nonce(h_i, i, j, k, xi_b):
+    """Eq. (121): xi_{i,j,k} = H_q(H_I; 0x45, i, j, k, xi_B), xi_B a 256-bit value b(xi_B, 32) (not reduced).
+    §5.5.5 table (p.78): B1 = 0x45 || b(i, 4) || b(j, 4) || b(k, 4) || b(xi_B, 32), len(B1) = 45."""
+    b1 = b"\x45" + b_small(i) + b_small(j) + b_small(k) + b(xi_b, 32)
+    assert len(b1) == 45
+    return b1, H(h_i, b1)
+
+
+def preencrypted_selection_hash(h_i, cts):
+    """Eqs. (113)/(114): psi = H(H_I; 0x40, alpha_1, beta_1, ..., alpha_m, beta_m).
+    §5.5.5 table (p.78): len(B1) = 1 + 2m*512. Returns (B1, psi, layout)."""
+    parts = [(b"\x40", "0x40")]
+    for k, (a_k, b_k) in enumerate(cts, start=1):
+        parts += [(b_p(a_k), f"alpha_{k}"), (b_p(b_k), f"beta_{k}")]
+    b1, layout = _layout(parts)
+    assert len(b1) == 1 + 2 * len(cts) * 512
+    return b1, H(h_i, b1), layout
+
+
+def sort_selection_hashes(psis):
+    """§4.1.2: pi with psi_pi(1) < psi_pi(2) < ... as big-endian integers. For equal-length byte strings this is
+    lexicographic byte order. Returns (sorted list, pi as 1-based positions in generation order)."""
+    assert all(len(x) == 32 for x in psis)
+    assert len(set(psis)) == len(psis), "selection hashes must be distinct for pi to be well defined"
+    pi = sorted(range(1, len(psis) + 1), key=lambda r: int.from_bytes(psis[r - 1], "big"))
+    srt = [psis[r - 1] for r in pi]
+    assert srt == sorted(psis)
+    assert all(int.from_bytes(srt[x], "big") < int.from_bytes(srt[x + 1], "big") for x in range(len(srt) - 1))
+    return srt, pi
+
+
+def preencrypted_contest_hash(h_i, ind_c, psis_in_order):
+    """Eq. (115): chi_l = H(H_I; 0x41, ind_c(Lambda_l), psi_pi(1), ..., psi_pi(m+L)), selection hashes (including
+    the L null hashes) in ascending big-endian order. §5.5.5 table (p.78): len(B1) = 5 + (m + L)*32.
+    Returns (B1, chi, layout, pi)."""
+    srt, pi = sort_selection_hashes(psis_in_order)
+    parts = [(b"\x41", "0x41"), (b_small(ind_c), "ind_c")] + [(x, f"psi_pi({r})={pi[r - 1]}")
+                                                            for r, x in enumerate(srt, start=1)]
+    b1, layout = _layout(parts)
+    assert len(b1) == 5 + len(psis_in_order) * 32
+    return b1, H(h_i, b1), layout, pi
+
+
+def short_code_hex(psi):
+    """§4.1.5 example Omega (NOT the binding one; Omega is manifest-defined): last byte as two uppercase hex chars."""
+    return f"{psi[-1]:02X}"
+
+
+def short_code_dec3(psi):
+    """§4.1.5 example Omega (NOT binding): last byte as a three-digit decimal number, 000-255."""
+    return f"{psi[-1]:03d}"
+
+
+def short_code_ordinal(psi, contest_psis):
+    """§4.2.2 example Omega (NOT binding): 1-based position of psi in the contest's sorted selection hashes."""
+    return str(sorted(contest_psis).index(psi) + 1)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1615,6 +1738,338 @@ def build():
         "contest_hashes": "opaque labelled stand-ins; eqs. (113)-(115) are not covered",
     }
 
+    # --- Pre-encrypted ballots, §4.1-4.3, eqs. (112)-(116), (121); Verifications 15-18 ----------------------
+    # Appended after all earlier families. Election: main_chain (H_E, K = g^5). Two pre-encrypted ballots, each
+    # with its own labelled id_B (-> H_I, eq. 32) and ballot nonce xi_B:
+    #   P1 (cast): contests (ind_c, m, L) = (1, 3, 1), (3, 4, 2), (4, 2, 2) at positions 1, 2, 3, so positions 2 and 3
+    #     differ from ind_c. The voter selects option 2 / options 1 and 4 / option 2 only (an undervote, padded
+    #     with one null vector, see PE_AMBIGUITIES). The recording tool (§4.3) combines the selected vectors and
+    #     proves the result with eqs. (59)/(62) (Verification 15, 6, 7).
+    #   P2 (uncast): contests (2, 2, 1), (5, 3, 2) at positions 1, 2; xi_B = q + 11 (>= q, never reduced). Its
+    #     nonces xi_{i,j,k} are released and Verification 18 recomputes everything from them.
+    # Option indices are contiguous 1..m and equal the positions, so the j/k of eq. (121) are unambiguous; null
+    # vector l of a contest uses j = m + l (§4.2.1 "the sequence of indices should be extended accordingly").
+    PE_AMBIGUITIES = [
+        "16.B writes chi_l = H(H_I; 0x41, l, ...) with l the 'context index'/sequence number of the contest on the "
+        "ballot, while eq. (115) and the §5.5.5 table write b(ind_c(Lambda_l), 4). The oracle uses ind_c (eq. 115; "
+        "precedent: S7 decision on 13.3) and records the position form as a diagnostic where the two differ.",
+        "Verification 18 as lettered loops 1 <= j <= m_i and (18.4) hashes psi_{i,pi(1)}..psi_{i,pi(m_i)}: only m_i "
+        "selection hashes, no null hashes, while (18.2)/(18.3) make each vector m_i long. Eqs. (114)/(115), the "
+        "§5.5.5 table (len 5 + (m + L)*32) and 16.B all include the L null hashes. The oracle follows (115): vectors "
+        "of length m, m + L selection hashes per contest.",
+        "Eq. (121): i is the contest index and j the selection index (§4.2.1, 'following the manifest'), but §4.1 "
+        "defines Psi_{i,m} by position i ('not necessarily identical to its option index') and (18.1) indexes "
+        "xi_{i,j,k} by the contest's position i on the ballot (Lambda_i, 1 <= i <= m_B). The oracle uses the contest "
+        "index ind_c for i (P1 and P2 have contests whose position differs from ind_c) and uses contiguous option "
+        "indices 1..m so that option index = position for j and k.",
+        "Null vectors: the oracle numbers null vector l (1 <= l <= L) as j = m + l in eq. (121) (p.61: if null labels "
+        "are not in the manifest 'the sequence of indices should be extended accordingly'); k still runs 1..m, so "
+        "every component of a null vector encrypts zero.",
+        "Undervote combination (§4.3, §4.1.5): the spec does not say whether the recording tool multiplies null "
+        "vectors into the combined vector when the voter makes fewer than L selections. The oracle always combines "
+        "exactly L vectors, padding with null vectors j = m + 1, ..., because §4.1.5/§4.2 say the null short codes "
+        "let the record not reveal undervotes. P1's ind_c = 4 contest (L = 2, one selection) shows it.",
+        "§4.4 says the ballot nonce xi_B of each uncast ballot is published, while §4.3 and Verification 18 release "
+        "the encryption nonces xi_{i,j,k}. The oracle publishes both for P2 (the nonces are eq. (121) of xi_B).",
+        "The challenges of the combined vector's proofs have no pre-encrypted row in §5.5.5: §4.3 says 'as in "
+        "standard ElectionGuard section 3.3.7', so they are eqs. (41)/(50)/(59) (per option, R = option selection "
+        "limit = 1) and (62) (contest limit L) verbatim, keyed with the pre-encrypted ballot's H_I and using the "
+        "combined ciphertexts and the summed nonces.",
+        "Omega (short codes, §4.1.5) is manifest-defined. The short codes here use the spec's own examples (last "
+        "byte as two hex characters or a three-digit number, and the sorted ordinal of §4.2.2); none is binding.",
+    ]
+    pe_s_device2 = "kat pre-encrypted ballot printer 2"
+    b1, pe_h_di2 = device_info_hash(H_E, pe_s_device2, sep=0x43)
+    enc2 = pe_s_device2.encode("utf-8")
+    vectors.append(vec("preencrypted_device_info_hash", "(119) H_DI = H(H_E; 0x43, S_device) [pre-encrypted ballots]",
+                       f"H_DI 0x43 {pe_s_device2!r}", "H_E", H_E, b1, pe_h_di2,
+                       {"H_E_hex": hx(H_E), "S_device": pe_s_device2, "S_device_utf8_hex": hx(enc2),
+                        "S_device_utf8_len": len(enc2), "S_device_char_len": len(pe_s_device2)},
+                       5 + len(enc2), notes="Device of pre-encrypted ballot P2 (preencrypted_ballots)."))
+    pe_bc0_2 = b_c0_simple(pe_h_di2)
+    b1, pe_h0_2 = chain_init(H_E, pe_bc0_2, sep=0x42)
+    vectors.append(vec("preencrypted_chain_init",
+                       "(117) H_0 = H(H_E; 0x42, B_C,0), B_C,0 = 0x00000001 || H_DI, H_DI per (119) (16.G)",
+                       f"pre-encrypted H_0 simple chaining, device {pe_s_device2!r}", "H_E", H_E, b1, pe_h0_2,
+                       {"H_E_hex": hx(H_E), "H_DI_hex": hx(pe_h_di2), "S_device": pe_s_device2,
+                        "B_C0_hex": hx(pe_bc0_2)}, 37,
+                       notes="Chain of pre-encrypted ballot P2 (preencrypted_ballots); P2 is ballot j = 1."))
+
+    pe_ballots = [
+        {"name": "P1 (cast)", "status": "cast",
+         "id_B": int.from_bytes(bytes(range(0xC1, 0xE1)), "big"), "xi_B": int.from_bytes(bytes(range(0x11, 0x31)), "big"),
+         "contests": [(1, 3, 1, [2]), (3, 4, 2, [1, 4]), (4, 2, 2, [2])],
+         "B_C": pre_bc_none, "S_device": devices[1],
+         "B_C_desc": "no chaining (16.E): 0x00000000 || H_DI, H_DI = main_chain.H_DI_preencrypted_hex (eq. 119)"},
+        {"name": "P2 (uncast)", "status": "uncast",
+         "id_B": int.from_bytes(bytes(range(0xDF, 0xFF)), "big"), "xi_B": Q + 11,
+         "contests": [(2, 2, 1, None), (5, 3, 2, None)],
+         "B_C": b_c_simple(pe_h0_2), "S_device": pe_s_device2,
+         "B_C_desc": f"simple chaining j = 1 (16.F): 0x00000001 || H_0, H_0 = eq. (117) for device {pe_s_device2!r}"},
+    ]
+
+    def qlbl(x):
+        return "q-1" if x == Q - 1 else "q+11" if x == Q + 11 else hq(x)
+
+    pe_nonce_vecs, pe_sel_vecs, pe_chi_vecs, pe_hc_vecs, pe_rp_vecs, pe_lim_vecs = [], [], [], [], [], []
+    pe_summary_ballots = []
+    for bal in pe_ballots:
+        bname, xi_b = bal["name"], bal["xi_B"]
+        h_i_b = selection_encryption_identifier_hash(H_E, bal["id_B"])[1]
+        tag = f"{bname}"
+        chis_pe, contests_summary = [], []
+        for pos, (ind_c, m, L, sel) in enumerate(bal["contests"], start=1):
+            psi_vecs = []
+            for j in range(1, m + L + 1):
+                encs = []
+                for k in range(1, m + 1):
+                    b1n, rawn = preencrypted_nonce(h_i_b, ind_c, j, k, xi_b)            # eq. (121)
+                    xi = int.from_bytes(rawn, "big") % Q
+                    sigma = 1 if j == k else 0                                          # eqs. (112), (18.2)
+                    encs.append({"k": k, "xi": xi, "sigma": sigma, "alpha": pow(G, xi, P),
+                                 "beta": pow(K, sigma + xi, P), "b1": b1n, "raw": rawn})
+                cts = [(e["alpha"], e["beta"]) for e in encs]
+                b1s, psi, lay = preencrypted_selection_hash(h_i_b, cts)                 # eqs. (113), (114)
+                psi_vecs.append({"j": j, "null": j > m, "encs": encs, "cts": cts, "b1": b1s, "psi": psi, "layout": lay})
+            psis = [pv["psi"] for pv in psi_vecs]
+            b1c, chi, layc, pi = preencrypted_contest_hash(h_i_b, ind_c, psis)          # eq. (115)
+            chis_pe.append(chi)
+            # Short codes (spec-example Omegas): must be unique within the contest (§4.1.5).
+            assert len({short_code_hex(x) for x in psis}) == len(psis), f"short-code collision {bname} ind_c={ind_c}"
+            short_codes = [{"j": pv["j"], "null": pv["null"], "psi_hex": hx(pv["psi"]),
+                            "omega_last_byte_hex": short_code_hex(pv["psi"]),
+                            "omega_last_byte_dec3": short_code_dec3(pv["psi"]),
+                            "omega_sorted_ordinal": short_code_ordinal(pv["psi"], psis)} for pv in psi_vecs]
+
+            # Verification 18 (uncast): recompute (18.1), (18.2) from the released nonces, (18.3), (18.4).
+            if bal["status"] == "uncast":
+                for pv in psi_vecs:
+                    for e in pv["encs"]:
+                        xi_rel = int.from_bytes(preencrypted_nonce(h_i_b, ind_c, pv["j"], e["k"], xi_b)[1], "big") % Q
+                        delta = 1 if pv["j"] == e["k"] else 0
+                        assert (pow(G, xi_rel, P), pow(K, delta + xi_rel, P)) == (e["alpha"], e["beta"]), "18.1/18.2"
+                        assert small_dlog(K, e["beta"] * pow(pow(K, xi_rel, P), -1, P) % P) == e["sigma"]
+                    assert preencrypted_selection_hash(h_i_b, pv["cts"])[1] == pv["psi"], "18.3"
+                assert preencrypted_contest_hash(h_i_b, ind_c, psis)[1] == chi, "18.4 (with the L null hashes, eq. 115)"
+
+            # Eq. (121) vectors: every released nonce of the uncast ballot (V18), and three P1 nonces.
+            for pv in psi_vecs:
+                for e in pv["encs"]:
+                    if bal["status"] == "uncast" or (ind_c, pv["j"], e["k"]) in ((1, 1, 1), (1, 2, 3), (3, 5, 2)):
+                        pe_nonce_vecs.append(vec(
+                            "preencrypted_encryption_nonce", "(121) xi_{i,j,k} = H_q(H_I; 0x45, i, j, k, xi_B)",
+                            f"xi_{{{ind_c},{pv['j']},{e['k']}}} {tag}", "H_I", h_i_b, e["b1"], e["raw"],
+                            {"H_I_hex": hx(h_i_b), "i": ind_c, "j": pv["j"], "k": e["k"], "xi_B_hex": hq(xi_b),
+                             "xi_B_ge_q": xi_b >= Q, "m": m, "L": L, "null_vector": pv["null"],
+                             "encrypts": e["sigma"],
+                             "derivation": f"pre-encrypted ballot {bname}: H_I = eq. (32) of its id_B; i = ind_c, "
+                                           f"j = selection vector index (null vector l is j = m + l), k = position "
+                                           f"in the vector; encrypts 1 iff j = k"},
+                            45, hq_out=True,
+                            notes="§5.5.5 table (p.78): B1 = 0x45 || b(i, 4) || b(j, 4) || b(k, 4) || b(xi_B, 32), "
+                                  "len(B1) = 45. xi_B is a 256-bit value, never reduced mod q."
+                                  + (" Released for this uncast ballot (Verification 18)." if bal["status"] == "uncast"
+                                     else "")))
+
+            # Eqs. (113)/(114) vectors: every selection vector of both ballots.
+            for pv in psi_vecs:
+                null = pv["null"]
+                pe_sel_vecs.append(vec(
+                    "preencrypted_null_selection_hash" if null else "preencrypted_selection_hash",
+                    ("(114) psi_{m+l} = H(H_I; 0x40, alpha_1, beta_1, ..., alpha_m, beta_m), every E_k = Enc(0; "
+                     "xi_{i,m+l,k})") if null else
+                    ("(113) psi_j = H(H_I; 0x40, alpha_1, beta_1, ..., alpha_m, beta_m), E_j = Enc(1; xi_{i,j,j}), "
+                     "E_k = Enc(0; xi_{i,j,k}) for k != j [= Verification 16.A, 18.3]"),
+                    f"psi {tag} ind_c={ind_c} j={pv['j']}{' (null l=' + str(pv['j'] - m) + ')' if null else ''}",
+                    "H_I", h_i_b, pv["b1"], pv["psi"],
+                    {"H_I_hex": hx(h_i_b), "ind_c": ind_c, "position_on_ballot": pos, "m": m, "L": L, "j": pv["j"],
+                     "xi_B_hex": hq(xi_b),
+                     "encryptions": [{"k": e["k"], "xi_hex": hq(e["xi"]), "sigma": e["sigma"],
+                                      "alpha_hex": hp(e["alpha"]), "beta_hex": hp(e["beta"])} for e in pv["encs"]],
+                     "derivation": "xi = eq. (121) with (i, j, k) = (ind_c, j, k); alpha_k = g^xi, beta_k = "
+                                   "K^(sigma_k + xi), K = g^5 (main_chain)"},
+                    1 + 2 * m * 512,
+                    notes="§5.5.5 table (p.78): B1 = 0x40 || b(alpha_1, 512) || b(beta_1, 512) || ... || b(beta_m, 512), "
+                          "len(B1) = 1 + 2m*512. Same layout for (113) and (114)."))
+
+            # Eq. (115) vector, with diagnostics for the unsorted and the position-index forms.
+            srt = sorted(psis)
+            diags = []
+            if srt != psis:
+                b1u = b"\x41" + b_small(ind_c) + b"".join(psis)
+                diags.append({"form": "selection hashes unsorted, in generation order j = 1..m+L", "b1_hex": hx(b1u),
+                              "hash_hex": hx(H(h_i_b, b1u)), "expected": False})
+            if pos != ind_c:
+                b1l = b"\x41" + b_small(pos) + b"".join(srt)
+                diags.append({"form": "b(l, 4) with l = position on the ballot (Verification 16.B's literal 'l') "
+                                      "instead of ind_c(Lambda_l)", "b1_hex": hx(b1l),
+                              "hash_hex": hx(H(h_i_b, b1l)), "expected": False})
+            cv = vec("preencrypted_contest_hash",
+                     "(115) chi_l = H(H_I; 0x41, ind_c(Lambda_l), psi_pi(1), ..., psi_pi(m+L)), psi_pi(1) < ... < "
+                     "psi_pi(m+L) as big-endian integers [= Verification 16.B, 18.4]",
+                     f"chi {tag} ind_c={ind_c} position={pos} m={m} L={L}", "H_I", h_i_b, b1c, chi,
+                     {"H_I_hex": hx(h_i_b), "ind_c": ind_c, "position_on_ballot": pos, "m": m, "L": L,
+                      "selection_hashes_generation_order_hex": [hx(x) for x in psis],
+                      "pi": pi, "selection_hashes_sorted_hex": [hx(x) for x in srt],
+                      "derivation": "selection hashes = this contest's preencrypted_selection_hash (j = 1..m) and "
+                                    "preencrypted_null_selection_hash (j = m+1..m+L) vectors; pi[r-1] = generation "
+                                    "index j of the r-th smallest hash"},
+                     5 + (m + L) * 32,
+                     notes="§5.5.5 table (p.78): B1 = 0x41 || b(ind_c(Lambda_l), 4) || psi_pi(1) || ... || psi_pi(m+L), "
+                           "len(B1) = 5 + (m + L)*32. All m + L hashes, including the L null hashes, are sorted "
+                           "ascending as big-endian integers (= lexicographic byte order) (§4.1.2, footnote 50). The "
+                           "index field is ind_c(Lambda_l) per eq. (115); Verification 16.B writes l (the contest's "
+                           "sequence number) there: ambiguity recorded, ind_c used per the S7 13.3 precedent. Verification "
+                           "18.4 hashes only m_i hashes; eq. (115) (m + L) is followed. 'diagnostics' hold hashes of "
+                           "wrong forms, NOT expected values.")
+            cv["b1_layout"] = layc
+            if diags:
+                cv["diagnostics"] = diags
+            pe_chi_vecs.append(cv)
+
+            csum = {"ind_c": ind_c, "position_on_ballot": pos, "m": m, "L": L, "chi_hex": hx(chi),
+                    "selection_hashes_generation_order_hex": [hx(x) for x in psis], "pi": pi,
+                    "short_codes": short_codes}
+
+            # §4.3 recording tool for the cast ballot: combine the selected vectors (padded to L with null vectors),
+            # sum the nonces, prove each component (eq. 59, R = 1) and the contest limit (eq. 62).
+            if bal["status"] == "cast":
+                chosen = list(sel) + [m + l for l in range(1, L - len(sel) + 1)]
+                assert len(chosen) == L and len(set(chosen)) == L
+                comb = []
+                for k in range(1, m + 1):
+                    a_, b_, xi_, s_ = 1, 1, 0, 0
+                    for j in chosen:
+                        e = psi_vecs[j - 1]["encs"][k - 1]
+                        a_, b_, xi_, s_ = a_ * e["alpha"] % P, b_ * e["beta"] % P, (xi_ + e["xi"]) % Q, s_ + e["sigma"]
+                    assert (a_, b_) == (pow(G, xi_, P), pow(K, xi_ + s_, P)), "Verification 15.A / summed nonce"
+                    assert pow(a_, Q, P) == 1 and pow(b_, Q, P) == 1, "6.A"
+                    comb.append({"k": k, "alpha": a_, "beta": b_, "xi": xi_, "sigma": s_})
+                if L == 1:
+                    assert [(c_["alpha"], c_["beta"]) for c_ in comb] == psi_vecs[chosen[0] - 1]["cts"]
+                for c_ in comb:
+                    k = c_["k"]
+                    u = [0x50000000 + ind_c * 0x10000 + k * 0x100 + j for j in range(2)]
+                    if (ind_c, k) == (1, 1):
+                        u[0] = Q - 1
+                    cf = [0x60000000 + ind_c * 0x10000 + k * 0x100 + j for j in range(2)]
+                    pr = make_range_proof(lambda cm, ic=ind_c, ko=k, al=c_["alpha"], be=c_["beta"]:
+                                          range_proof_challenge(h_i_b, ic, ko, al, be, cm),
+                                          K, c_["alpha"], c_["beta"], c_["xi"], c_["sigma"], 1, u, cf)
+                    v = vec("preencrypted_range_proof_challenge",
+                            "(59) with R = 1 [= (41)/(50)] c = H_q(H_I; 0x24, ind_c(Lambda), ind_o(lambda), alpha, beta, "
+                            "a_0, b_0, a_1, b_1) on the recording tool's combined selection vector (§4.3) "
+                            "[= Verification 6.3]",
+                            f"range proof {tag} ind_c={ind_c} ind_o={k} sigma={c_['sigma']}", "H_I", h_i_b,
+                            pr["b1"], pr["raw"],
+                            {"H_I_hex": hx(h_i_b), "ind_c": ind_c, "ind_o": k, "R": 1,
+                             "combined_from_j": chosen, "alpha_hex": hp(c_["alpha"]), "beta_hex": hp(c_["beta"]),
+                             "xi_hex": hq(c_["xi"]), "sigma": c_["sigma"],
+                             "u_hex": [hq(x) for x in u],
+                             "c_fake_hex": {str(j): hq(cf[j]) for j in range(2) if j != c_["sigma"]},
+                             "commitments": [{"j": j, "a_hex": hp(a_j), "b_hex": hp(b_j)}
+                                             for j, (a_j, b_j) in enumerate(pr["commits"])],
+                             "proof": {"c_hex": hq(pr["c"]), "c_j_hex": [hq(x) for x in pr["cs"]],
+                                       "v_j_hex": [hq(x) for x in pr["vs"]]},
+                             "derivation": "alpha = prod_j alpha_{j,k}, beta = prod_j beta_{j,k} over the chosen "
+                                           "vectors j (Verification 15.A); xi = sum_j xi_{ind_c,j,k} mod q (§4.3); "
+                                           "commitments by eqs. (57)/(58) with the fixed u_j and c_j (j != sigma); "
+                                           "c_sigma by (60), v_j by (61). The script runs Verification 6.1-6.3 and "
+                                           "6.A-6.D on the result."},
+                            9 + (2 * 1 + 4) * 512, hq_out=True,
+                            notes="No pre-encrypted row in §5.5.5: §4.3 says proofs are made 'as in standard "
+                                  "ElectionGuard section 3.3.7', so this is the §5.5.3 (p.75) row for (41)/(50)/(59): "
+                                  "B1 = 0x24 || b(ind_c, 4) || b(ind_o, 4) || b(alpha, 512) || b(beta, 512) || b(a_0, "
+                                  "512) || b(b_0, 512) || b(a_1, 512) || b(b_1, 512), len(B1) = 9 + (2R + 4)*512 = 3081, "
+                                  "B0 = the pre-encrypted ballot's H_I. ind_o = option index = position k.")
+                    v["b1_layout"] = pr["layout"]
+                    pe_rp_vecs.append(v)
+                a_bar, b_bar, xi_bar, ell = 1, 1, 0, 0
+                for c_ in comb:                                                          # (7.1), (7.2)
+                    a_bar, b_bar = a_bar * c_["alpha"] % P, b_bar * c_["beta"] % P
+                    xi_bar, ell = (xi_bar + c_["xi"]) % Q, ell + c_["sigma"]
+                assert ell == len(sel) <= L
+                u = [0x70000000 + ind_c * 0x100 + j for j in range(L + 1)]
+                cf = [0x80000000 + ind_c * 0x100 + j for j in range(L + 1)]
+                pr = make_range_proof(lambda cm, ic=ind_c, al=a_bar, be=b_bar:
+                                      selection_limit_challenge(h_i_b, ic, al, be, cm),
+                                      K, a_bar, b_bar, xi_bar, ell, L, u, cf)
+                v = vec("preencrypted_selection_limit_challenge",
+                        "(62) c = H_q(H_I; 0x24, ind_c(Lambda), alpha-bar, beta-bar, a_0, b_0, ..., a_L, b_L) on the "
+                        "recording tool's combined selection vector (§4.3) [= Verification 7.5]",
+                        f"selection limit proof {tag} ind_c={ind_c} L={L} total={ell}", "H_I", h_i_b,
+                        pr["b1"], pr["raw"],
+                        {"H_I_hex": hx(h_i_b), "ind_c": ind_c, "L": L, "selected_options": sel,
+                         "combined_from_j": chosen,
+                         "alpha_bar_hex": hp(a_bar), "beta_bar_hex": hp(b_bar), "xi_bar_hex": hq(xi_bar), "total": ell,
+                         "u_hex": [hq(x) for x in u],
+                         "c_fake_hex": {str(j): hq(cf[j]) for j in range(L + 1) if j != ell},
+                         "commitments": [{"j": j, "a_hex": hp(a_j), "b_hex": hp(b_j)}
+                                         for j, (a_j, b_j) in enumerate(pr["commits"])],
+                         "proof": {"c_hex": hq(pr["c"]), "c_j_hex": [hq(x) for x in pr["cs"]],
+                                   "v_j_hex": [hq(x) for x in pr["vs"]]},
+                         "derivation": "alpha-bar = prod_k alpha_k, beta-bar = prod_k beta_k over the m components of "
+                                       "the combined vector (7.1, 7.2); xi-bar = sum_k xi_k; commitments by (57)/(58) "
+                                       "with R = L; the script runs Verification 7.3-7.5 and 7.A-7.D."},
+                        5 + (2 * L + 4) * 512, hq_out=True,
+                        notes="No pre-encrypted row in §5.5.5; this is the §5.5.3 (p.75) row for (62): B1 = 0x24 || "
+                              "b(ind_c, 4) || b(alpha-bar, 512) || b(beta-bar, 512) || b(a_0, 512) || ... || b(b_L, 512), "
+                              "len(B1) = 5 + (2L + 4)*512, no ind_o. B0 = the pre-encrypted ballot's H_I.")
+                v["b1_layout"] = pr["layout"]
+                pe_lim_vecs.append(v)
+                csum["recording"] = {
+                    "selected_options": sel, "combined_from_j": chosen,
+                    "selected_short_codes_last_byte_hex": [short_code_hex(psi_vecs[j - 1]["psi"]) for j in chosen],
+                    "combined_vector": [{"k": c_["k"], "alpha_hex": hp(c_["alpha"]), "beta_hex": hp(c_["beta"]),
+                                         "xi_hex": hq(c_["xi"]), "sigma": c_["sigma"]} for c_ in comb],
+                    "verification_15": "combined vector = componentwise product of the chosen Psi_j (asserted)"}
+            contests_summary.append(csum)
+
+        b1, hc = confirmation_code(h_i_b, chis_pe, bal["B_C"], sep=0x42)                 # eq. (116), 16.C, 18.A
+        pe_hc_vecs.append(vec("preencrypted_confirmation_code",
+                              "(116) H_C = H(H_I; 0x42, chi_1, ..., chi_mB, B_C) [= Verification 16.C, 18.A], chi from "
+                              "eq. (115)",
+                              f"pre-encrypted H_C {tag}", "H_I", h_i_b, b1, hc,
+                              {"H_I_hex": hx(h_i_b), "contest_hashes_hex": [hx(c_) for c_ in chis_pe],
+                               "contest_ind_c": [c[0] for c in bal["contests"]], "B_C_hex": hx(bal["B_C"]),
+                               "B_C": bal["B_C_desc"],
+                               "derivation": "contest hashes = this ballot's preencrypted_contest_hash vectors in "
+                                             "ballot (ascending ind_c) order"},
+                              37 + 32 * len(chis_pe),
+                              notes="§5.5.5 table (p.78): len(B1) = 37 + m_B*32. Real eq. (115) contest hashes (the "
+                                    "earlier preencrypted_confirmation_code vectors use opaque stand-ins)."))
+        pe_summary_ballots.append({"ballot": bname, "status": bal["status"], "id_B_hex": hq(bal["id_B"]),
+                                   "H_I_hex": hx(h_i_b), "xi_B_hex": hq(xi_b), "xi_B_label": qlbl(xi_b),
+                                   "S_device": bal["S_device"], "B_C_hex": hx(bal["B_C"]), "B_C": bal["B_C_desc"],
+                                   "H_C_hex": hx(hc), "contests": contests_summary})
+
+    # Extra eq. (121) edge case: maximal small indices and xi_B = 2^256 - 1 under P1's H_I.
+    h_i_p1 = selection_encryption_identifier_hash(H_E, pe_ballots[0]["id_B"])[1]
+    b1, raw = preencrypted_nonce(h_i_p1, 2147483647, 2147483647, 2147483647, 2**256 - 1)
+    pe_nonce_vecs.append(vec("preencrypted_encryption_nonce", "(121) xi_{i,j,k} = H_q(H_I; 0x45, i, j, k, xi_B)",
+                       "xi_{2^31-1,2^31-1,2^31-1} xi_B=2^256-1 P1 (cast)", "H_I", h_i_p1, b1, raw,
+                       {"H_I_hex": hx(h_i_p1), "i": 2147483647, "j": 2147483647, "k": 2147483647,
+                        "xi_B_hex": hq(2**256 - 1), "xi_B_ge_q": True},
+                       45, hq_out=True, notes="Edge case: largest small integers (§5.1.3) and xi_B = 2^256 - 1."))
+
+    for group in (pe_nonce_vecs, pe_sel_vecs, pe_chi_vecs, pe_hc_vecs, pe_rp_vecs, pe_lim_vecs):
+        vectors.extend(group)
+
+    pe_ballots_summary = {
+        "election": "main_chain (H_E = main_chain.H_E_hex, K = g^5)",
+        "ballots": pe_summary_ballots,
+        "short_codes": "Omega is manifest-defined (§4.1.5); omega_last_byte_hex (two uppercase hex chars of the last "
+                       "byte), omega_last_byte_dec3 (last byte as 000-255) and omega_sorted_ordinal (1-based rank in "
+                       "the contest's sorted hashes, §4.2.2) are spec examples, not binding. The script asserts the "
+                       "last-byte codes are unique within each contest.",
+        "combined_vector_proofs": "eqs. (59) with R = 1 (= (41)/(50)) per option and (62) per contest, unchanged, keyed "
+                                  "with the pre-encrypted ballot's H_I (no §5.5.5 row; §4.3 'as in standard "
+                                  "ElectionGuard section 3.3.7')",
+        "stand_ins": "the earlier preencrypted_confirmation_code vectors (preencrypted_chain) use opaque contest-hash "
+                     "stand-ins and predate this family; their values are unchanged",
+        "spec_ambiguities": PE_AMBIGUITIES,
+    }
+
     # The Q7 helper's rejection boundary (not spec; recorded, not a hash vector).
     cd_rejections = []
     for b_lambda, s in ((1, full1 + "!"), (3, full3 + "x"), (1, "Write-in: Grace Hopper (US)é")):
@@ -1686,6 +2141,7 @@ def build():
             "verification_13": v13_summary,
         },
         "preencrypted_chain": pre_summary,
+        "preencrypted_ballots": pe_ballots_summary,
     }
     return doc
 

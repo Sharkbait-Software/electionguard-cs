@@ -63,6 +63,15 @@ public class ConfirmationCodeVerification
         ArgumentNullException.ThrowIfNull(ballot);
         ArgumentNullException.ThrowIfNull(encryptionRecord);
 
+        // p.64: "Verification 8 is only used for regular ElectionGuard ballots. Confirmation codes
+        // for pre-encrypted ballots must be validated with Verification 16." A cast pre-encrypted
+        // ballot's contest hashes and confirmation code are eqs. (115)/(116), so 8.A/8.B would fail
+        // it; it is refused here rather than reported as a wrong hash.
+        if (ballot.IsPreEncrypted)
+        {
+            throw new VerificationFailedException("8.structure", $"Ballot {ballot.Id} is a cast pre-encrypted ballot; Verification 8 is only used for regular ballots, and its confirmation code is checked by Verification 16 (p.64).");
+        }
+
         // The contest hashes recomputed below hash the manifest's contest indices. They are trusted
         // here because EncryptionRecord validated the manifest (§3.1.3) when it was built;
         // re-validating the whole manifest per ballot would cost O(manifest) each time.

@@ -1,4 +1,4 @@
-using ElectionGuard.Core.BallotEncryption;
+﻿using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.Models;
 
 namespace ElectionGuard.Core.PreEncryption;
@@ -40,6 +40,7 @@ public record PreEncryptedContest
     public required ContestHash ContestHash { get; init; }
 
     /// <summary>§4.4: the selection hashes as published, sorted numerically.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
     public IReadOnlyList<SelectionHash> SortedSelectionHashes => Selections.Select(s => s.SelectionHash).Order().ToList();
 }
 
@@ -59,6 +60,7 @@ public record PreEncryptedSelection
     /// <summary>The option this vector selects, or null for a null vector.</summary>
     public required string? ChoiceId { get; init; }
 
+    [System.Text.Json.Serialization.JsonIgnore]
     public bool IsNullVote => ChoiceId is null;
 
     public required IReadOnlyList<EncryptedValue> Vector { get; init; }

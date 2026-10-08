@@ -1,4 +1,4 @@
-using ElectionGuard.Core.BallotEncryption;
+﻿using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.KeyGeneration;
 using ElectionGuard.Core.Models;
 using ElectionGuard.Core.PreEncryption;
@@ -181,7 +181,8 @@ public static class ElectionFixtureBuilder
     /// <summary>
     /// Builds a small deterministic (non-Bogus) 1-contest, 2-choice manifest plus its serialized
     /// ManifestFile bytes. The contest declares <paramref name="supplementalFields"/>, by default
-    /// <see cref="DefaultSupplementalFields"/>, plus the write-in count when
+    /// <see cref="DefaultSupplementalFields"/> (none when <paramref name="hashTrimmingFunction"/> is
+    /// set: a pre-encrypted election declares none), plus the write-in count when
     /// <paramref name="includeWriteIns"/>. Pass includeWriteIns: true and a non-null contestData
     /// string on the ballot (see CreateBallot) to exercise the write-in / contest-data path; the
     /// contest then offers <paramref name="writeInFieldCount"/> write-in fields (1 by default) and
@@ -198,7 +199,9 @@ public static class ElectionFixtureBuilder
         int? writeInFieldCount = null,
         int? contestDataBlocks = null)
     {
-        var kinds = (supplementalFields ?? DefaultSupplementalFields).ToList();
+        // An election that uses pre-encrypted ballots (a hash-trimming function) cannot declare
+        // supplemental fields (Manifest.Validate, S9), so its default is none.
+        var kinds = (supplementalFields ?? (hashTrimmingFunction is null ? DefaultSupplementalFields : [])).ToList();
         if (includeWriteIns && !kinds.Contains(SupplementalFieldKind.WriteInCount))
         {
             kinds.Add(SupplementalFieldKind.WriteInCount);

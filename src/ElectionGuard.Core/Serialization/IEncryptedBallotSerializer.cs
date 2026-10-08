@@ -32,6 +32,8 @@ public class JsonEncryptedBallotSerializer : IEncryptedBallotSerializer
                 new SelectionEncryptionIdentifierHashJsonConverter(),
                 new VotingDeviceInformationHashJsonConverter(),
                 new ChainingFieldJsonConverter(),
+                new SelectionHashJsonConverter(),
+                new ShortCodeJsonConverter(),
             }
         };
 
@@ -54,6 +56,8 @@ public class JsonEncryptedBallotSerializer : IEncryptedBallotSerializer
                 new SelectionEncryptionIdentifierHashJsonConverter(),
                 new VotingDeviceInformationHashJsonConverter(),
                 new ChainingFieldJsonConverter(),
+                new SelectionHashJsonConverter(),
+                new ShortCodeJsonConverter(),
             }
         };
 
@@ -133,6 +137,19 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
                 Challenge = encryptedBallot.EncryptedBallotNonce.Challenge,
                 Response = encryptedBallot.EncryptedBallotNonce.Response,
             },
+            // Only (α, β), short codes and hashes: a combined or derived nonce is never written.
+            PreEncryptedContests = encryptedBallot.PreEncryptedContests?.Select(c => new ProtobufPreEncryptedCastContest
+            {
+                ContestId = c.ContestId,
+                SelectionHashes = c.SelectionHashes.Select(h => (byte[])h).ToList(),
+                SelectedVectors = c.SelectedVectors.Select(v => new ProtobufPreEncryptedCastSelection
+                {
+                    Vector = v.Vector.Select(e => new ProtobufCiphertext { Alpha = e.Alpha.ToByteArray(), Beta = e.Beta.ToByteArray() }).ToList(),
+                    SelectionHash = v.SelectionHash,
+                    ShortCode = v.ShortCode.Value,
+                }).ToList(),
+            }).ToList(),
+            IsPreEncrypted = encryptedBallot.IsPreEncrypted,
         };
 
         Serializer.Serialize(destination, protobufEncryptedBallot);
@@ -216,9 +233,44 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
             EncryptedBallotNonce = ReadBallotNonce(protobufBallot.EncryptedBallotNonce),
             Weight = protobufBallot.Weight,
             Status = protobufBallot.Status,
+            PreEncryptedContests = ReadPreEncryptedContests(protobufBallot),
         };
 
         return encryptedBallot;
+    }
+
+    /// <summary>
+    /// A cast pre-encrypted ballot's pre-encryption data (field 12, flagged by field 13, since
+    /// protobuf writes nothing for an empty list): each group element canonical, each selection
+    /// hash exactly 32 bytes, each short code present. Null for a regular ballot.
+    /// </summary>
+    private static List<PreEncryption.PreEncryptedCastContest>? ReadPreEncryptedContests(ProtobufEncryptedBallot ballot)
+    {
+        if (!ballot.IsPreEncrypted)
+        {
+            if (ballot.PreEncryptedContests is { Count: > 0 })
+            {
+                throw new NonCanonicalEncodingException("The ballot carries pre-encryption data but is not flagged as a pre-encrypted ballot (field 13).");
+            }
+
+            return null;
+        }
+
+        return (ballot.PreEncryptedContests ?? []).Select(c => new PreEncryption.PreEncryptedCastContest
+        {
+            ContestId = c.ContestId,
+            SelectionHashes = (c.SelectionHashes ?? []).Select(SelectionHash.FromCanonicalBytes).ToList(),
+            SelectedVectors = (c.SelectedVectors ?? []).Select(v => new PreEncryption.PreEncryptedCastSelection
+            {
+                Vector = (v.Vector ?? []).Select(e => new EncryptedValue
+                {
+                    Alpha = IntegerModP.FromCanonicalBytes(e.Alpha),
+                    Beta = IntegerModP.FromCanonicalBytes(e.Beta),
+                }).ToList(),
+                SelectionHash = SelectionHash.FromCanonicalBytes(v.SelectionHash),
+                ShortCode = new PreEncryption.ShortCode(v.ShortCode ?? throw new NonCanonicalEncodingException("A selected pre-encryption vector has no short code.")),
+            }).ToList(),
+        }).ToList();
     }
 
     /// <summary>
@@ -309,6 +361,55 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
         /// </summary>
         [ProtoMember(11)]
         public byte[]? ChainingField { get; init; }
+
+        /// <summary>
+        /// <see cref="EncryptedBallot.PreEncryptedContests"/> of a cast pre-encrypted ballot (§4.4);
+        /// absent on a regular ballot, which therefore encodes as before.
+        /// </summary>
+        [ProtoMember(12)]
+        public List<ProtobufPreEncryptedCastContest>? PreEncryptedContests { get; init; }
+
+        /// <summary>
+        /// Whether the ballot is a cast pre-encrypted ballot (<see cref="EncryptedBallot.IsPreEncrypted"/>),
+        /// so that a pre-encrypted ballot with no contests is not read as a regular one. False, and
+        /// so not written, on a regular ballot.
+        /// </summary>
+        [ProtoMember(13)]
+        public bool IsPreEncrypted { get; init; }
+    }
+
+    /// <summary><see cref="PreEncryption.PreEncryptedCastContest"/>.</summary>
+    [ProtoContract]
+    public class ProtobufPreEncryptedCastContest
+    {
+        [ProtoMember(1)]
+        public required string ContestId { get; init; }
+        [ProtoMember(2)]
+        public List<byte[]>? SelectionHashes { get; init; }
+        [ProtoMember(3)]
+        public List<ProtobufPreEncryptedCastSelection>? SelectedVectors { get; init; }
+    }
+
+    /// <summary><see cref="PreEncryption.PreEncryptedCastSelection"/>: (α, β) per position, ψ and ω.</summary>
+    [ProtoContract]
+    public class ProtobufPreEncryptedCastSelection
+    {
+        [ProtoMember(1)]
+        public List<ProtobufCiphertext>? Vector { get; init; }
+        [ProtoMember(2)]
+        public byte[]? SelectionHash { get; init; }
+        [ProtoMember(3)]
+        public string? ShortCode { get; init; }
+    }
+
+    /// <summary>An ElGamal ciphertext (α, β) without proofs or nonce.</summary>
+    [ProtoContract]
+    public class ProtobufCiphertext
+    {
+        [ProtoMember(1)]
+        public required byte[] Alpha { get; init; }
+        [ProtoMember(2)]
+        public required byte[] Beta { get; init; }
     }
 
     [ProtoContract]

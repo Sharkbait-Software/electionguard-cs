@@ -191,6 +191,22 @@ public class BallotStructureTests
             Status = b.Status,
             DeviceId = b.DeviceId,
         },
+        // S9 review round 3: every ballot names its device S_device (§3.4.3 eq. 72), which V8.C
+        // hashes. A JSON document that writes "deviceId": null yields a ballot without it.
+        ["null device id"] = b => new()
+        {
+            Id = b.Id,
+            SelectionEncryptionIdentifier = b.SelectionEncryptionIdentifier,
+            SelectionEncryptionIdentifierHash = b.SelectionEncryptionIdentifierHash,
+            BallotStyleId = b.BallotStyleId,
+            Contests = b.Contests,
+            ConfirmationCode = b.ConfirmationCode,
+            EncryptedBallotNonce = b.EncryptedBallotNonce,
+            ChainingField = b.ChainingField,
+            Weight = b.Weight,
+            Status = b.Status,
+            DeviceId = null!,
+        },
     };
 
     private static EncryptedBallot WithBallotNonce(EncryptedBallot ballot, EncryptedBallotNonce nonce) => new()

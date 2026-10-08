@@ -234,6 +234,9 @@ public class PreEncryptedBallotVerificationTests
         ["contest not in the manifest"] = b => b with { Contests = [Contest(b) with { ContestId = "not-a-contest" }] },
         ["wrong contest index"] = b => b with { Contests = [Contest(b) with { ContestIndex = 2 }] },
         ["unknown ballot style"] = b => b with { BallotStyleId = "not-a-style" },
+        // S9 review round 3: 16.D hashes S_device (eq. 119); without one it would throw
+        // ArgumentNullException rather than report the ballot.
+        ["null device id"] = b => b with { DeviceId = null! },
     };
 
     public static TheoryData<string> PreEncryptedShapeNames()

@@ -39,8 +39,9 @@ public class ChallengedBallotWellFormednessVerification
     /// Verifies <paramref name="decrypted"/>, the decryption of the challenged <paramref name="ballot"/>,
     /// against <paramref name="manifest"/>, whose ballot style the ballot names. Throws
     /// <see cref="VerificationFailedException"/>: "14.structure" if the decryption is for another
-    /// ballot, the ballot is not recorded as challenged, its ballot style is not in the manifest, or a
-    /// list or entry of the decryption is missing or repeated; otherwise "14.A" to "14.D" for the first
+    /// ballot, the ballot is not recorded as challenged or is a pre-encrypted ballot's record, its
+    /// ballot style is not in the manifest, or a list or entry of the decryption is missing or
+    /// repeated; otherwise "14.A" to "14.D" for the first
     /// label check that fails over the whole ballot, then "14.E" or "14.F" for the first contest that is
     /// not well formed.
     /// </summary>
@@ -59,6 +60,11 @@ public class ChallengedBallotWellFormednessVerification
         if (ballot.Status != BallotStatus.Challenged)
         {
             throw Failure("14.structure", $"{where} is recorded as {ballot.Status}, not as challenged.");
+        }
+
+        if (ballot.IsPreEncrypted)
+        {
+            throw Failure("14.structure", $"{where} is a pre-encrypted ballot's record, always a cast ballot's (§4.3.1); an uncast pre-encrypted ballot is checked by Verifications 18 and 19.");
         }
 
         var style = manifest.BallotStyles.FirstOrDefault(x => x.Id == ballot.BallotStyleId)

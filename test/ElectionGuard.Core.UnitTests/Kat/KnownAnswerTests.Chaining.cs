@@ -82,19 +82,31 @@ public partial class KnownAnswerTests
         var preEncryptedDeviceHash = new VotingDeviceInformationHash(Hex(mainChain, "H_DI_preencrypted_hex"));
 
         ChainingField chainingField;
-        if (inputs.TryGetProperty("H_DI_hex", out var deviceHashHex))
+        string fieldHex = inputs.GetProperty("B_C_hex").GetString()!;
+        if (fieldHex.StartsWith("00000000", StringComparison.Ordinal))
         {
-            // 16.E: no chaining, B_C = 0x00000000 || H_DI with the 0x43 H_DI of eq. (119).
-            Assert.Equal(ToHex(preEncryptedDeviceHash), deviceHashHex.GetString());
+            // 16.E: no chaining, B_C = 0x00000000 || H_DI with the 0x43 H_DI of eq. (119), the
+            // main-chain device's (the vectors name it as H_DI_hex or in B_C's description).
+            if (inputs.TryGetProperty("H_DI_hex", out var deviceHashHex))
+            {
+                Assert.Equal(ToHex(preEncryptedDeviceHash), deviceHashHex.GetString());
+            }
+
             chainingField = ChainingField.ForPreEncryptedBallots(ChainingMode.None, preEncryptedDeviceHash, extendedBaseHash, previousConfirmationCode: null);
         }
         else
         {
-            // 16.F: B_C,j = 0x00000001 || H_{j-1}; for j = 1 the library derives H_0 (eq. 117) itself.
-            var previous = inputs.GetProperty("H_prev_hex").GetString()!;
-            var chainInit = AllVectors.Single(x => x.GetProperty("family").GetString() == "preencrypted_chain_init");
-            chainingField = previous == chainInit.GetProperty("expected_hex").GetString()
-                ? ChainingField.ForPreEncryptedBallots(ChainingMode.Simple, preEncryptedDeviceHash, extendedBaseHash, previousConfirmationCode: null)
+            // 16.F: B_C,j = 0x00000001 || H_{j-1}; for j = 1 the library derives H_0 (eq. 117) itself,
+            // from the H_DI of the device whose preencrypted_chain_init vector is H_{j-1}.
+            var previous = fieldHex[8..];
+            if (inputs.TryGetProperty("H_prev_hex", out var previousHex))
+            {
+                Assert.Equal(previous, previousHex.GetString());
+            }
+
+            var chainInit = AllVectors.SingleOrDefault(x => x.GetProperty("family").GetString() == "preencrypted_chain_init" && x.GetProperty("expected_hex").GetString() == previous);
+            chainingField = chainInit.ValueKind != JsonValueKind.Undefined
+                ? ChainingField.ForPreEncryptedBallots(ChainingMode.Simple, new VotingDeviceInformationHash(Hex(Inputs(chainInit), "H_DI_hex")), extendedBaseHash, previousConfirmationCode: null)
                 : ChainingField.ForPreEncryptedBallots(ChainingMode.Simple, preEncryptedDeviceHash, extendedBaseHash, new ConfirmationCode(Convert.FromHexString(previous)));
         }
 
@@ -177,7 +189,9 @@ public partial class KnownAnswerTests
             .ToList();
         Assert.Equal(2, links.Count);
 
-        var initial = AllVectors.Single(x => x.GetProperty("family").GetString() == $"{prefix}chain_init");
+        // The main-chain device's H_0 (the pre-encrypted family also holds P2's device, section 4).
+        var initial = AllVectors.Single(x => x.GetProperty("family").GetString() == $"{prefix}chain_init"
+            && Inputs(x).GetProperty("H_DI_hex").GetString() == ToHex(deviceHash));
         var closeInner = AllVectors.Single(x => x.GetProperty("family").GetString() == $"{prefix}chain_close_inner");
         var close = AllVectors.Single(x => x.GetProperty("family").GetString() == $"{prefix}chain_close");
         Assert.Equal(ToHex(links[^1].ConfirmationCode), Inputs(closeInner).GetProperty("H_l_hex").GetString());

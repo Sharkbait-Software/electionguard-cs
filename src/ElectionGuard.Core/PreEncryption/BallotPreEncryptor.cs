@@ -14,11 +14,12 @@ namespace ElectionGuard.Core.PreEncryption;
 /// the ballot nonce has been decrypted. The only randomness beyond those two seeds is in the
 /// encryption of ξB itself (§3.3.4).
 ///
-/// Supplemental verifiable fields (§3.3.9) play no part here: §4.1's selection vectors have one
-/// entry per selectable option (eqs. 112-114) and a contest has L null vectors, with no slot for a
-/// supplemental field, so the pre-encryptor reads only <see cref="Contest.Choices"/>. What a
-/// recorded pre-encrypted ballot (§4.3, stage S9) carries for a contest that declares supplemental
-/// fields is not settled yet.
+/// Supplemental verifiable fields (§3.3.9) and contest data (§3.3.10) play no part here: §4.1's
+/// selection vectors have one entry per selectable option (eqs. 112-114) and a contest has L null
+/// vectors, with no slot for a supplemental field, and p.66 says pre-encrypted contests have no
+/// contest data. <see cref="Manifest.Validate"/> refuses a manifest that names a hash-trimming
+/// function and declares either (S9). The companion recording tool (§4.3) is
+/// <see cref="BallotRecordingTool"/>.
 /// </summary>
 public class BallotPreEncryptor
 {
@@ -129,19 +130,9 @@ public class BallotPreEncryptor
         ConfirmationCode? previousConfirmationCode)
     {
         var manifest = _encryptionRecord.Manifest;
-        var ballotStyle = manifest.BallotStyles.SingleOrDefault(x => x.Id == ballotStyleId)
-            ?? throw new ArgumentException($"Could not find ballot style with id {ballotStyleId} in manifest.", nameof(ballotStyleId));
-
         var selectionEncryptionIdentifierHash = new SelectionEncryptionIdentifierHash(_encryptionRecord.ExtendedBaseHash, selectionEncryptionIdentifier);
+        var contests = PreEncryptContests(ballotStyleId, selectionEncryptionIdentifierHash, ballotNonce);
         var encryptedBallotNonce = BallotNonceEncryption.Encrypt(ballotNonce, selectionEncryptionIdentifierHash, _encryptionRecord.ElectionPublicKeys.OtherBallotDataEncryptionKey);
-
-        // §4.1.3: contest hashes enter the confirmation code in the order of their contest indices.
-        var contests = ballotStyle.ContestIds
-            .Select(contestId => manifest.Contests.SingleOrDefault(x => x.Id == contestId)
-                ?? throw new ArgumentException($"Ballot style {ballotStyleId} lists contest {contestId}, which is not in the manifest.", nameof(ballotStyleId)))
-            .OrderBy(x => x.Index)
-            .Select(contest => PreEncryptContest(contest, selectionEncryptionIdentifierHash, ballotNonce))
-            .ToList();
 
         var chainingField = ChainingField.ForPreEncryptedBallots(manifest.ChainingMode, _deviceHash, _encryptionRecord.ExtendedBaseHash, previousConfirmationCode);
         var confirmationCode = ConfirmationCode.ForPreEncryptedBallot(selectionEncryptionIdentifierHash, contests.Select(x => x.ContestHash), chainingField);
@@ -158,6 +149,28 @@ public class BallotPreEncryptor
             ConfirmationCode = confirmationCode,
             DeviceId = _deviceId,
         };
+    }
+
+    /// <summary>
+    /// Every contest of the ballot style, in contest index order (§4.1.3), as ξ_B determines it
+    /// (§4.2.1): all selection and null vectors with their selection hashes, short codes and contest
+    /// hashes. Each encryption carries its nonce ξ_{i,j,k} in <see cref="EncryptedValue.EncryptionNonce"/>,
+    /// which no serializer writes. The recording tool (§4.3) calls this to regenerate a ballot from
+    /// its decrypted ballot nonce.
+    /// </summary>
+    internal List<PreEncryptedContest> PreEncryptContests(string ballotStyleId, SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, BallotNonce ballotNonce)
+    {
+        var manifest = _encryptionRecord.Manifest;
+        var ballotStyle = manifest.BallotStyles.SingleOrDefault(x => x.Id == ballotStyleId)
+            ?? throw new ArgumentException($"Could not find ballot style with id {ballotStyleId} in manifest.", nameof(ballotStyleId));
+
+        // §4.1.3: contest hashes enter the confirmation code in the order of their contest indices.
+        return ballotStyle.ContestIds
+            .Select(contestId => manifest.Contests.SingleOrDefault(x => x.Id == contestId)
+                ?? throw new ArgumentException($"Ballot style {ballotStyleId} lists contest {contestId}, which is not in the manifest.", nameof(ballotStyleId)))
+            .OrderBy(x => x.Index)
+            .Select(contest => PreEncryptContest(contest, selectionEncryptionIdentifierHash, ballotNonce))
+            .ToList();
     }
 
     /// <summary>§4.1.5: the short codes within each contest must be unique.</summary>

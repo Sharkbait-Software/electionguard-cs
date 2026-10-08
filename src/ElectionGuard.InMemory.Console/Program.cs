@@ -387,6 +387,11 @@ try
 
     File.WriteAllBytes(Path.Combine(outputDirectory, "challenged-ballots.json"), JsonSerializer.SerializeToUtf8Bytes(decryptedChallengedBallots, tallyJsonOptions));
 
+    // Pre-encrypted ballots (§4), in an election of their own: an election that uses them declares
+    // no supplemental fields or contest data, which this manifest does. Its record is written to
+    // the "pre-encrypted" subdirectory; the tally above is untouched.
+    PreEncryptedElectionDemo.Run(outputDirectory);
+
     Console.WriteLine("Done.");
 }
 catch (Exception ex)

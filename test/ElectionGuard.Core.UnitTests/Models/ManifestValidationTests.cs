@@ -1,4 +1,4 @@
-using ElectionGuard.Core.BallotEncryption;
+﻿using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.Models;
 using ElectionGuard.Core.PreEncryption;
 using ElectionGuard.Testing.Common;
@@ -17,6 +17,53 @@ public class ManifestValidationTests
     }
 
     private static Manifest Minimal() => ElectionFixtureBuilder.CreateMinimalManifest().Manifest;
+
+    // --- S9: an election that uses pre-encrypted ballots ----------------------------------------
+
+    private static Manifest PreEncrypted() => ElectionFixtureBuilder.CreateMinimalManifest(hashTrimmingFunction: HashTrimmingFunction.TwoHex).Manifest;
+
+    [Fact]
+    public void Validate_PreEncryptedElectionWithoutSupplementalFieldsOrContestData_DoesNotThrow()
+    {
+        var manifest = PreEncrypted();
+
+        Assert.Empty(manifest.Contests[0].SupplementalFields);
+        manifest.Validate();
+    }
+
+    /// <summary>
+    /// A pre-encrypted selection vector has no slot for a supplemental field (§4.1) and a
+    /// pre-encrypted contest has no contest data (p.66), while every ballot of a contest must carry
+    /// every field the contest declares (S5, S6). The combination is refused (S9 open question).
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(PreEncryptedContestsWithFields))]
+    public void Validate_PreEncryptedElectionWhoseContestDeclaresFieldsOrContestData_Throws(string description, Func<Contest, Contest> change)
+    {
+        _ = description;
+        var manifest = PreEncrypted();
+        var invalid = manifest with { Contests = [change(manifest.Contests[0])] };
+
+        Assert.Throws<InvalidManifestException>(invalid.Validate);
+        invalid.WithoutPreEncryption().Validate();
+    }
+
+    public static IEnumerable<object[]> PreEncryptedContestsWithFields()
+    {
+        yield return ["an overvote indicator", new Func<Contest, Contest>(c => c with { SupplementalFields = ElectionFixtureBuilder.SupplementalFields(2, [SupplementalFieldKind.OvervoteIndicator]) })];
+        yield return ["write-in fields and their count", new Func<Contest, Contest>(c => c with { SupplementalFields = ElectionFixtureBuilder.SupplementalFields(2, [SupplementalFieldKind.WriteInCount]), WriteInFieldCount = 1 })];
+        yield return ["contest data", new Func<Contest, Contest>(c => c with { ContestDataBlocks = 2 })];
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(9)]
+    public void Validate_UndefinedHashTrimmingFunction_Throws(int omega)
+    {
+        var manifest = PreEncrypted() with { HashTrimmingFunction = (HashTrimmingFunction)omega };
+
+        Assert.Throws<InvalidManifestException>(manifest.Validate);
+    }
 
     private static Contest SecondContest(int index) => new()
     {
@@ -467,4 +514,10 @@ public class ManifestValidationTests
 
         return directory?.FullName ?? throw new InvalidOperationException("Could not find the repository root above " + AppContext.BaseDirectory);
     }
+}
+
+internal static class PreEncryptedManifestExtensions
+{
+    /// <summary>The same manifest for an election that does not use pre-encrypted ballots.</summary>
+    public static Manifest WithoutPreEncryption(this Manifest manifest) => manifest with { HashTrimmingFunction = null };
 }
