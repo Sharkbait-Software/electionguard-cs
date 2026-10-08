@@ -4,6 +4,7 @@ using ElectionGuard.Core.Models;
 using ElectionGuard.Core.PreEncryption;
 using ElectionGuard.Core.Verify.Ballot;
 using ElectionGuard.Core.Verify.PreEncryption;
+using ElectionGuard.Testing.Common;
 using System.Buffers.Binary;
 using System.Numerics;
 using System.Text.Json;
@@ -13,10 +14,13 @@ namespace ElectionGuard.Core.UnitTests.Kat;
 /// <summary>
 /// Pre-encrypted ballots (§4.1-4.4, Verifications 6, 7 and 15-19) through the library's own API:
 /// the encryption nonces of eq. (121) (0x45), selection and null-vector hashes (eqs. 113, 114; 0x40),
-/// contest hashes (eq. 115; 0x41, ind_c, sorted), the recording tool's combined vectors and their
-/// proofs (eqs. 59 and 62, 0x24, keyed with the pre-encrypted ballot's H_I), and the oracle's two
-/// ballots rebuilt end to end: P1 pre-encrypted and recorded as cast, P2 pre-encrypted and recorded
-/// as uncast, each accepted by the verifications that apply to it.
+/// contest hashes (eq. 115; 0x41, ind_c, sorted), combined vectors and their proofs (eqs. 59 and 62,
+/// 0x24, keyed with the pre-encrypted ballot's H_I), and the oracle's two ballots rebuilt end to end:
+/// P1 pre-encrypted and recorded as cast, P2 pre-encrypted and recorded as uncast, each accepted by
+/// the verifications that apply to it. The ballots are generated, combined and proved by the public
+/// <see cref="PreEncryptionPrimitives"/>; the test-only <see cref="PreEncryptedBallotFixtures"/>
+/// assembles them as a tool would (the library has no encrypting or recording tool, user decision
+/// Q35).
 /// </summary>
 public partial class KnownAnswerTests
 {
@@ -179,10 +183,10 @@ public partial class KnownAnswerTests
     }
 
     /// <summary>
-    /// P1, rebuilt by the encrypting tool from its id_B and ξ_B (no chaining, main-chain device), has
-    /// the oracle's selection hashes in generation order, short codes, contest hashes, B_C and H_C.
-    /// Recorded as cast with the oracle's selections, and with the oracle's proof nonces through the
-    /// recording tool's test seam, every combined vector component (α, β, summed ξ) and every proof
+    /// P1, rebuilt from its id_B and ξ_B (no chaining, main-chain device), has the oracle's
+    /// selection hashes in generation order, short codes, contest hashes, B_C and H_C. Recorded as
+    /// cast with the oracle's selections, and with the oracle's proof nonces through the internal
+    /// test seam of <see cref="PreEncryptionPrimitives.ProveCombinedContest"/>, every combined vector component (α, β, summed ξ) and every proof
     /// (each c_j and v_j of eqs. 59 and 62) is the oracle's; the selected vectors are the ones the
     /// oracle combined (null vectors padding the ind_c = 4 undervote); and Verifications 6, 7, 15, 16
     /// and 17 accept the record.
@@ -193,27 +197,24 @@ public partial class KnownAnswerTests
         var (record, summary) = PreEncryptedRecord("P1");
         string device = summary.GetProperty("S_device").GetString()!;
         var ballotNonce = new BallotNonce(Hex(summary, "xi_B_hex"));
-        var ballot = new BallotPreEncryptor(record, device)
-            .PreEncrypt("P1", "style", new SelectionEncryptionIdentifier(Hex(summary, "id_B_hex")), ballotNonce, previousConfirmationCode: null);
+        var ballot = PreEncryptedBallotFixtures.PreEncrypt(record, device, "P1", "style", new SelectionEncryptionIdentifier(Hex(summary, "id_B_hex")), ballotNonce, previousConfirmationCode: null);
 
         AssertBallotMatchesSummary(ballot, summary);
 
-        // The recording tool, with the oracle's u_j and simulated c_j.
+        // The combined vectors proved with the oracle's u_j and simulated c_j.
         var rangeProofs = AllVectors.Where(x => x.GetProperty("family").GetString() == "preencrypted_range_proof_challenge")
             .ToDictionary(x => (Int(Inputs(x), "ind_c"), (int?)Int(Inputs(x), "ind_o")), Inputs);
         var limitProofs = AllVectors.Where(x => x.GetProperty("family").GetString() == "preencrypted_selection_limit_challenge")
             .ToDictionary(x => (Int(Inputs(x), "ind_c"), (int?)null), Inputs);
         var proofInputs = rangeProofs.Concat(limitProofs).ToDictionary();
-        var tool = new BallotRecordingTool(record)
-        {
-            ProofNoncesForTesting = (contestIndex, optionIndex, j) =>
+        PreEncryptedBallotFixtures.CombinedContestProver prover = (keys, contest, selectionHash, combined, values, contestHash) =>
+            PreEncryptionPrimitives.ProveCombinedContest(keys, contest, selectionHash, combined, values, contestHash, (optionIndex, j) =>
             {
-                var inputs = proofInputs[(contestIndex, optionIndex)];
+                var inputs = proofInputs[(contest.Index, optionIndex)];
                 var u = new IntegerModQ(Convert.FromHexString(inputs.GetProperty("u_hex")[j].GetString()!));
                 var c = inputs.GetProperty("c_fake_hex").TryGetProperty(j.ToString(), out var fake) ? new IntegerModQ(Convert.FromHexString(fake.GetString()!)) : new IntegerModQ(0);
                 return (u, c);
-            },
-        };
+            });
 
         var contestSummaries = summary.GetProperty("contests").EnumerateArray().ToList();
         var selections = new Core.BallotEncryption.Ballot
@@ -232,7 +233,7 @@ public partial class KnownAnswerTests
             }).ToList(),
         };
 
-        var cast = tool.RecordCast(ballot, ballotNonce, selections);
+        var cast = PreEncryptedBallotFixtures.RecordCast(record, ballot, ballotNonce, selections, prover);
 
         for (int c = 0; c < contestSummaries.Count; c++)
         {
@@ -293,12 +294,11 @@ public partial class KnownAnswerTests
         var (record, summary) = PreEncryptedRecord("P2");
         string device = summary.GetProperty("S_device").GetString()!;
         var ballotNonce = new BallotNonce(Hex(summary, "xi_B_hex"));
-        var ballot = new BallotPreEncryptor(record, device)
-            .PreEncrypt("P2", "style", new SelectionEncryptionIdentifier(Hex(summary, "id_B_hex")), ballotNonce, previousConfirmationCode: null);
+        var ballot = PreEncryptedBallotFixtures.PreEncrypt(record, device, "P2", "style", new SelectionEncryptionIdentifier(Hex(summary, "id_B_hex")), ballotNonce, previousConfirmationCode: null);
 
         AssertBallotMatchesSummary(ballot, summary);
 
-        var uncast = new BallotRecordingTool(record).RecordUncast(ballot, ballotNonce, releaseBallotNonce: true);
+        var uncast = PreEncryptedBallotFixtures.RecordUncast(record, ballot, ballotNonce, releaseBallotNonce: true);
 
         var nonceVectors = AllVectors.Where(x => x.GetProperty("family").GetString() == "preencrypted_encryption_nonce"
                 && Inputs(x).GetProperty("H_I_hex").GetString() == summary.GetProperty("H_I_hex").GetString())

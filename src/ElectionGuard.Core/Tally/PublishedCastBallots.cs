@@ -8,11 +8,11 @@ namespace ElectionGuard.Core.Tally;
 
 /// <summary>
 /// A guardian's own, authoritative view of the cast ballots in the published election record, which
-/// both ballot-nonce decryption entry points consult before computing a share
-/// (<see cref="TallyGuardian.DecryptBallotNonce(EncryptedBallot, EncryptionRecord, IPublishedCastBallots, PreEncryption.IssuedPreEncryptedBallots)"/>
-/// and its pre-encrypted overload). A request whose id_B, H_I or C_ξB,0 matches any cast ballot is
-/// refused: k shares of a cast ballot's encrypted nonce give its ξ_B, and with it every vote
-/// (eq. 33 for a regular ballot, eq. 121 for a pre-encrypted one). User decision Q31 (S9b); the
+/// the guardian consults before computing a share of a challenged ballot's nonce
+/// (<see cref="TallyGuardian.DecryptBallotNonce(EncryptedBallot, EncryptionRecord, IPublishedCastBallots)"/>).
+/// A request whose id_B, H_I or C_ξB,0 matches any cast ballot is refused: k shares of a cast
+/// ballot's encrypted nonce give its ξ_B, and with it every vote (eq. 33 for a regular ballot,
+/// eq. 121 for a pre-encrypted one). User decision Q31 (S9b); the
 /// spec defines no such check (§3.6.7 trusts that only challenged ballots reach the guardians).
 ///
 /// Trust model: the request is the administrator's, so everything it carries, its status included,
@@ -20,9 +20,7 @@ namespace ElectionGuard.Core.Tally;
 /// of the published record (cast ballots are public), never from anything the administrator hands it
 /// with the request. In-process (this library's <see cref="TallyAdmin"/> drives the guardians) the
 /// caller holds the record anyway. The view protects only what it holds, so for challenged ballots it
-/// must be complete: decrypt challenged ballots once the record's cast ballots are final. (The
-/// pre-encrypted path does not depend on that; its issued list and once-only rule already keep
-/// regular ballots and recorded pre-encrypted ballots out.)
+/// must be complete: decrypt challenged ballots once the record's cast ballots are final.
 ///
 /// The check refuses every cast ballot, including those §3.3.4 p.30 names as a use of ballot nonce
 /// decryption: "ballots that are selected in the context of a risk limiting audit". That is by

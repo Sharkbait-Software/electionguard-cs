@@ -8,11 +8,13 @@ using ElectionGuard.Core.Verify;
 using ElectionGuard.Core.Verify.Ballot;
 using ElectionGuard.Core.Verify.PreEncryption;
 using ElectionGuard.Core.Verify.Tally;
+using ElectionGuard.Testing.Common;
 
 namespace ElectionGuard.Core.UnitTests.Verify.PreEncryption;
 
 /// <summary>
-/// Verifications 15 to 19 on the records the recording tool produces (§4.3, §4.4): cast ballots
+/// Verifications 15 to 19 on the records a recording tool publishes (§4.3, §4.4; built here by the
+/// test-only <see cref="PreEncryptedBallotFixtures"/>, since the library has none, user decision Q35): cast ballots
 /// (15, and the cast forms of 16 and 17) and uncast ones (18, 19). Each failing case tampers one
 /// published value, or forges a ballot the way a dishonest device would, and asserts the lettered
 /// sub-check that catches it.
@@ -351,7 +353,7 @@ public class PreEncryptedRecordVerificationTests
         var challenged = Copy(cast, status: BallotStatus.Challenged);
         var decrypted = new DecryptedChallengedBallot { BallotId = challenged.Id, Contests = [] };
 
-        var guardianException = Assert.Throws<ArgumentException>(() => election.Guardians[0].DecryptBallotNonce(challenged, election.Record, election.NoCastBallots, election.NoIssuedBallots));
+        var guardianException = Assert.Throws<ArgumentException>(() => election.Guardians[0].DecryptBallotNonce(challenged, election.Record, election.NoCastBallots));
         Assert.Contains("pre-encrypted", guardianException.Message);
         Assert.Throws<ArgumentException>(() => new TallyAdmin().CombineChallengedBallot(challenged, election.Record, []));
         Assert.Equal("13.structure", Fails(() => new ChallengedBallotDecryptionVerification().Verify(election.Record, challenged, decrypted, election.DeviceHash, null)));
@@ -393,14 +395,12 @@ public class PreEncryptedRecordVerificationTests
     {
         var election = PreEncryptedElection.Get(ChainingMode.Simple);
         var chain = DeviceChain.ForPreEncryptedBallots(election.Record, PreEncryptedElection.DeviceId);
-        var preEncryptor = election.PreEncryptor();
-        var printed = Enumerable.Range(1, 3).Select(i => preEncryptor.PreEncryptNext($"ballot-{i}", PreEncryptedElection.BallotStyleId, chain)).ToList();
+        var printed = Enumerable.Range(1, 3).Select(i => PreEncryptedBallotFixtures.PreEncryptNext(election.Record, $"ballot-{i}", PreEncryptedElection.BallotStyleId, chain)).ToList();
         var device = chain.Close();
 
-        var tool = new BallotRecordingTool(election.Record);
-        var cast1 = tool.RecordCast(printed[0], election.DecryptNonce(printed[0]), election.Selections("ballot-1", [1], [2]));
-        var uncast2 = tool.RecordUncast(printed[1], election.DecryptNonce(printed[1]));
-        var cast3 = tool.RecordCast(printed[2], election.DecryptNonce(printed[2]), election.Selections("ballot-3", [], [3, 4]));
+        var cast1 = PreEncryptedBallotFixtures.RecordCast(election.Record, printed[0].Ballot, printed[0].BallotNonce, election.Selections("ballot-1", [1], [2]));
+        var uncast2 = PreEncryptedBallotFixtures.RecordUncast(election.Record, printed[1].Ballot, printed[1].BallotNonce);
+        var cast3 = PreEncryptedBallotFixtures.RecordCast(election.Record, printed[2].Ballot, printed[2].BallotNonce, election.Selections("ballot-3", [], [3, 4]));
         var verification = new PreEncryptedConfirmationCodeVerification();
 
         verification.VerifyDevices([device], [cast1, cast3], [uncast2], election.Record);
@@ -435,7 +435,7 @@ public class PreEncryptedRecordVerificationTests
     {
         var election = Election;
         var honest = election.PreEncrypt("uncast-1");
-        var ballotNonce = election.DecryptNonce(honest);
+        var ballotNonce = election.BallotNonceOf(honest);
         var selectionHash = honest.SelectionEncryptionIdentifierHash;
         var key = election.Record.ElectionPublicKeys.VoteEncryptionKey;
 
@@ -473,7 +473,7 @@ public class PreEncryptedRecordVerificationTests
         };
 
         // The device releases exactly the nonces it used: the honest eq. (121) values.
-        var released = new BallotRecordingTool(election.Record).RecordUncast(honest, ballotNonce, releaseBallotNonce) with { Ballot = forged };
+        var released = PreEncryptedBallotFixtures.RecordUncast(election.Record, honest, ballotNonce, releaseBallotNonce) with { Ballot = forged };
 
         new PreEncryptedConfirmationCodeVerification().Verify(forged, election.DeviceHash, election.Record, null);
         new ShortCodeVerification().Verify(forged, election.Record);

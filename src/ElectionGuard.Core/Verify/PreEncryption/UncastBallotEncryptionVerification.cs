@@ -20,8 +20,8 @@ namespace ElectionGuard.Core.Verify.PreEncryption;
 /// Readings and hardening (S9; see the tracker):
 /// <list type="bullet">
 /// <item>(18.2)-(18.4) are written with vectors of m_i entries and m_i hashes; eq. (115), the §5.5.5
-/// table and 16.B hash all m + L hashes, null vectors included, which is what the encrypting tool
-/// computes. This follows eq. (115) (as the KAT oracle does); the null vectors are recomputed like
+/// table and 16.B hash all m + L hashes, null vectors included, which is what
+/// <see cref="PreEncryptionPrimitives.GenerateContest"/> computes. This follows eq. (115) (as the KAT oracle does); the null vectors are recomputed like
 /// the others, with δ = 0 throughout.</item>
 /// <item>Each recomputed encryption is also compared with the published one under the same label
 /// (reported as 18.A). The preamble asks that "all encryptions are correct encryptions of the

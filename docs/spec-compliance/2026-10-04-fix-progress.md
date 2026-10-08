@@ -181,6 +181,8 @@ User answers (2026-10-04):
     - This also closes the background security review finding on S7's `TallyGuardian.DecryptBallotNonce` (trusting
       the caller's Status field).
     - Implemented in S9b (done; see the S9b log entry). S9-6 and the security review finding are closed.
+    - *Superseded in part by Q35 (S9c):* the pre-encrypted clause (issued list, at most once per id_B) went away with
+      the guardians' pre-encrypted nonce path. The record check on the challenged path (part 2) stays.
     - *Implementer reading (S9b, awaiting the user's acceptance; open question S9b-1):* the at-most-once clause is
       also enforced on the challenged path: a challenged-ballot request whose id_B is on the issued list is refused
       (`IssuedPreEncryptedBallot`), since otherwise a printed ballot not yet recorded could be opened there, ahead of
@@ -194,6 +196,10 @@ User answers (2026-10-04):
 - **S9b decisions and scope change, answered 2026-10-08:**
   - **Q32 (S9b-1), the challenged path refuses issued pre-encrypted id_Bs:** "Keep". This is superseded by Q35: the
     issued list goes away with the guardian pre-encrypted path.
+    - *Sign-off pending (S9c review round 1, open question S9c-R1):* the user answered "Keep" in the same batch as
+      Q35, so the loss of the S9b-1 property (an unrecorded printed ballot wrapped as a challenged regular ballot is
+      answered) rests on the implementer's reading that Q35 supersedes Q32. It is asked explicitly as S9c-R1; until
+      answered, the exposure is pinned by a known-exposure test and nothing in the code refuses it.
   - **Q33 (S9b-2), retries under once-only:** the user wrote: "This doesn't make any sense. The guardians are not
     required for the preencryption phase, the encryption package already exists. The guardians will have no knowledge
     of preencryptions until they are submitted as part of the tally process."
@@ -212,6 +218,16 @@ User answers (2026-10-04):
     - Ballot generation that tests need moves into test-only fixtures (`test/ElectionGuard.Testing.Common`).
     - The guardian check of challenged regular ballots against cast ballots (Q31 part 2) stays.
     - Done in S9c.
+- **Q36 (S9c-R1), opening an unvoted printed pre-encrypted ballot early, answered 2026-10-08:** the user wrote: "In
+  general, by the time guardians are doing decryption, voting will always be over and this data is sealed. The library
+  can assume that. There is a special case of decryption that will occur during an election, but it is only when a
+  voter purposefully challenges a ballot and we use the nonce (still in memory) to determine selections (also known
+  as instant verification). I don't think we need to do anything special for guardians."
+  - The library therefore assumes guardian decryption happens only after voting closes and the record is sealed. No
+    guardian-side change is made.
+  - `KnownExposure_S9b_1` documents accepted behavior under that assumption.
+  - Instant verification (a voter challenges, and the ballot is opened with the in-memory nonce) is encryption-side
+    and never involves guardians.
 - **Cadence:** "Keep going". After each stage: commit, update this tracker, push, start the next stage. Stop only
   for a new spec contradiction or question.
 - **S7 design and API choices** (2026-10-06; implementer choices, none changes bytes the spec fixes; the first two are
@@ -286,7 +302,10 @@ User answers (2026-10-04):
     treated as simple chaining with a 0x00000002 identifier on ballots but 0x00000001 in B_C,0 and the close.
 
 - **S9 design and API choices** (2026-10-07; implementer choices unless marked as an open question in the S9 log
-  entry; none changes a hash input, every KAT family passes):
+  entry; none changes a hash input, every KAT family passes). *S9c (Q35) removed the encrypting tool, the recording
+  tool and the guardians' pre-encrypted nonce path: the "Recording tool inputs" and "Nonce decryption for
+  pre-encrypted ballots" items below describe code that no longer exists; the record models, proofs and
+  verification readings stand. See the S9c choices after this list.*
   - **A cast pre-encrypted ballot's record is a standard `EncryptedBallot`** with an optional
     `PreEncryptedContests` section (JSON `preEncryptedContests`, omitted when null; protobuf field 12, flagged by
     field 13 `IsPreEncrypted`, so a regular ballot encodes byte for byte as before). Its `Contests` are the combined
@@ -336,6 +355,36 @@ User answers (2026-10-04):
     null id surfaced as an `ArgumentNullException`, on the pre-encrypted nonce path only after the guardians had
     decrypted their shares, and was reported there as a wrong m_i or ξ_B.
 
+- **S9c design and API choices** (2026-10-07; low-stakes implementer choices under Q35; no hash input moves, every KAT
+  family passes with the same vectors):
+  - **One public static class, `PreEncryptionPrimitives`,** holds the formulas that had lived inside the tools:
+    `GenerateSelection` (one vector by its eq. (121) index j), `GenerateContest` (m + L vectors and the eq. (115)
+    hash), `GenerateContests` (a ballot style's contests in index order; validates the manifest and requires Ω),
+    `HasUniqueShortCodes` (§4.1.5, one contest), `Combine` (§4.3 product and nonce sum) and `ProveCombinedContest`
+    (eqs. 59 and 62 on a combined vector, returning the cast ballot's `EncryptedContest`). The keys are passed as
+    `ElectionPublicKeys` so K-hat cannot be passed by mistake. Assembling a `PreEncryptedBallot` (H_I, C_ξB, B_C,
+    H_C) is left to the caller: every piece is already a public formula, and the assembly is the encrypting tool.
+  - **`ProveCombinedContest` refuses** a value outside 0..R or a sum outside 0..L (`ArgumentOutOfRangeException`):
+    no valid proof exists then, and the old tool refused the same inputs earlier.
+  - **The KAT proof-nonce seam** is an `internal` overload of `ProveCombinedContest`. The test fixture takes an
+    optional prover delegate with the public signature, and the KAT passes one that calls the internal overload,
+    so no `InternalsVisibleTo` was added for `ElectionGuard.Testing.Common` and no proof-nonce parameter is public.
+  - **What a tool decides is in the test fixture only** (`PreEncryptedBallotFixtures`): drawing id_B and ξ_B, the
+    unique-short-code retry, padding an undervote with the first null vectors (Q27), 0/1 values, checking a ballot
+    against its regeneration, what an uncast record releases. The code-space check of the old encrypting tool's
+    constructor (a contest with more vectors than Ω has codes) is not a primitive; `HashTrimming.CodeSpaceSize`
+    stays public for a tool to use.
+  - **Challenged path signatures:** `TallyGuardian.DecryptBallotNonce(ballot, record, castBallots)` and
+    `TallyAdmin.DecryptChallengedBallot(guardians, ballot, record, castBallots)`;
+    `BallotNonceDecryptionRefusal` keeps `ForeignElection` and `CastBallot`. `TallyGuardian`'s constructor is
+    `(index, shares)` again.
+  - **Per-contest precondition (S9c review round 1):** `GenerateSelection`, `GenerateContest` and
+    `ProveCombinedContest` take a bare `Contest` and so cannot rely on `Manifest.Validate`; they share one check
+    (`PreEncryptionPrimitives.Positions`): at least one option (`ArgumentException`, as `GenerateSelection` already
+    threw) and option index = 1-based list position (`InvalidManifestException`, the exception and wording of
+    `Manifest.Validate`). The contest index cannot be checked without the manifest; the class remarks say the
+    contest must be the manifest's own. No byte moves for a conformant contest (the positions were already 1..m).
+
 ## Stages
 
 | Stage | G-IDs | Blocked on | Status | Commit |
@@ -349,9 +398,9 @@ User answers (2026-10-04):
 | S6 Contest data | G11, G32 | after S4 | done | e6d7be0 |
 | S7 Ballot nonce and challenged ballots | G17, G18 | after S4 | done | 90ea38b |
 | S8 Chain closing | G19, G37 | — | done | d60a56b |
-| S9 Pre-encrypted recording tool | G31 | after S5, S7 | done (nonce-decryption gate: S9b) | 97aac86 |
-| S9b Nonce-decryption authorization gate (Q31) | Q31 / S9-6; the security review finding on S7's `TallyGuardian.DecryptBallotNonce` (caller-controlled Status) | S9 | done (pre-encrypted half removed in S9c per Q35) | see next commit |
-| S9c Pre-encryption scope: primitives only (Q35) | remove encrypting/recording tools and guardian pre-encrypted nonce path | after S9b | todo | |
+| S9 Pre-encrypted recording tool | G31 (now primitives + verifications; the tools are out of scope, user decision Q35) | after S5, S7 | done (nonce-decryption gate: S9b); partly superseded by S9c (encrypting and recording tools removed per Q35) | 97aac86 |
+| S9b Nonce-decryption authorization gate (Q31) | Q31 / S9-6; the security review finding on S7's `TallyGuardian.DecryptBallotNonce` (caller-controlled Status) | S9 | done; partly superseded by S9c (pre-encrypted half, issued list and once-only state removed per Q35; the cast-ballot record check stays) | 5d5e43c |
+| S9c Pre-encryption scope: primitives only (Q35) | remove encrypting/recording tools and guardian pre-encrypted nonce path | after S9b | done | see next commit |
 | S10 Record metadata | G40 (G39 won't fix, per Q9); S2 carry-overs: bind the parsed `Manifest` to `ManifestFile` (S2 review R1), record JSON round trip; S4 carry-overs: a `DecryptedTally` record serializer, and a tally loaded from a record must carry or recompute each option's `MaximumCount` (S4 review R1) | — | todo | |
 
 ## Pinned-value inventory
@@ -523,7 +572,203 @@ bytes in smoke, unchanged). The console's `tally.json` counts are unchanged; it 
 subdirectory. Fixture default: `ElectionFixtureBuilder.CreateMinimalManifest(hashTrimmingFunction: ...)` now
 declares no supplemental fields (the new Manifest rule), which the existing pre-encryption tests rely on.
 
+S9c: no pinned value moved and nothing was re-pinned; `test/kat/vectors.json` is unchanged. P1 and P2 are now rebuilt
+through `PreEncryptionPrimitives` and the test-only `PreEncryptedBallotFixtures` (the S1 rows above that name
+`BallotPreEncryptorTests` now refer to `PreEncryption/PreEncryptionPrimitivesTests.cs`, same assertions). The console
+no longer writes a `pre-encrypted/` subdirectory (a stale one from earlier runs may remain under `C:/temp/eg/data/1`;
+it is output, not gate input). S9c review round 1: no pinned value moved either (three tests added, none re-pinned).
+
 ## Log
+
+### 2026-10-08 — S9c review round 1 (per-contest index precondition, Q32 sign-off, S9b-1 exposure pin, null deviceId reader test)
+Worktree changes only; nothing committed. Four minor findings, all accepted (one needs no code). No hash input, KAT
+vector (`git diff test/kat/` empty) or pinned value moved; no test expectation was re-pinned. No hot path touched.
+
+**Per-contest primitives skip the §3.1.3 index rule (code lens): accepted, fixed.** `GenerateSelection`,
+`GenerateContest` and `ProveCombinedContest` take a bare `Contest`; only `GenerateContests` called
+`Manifest.Validate`. With option indices {1, 2, 4}, `GenerateContest` numbered the first null vector 5 while
+`BallotStructure` (eq. 121, §4.2.1) expects m + 1 = 4, so V16/V17 would reject every such ballot as `N.structure`;
+an empty contest threw `ArgumentOutOfRangeException` from `positions[^1]`. Now the three share
+`PreEncryptionPrimitives.Positions`: no options -> `ArgumentException` (as `GenerateSelection` already threw), an
+option whose index is not its 1-based list position -> `InvalidManifestException` (`Manifest.Validate`'s wording).
+With the indices known to be 1..m, the null vectors are m + ℓ and the `OrderBy` / `SingleOrDefault` by index became
+list order and `Choices[j - 1]`; bytes are unchanged for every conformant contest (P1/P2 KAT pass). Class remarks
+state the contest must be the manifest's own (its contest index cannot be checked here). `Manifest.Validate`'s doc
+named "the ballot encryptors' constructors" (one was removed in S9c) and now names `BallotEncryptor` and
+`GenerateContests`. CLAUDE.md's index bullet and pre-encryption bullet say so. Tests:
+`ManifestValidationTests.Encryptors_ManifestReorderedAfterRecordCreation_Throw` now also covers the three
+per-contest primitives; new `PreEncryptionPrimitivesTests.PerContestPrimitives_OptionsNotNumberedOneToM_OrNoOptions_Throw`
+({1, 2, 4}, {1, 3}, reversed -> `InvalidManifestException` from each; empty -> `ArgumentException` from each; the
+manifest's own contest still generates).
+
+**Q32 sign-off (code lens): accepted, no code change, asked as S9c-R1.** Restoring a refusal would contradict Q35's
+confirmed scope line, so the code stays. But the user answered Q32 "Keep" in the same batch as Q35, and the S9c
+entry treated Q32 as superseded without asking. The question is now explicit (below), the Q32 decision note says
+so, the S9c entry's "not re-asked" is corrected, and CLAUDE.md points at the question and the pinning test.
+
+**No test pins the reopened S9b-1 exposure (tests lens): accepted.** New
+`PreEncryptedCastRecordTests.DecryptBallotNonce_UnrecordedPreEncryptedBallotWrappedAsChallenged_OpensIt_KnownExposure_S9b_1`:
+a fixture-printed ballot's id_B, H_I and C_ξB in a regular ballot marked challenged; two guardians answer with
+`NoCastBallots`; β_B (eq. 108, `TallyDecryptionHashes.LagrangeCoefficient`) and `BallotNonceEncryption.Decrypt` give
+ξ_B, which equals the printed ballot's and regenerates its confirmation code through `PreEncryptedBallotFixtures`.
+It also asserts that `TallyAdmin.CombineChallengedBallot` publishes nothing (`TallyDecryptionException`: the
+wrapper's contests are not under that ξ_B), which does not help since the share holders need no administrator.
+(The removed `CombinePreEncryptedBallotNonce` that the old test used is gone, so the combination is spelled out.)
+If S9c-R1 is answered (b), flip it to assert the refusal.
+
+**Serializer half of the deleted no-deviceId test (tests lens): accepted, restored.** New
+`PreEncryptedSerializationTests.PreEncryptedBallot_Json_NullDeviceId_ReadsAsNull_AndVerification16FailsStructure`:
+write a printed ballot, set `"deviceId": null`, read it with `JsonPreEncryptedBallotSerializer.DeserializeBallot`,
+assert `DeviceId` is null and V16 throws `16.structure`. The S9c entry's deleted list now says this half was kept.
+Also reworded that file's "the recording tool's input" to "what a recording tool reads".
+
+**Tests: Core 1840 -> 1843 (+3); Perf 231 unchanged.**
+
+Gate before re-pinning (all changes in; nothing failed, so nothing was re-pinned):
+- Build (`--no-incremental`): `0 Warning(s)`, `0 Error(s)`.
+- Smoke: `correctness passed`; EncryptBallots 243 ms wall, 0.243 ms/ballot, 165.7 MB; VerifyBallots 993 ms wall,
+  0.993 ms/ballot, 12.2 MB; json 21,063 bytes; protobuf 12,482 bytes.
+- Console: `Device Device 1: 4 ballots, chaining mode None.`, `Ballot 0, contest 0: contest data "Write-in: Ada
+  Lovelace".`, `Challenged ballot 0-challenged, contest 0: 0-0=1, 0-1=0, contest data "Write-in: Ada Lovelace".`,
+  `Done.`, then the expected ReadKey `InvalidOperationException`. `tally.json`: 0-0: 3, 0-1: 0, every
+  supplemental count 0. No input under `C:/temp/eg/data` changed, so no .bak.
+- Tests: Perf `Passed: 231, Total: 231`; Core `Passed: 1843, Total: 1843` (no failing test).
+
+Gate after: only CLAUDE.md and this tracker changed after the gate above (every source, XML-doc and test edit was
+in it), so it stands as the final gate; a rebuild after the Markdown edits gave `0 Warning(s)`, `0 Error(s)`.
+
+Perf: no hot path changed (pre-encryption generation is test-only here; one O(m) index loop per contest call).
+Smoke Encrypt 0.243 / Verify 0.993 ms/ballot vs S9c's 0.243-0.245 / 1.000: noise; allocation and protobuf size unchanged.
+
+Open question for the user:
+- **S9c-R1 (security sign-off; follows Q32/Q33/Q35):** with the guardians' pre-encrypted path and the issued list
+  removed (Q35), the guardians cannot tell a printed pre-encrypted ballot that is not yet recorded from a regular
+  challenged ballot: its id_B, H_I and C_ξB are built the same way (§4.2 "as shown in Section 3.3.4"), so wrapped as
+  a challenged regular ballot it passes every check, and k shares give its ξ_B before its voter uses it (pinned by
+  the known-exposure test above). Options: (a) accept: keeping such requests from the guardians is the
+  deployment's and its recording tool's job, consistent with Q33 ("the guardians will have no knowledge of
+  preencryptions until they are submitted as part of the tally process") and Q35; (b) give the challenged path an
+  optional guardian-held view of known pre-encrypted id_Bs (like `IPublishedCastBallots`, no once-only state) that
+  it refuses on, which reintroduces part of what Q35 removed and needs the guardians to learn of printed ballots
+  before they are recorded, against Q33. Recommendation: (a). Not built either way until answered; nothing in the
+  code changes under (a).
+
+### 2026-10-07 — S9c (pre-encryption scope: primitives only, user decision Q35)
+Worktree changes only; nothing committed. Implements Q35 ("only ... the primitives needed for the preencryption
+process. Do not implement (and remove if already implemented) the encrypting tool and recordin tool"; the scope line
+confirmed "Yes, that line"). No hash input, KAT vector (`git diff test/kat/` empty) or pinned value moved; no test
+expectation was re-pinned. No ballot hot path changed.
+
+**G31 (now "primitives + verifications"; the tools are out of scope by user decision Q35).**
+- Removed from `src/ElectionGuard.Core`: `PreEncryption/BallotPreEncryptor.cs` (the §4.2 encrypting tool, which
+  predates the audit, 846897e), `PreEncryption/BallotRecordingTool.cs`, `PreEncryption/IssuedPreEncryptedBallots.cs`
+  (`IssuedPreEncryptedBallots`, `IssuedPreEncryptedBallot`), `PreEncryptedBallotNonceStatement`, the pre-encrypted
+  `TallyGuardian.DecryptBallotNonce(PreEncryptedBallot, ...)`, `TallyAdmin.DecryptPreEncryptedBallotNonce` /
+  `CombinePreEncryptedBallotNonce`, the guardian's once-only state (`DecryptedPreEncryptedBallots`, the constructor's
+  import and write-ahead callback, `OwnedCopy`, `BeforeConsumingForTesting`), and the refusal reasons `NotIssued`,
+  `IssuedNonceDiffers`, `AlreadyDecrypted`, `IssuedPreEncryptedBallot`. Removed from the console:
+  `PreEncryptedElectionDemo.cs` and its call.
+- Kept: every spec formula (eqs. 113-121, Ω), the published record models (`PreEncryptedBallot`,
+  `EncryptedBallot.PreEncryptedContests`, `PreEncryptedUncastBallot`) and their serializers, Verifications 15-19,
+  `BallotStructure`'s pre-encrypted checks, `DeviceChain`'s pre-encrypted append/close and the V16 walk.
+- New public primitives, `PreEncryption/PreEncryptionPrimitives.cs`: `GenerateSelection`, `GenerateContest`,
+  `GenerateContests`, `HasUniqueShortCodes`, `Combine`, `ProveCombinedContest` (+ an internal overload with the KAT
+  proof-nonce seam). Generation is the old `BallotPreEncryptor.PreEncryptContest(s)` code moved verbatim (options in
+  index order, positions = option indices, the l-th null vector's index = largest option index + l), and the proof
+  code is the old `RecordCast` loop, so P1/P2 reproduce the oracle byte for byte.
+- Q31 part 2 (the guardian-held cast-ballot check on the challenged path, `IPublishedCastBallots` /
+  `PublishedCastBallots`) is kept with its tests; its signatures lost the issued list:
+  `TallyGuardian.DecryptBallotNonce(ballot, record, castBallots)`, `TallyAdmin.DecryptChallengedBallot(guardians,
+  ballot, record, castBallots)`. `ChallengedBallotStatement.RequireDecryptable` folded back into one instance method.
+- Docs: `<see cref>`s to removed members in `EncryptedBallot`, `PreEncryptedRecords`, `PublishedCastBallots`,
+  `ChallengedBallotDecryption`, `TallyGuardian`, `BallotEncryptor`, `BallotNonceEncryption`, `BallotStructure` and
+  V18 reworded (build: 0 warnings). CLAUDE.md: the DeviceChain sentence, the `Manifest.Validate` call sites, the
+  challenged-ballot sentences of the Tally bullet and the pre-encryption bullet (rewritten: primitives-only scope,
+  tools out of scope, the primitive list, the test fixture), and the fixture bullet. `perf/README.md` mentions none
+  of this: no change.
+- Consequence, documented (TallyGuardian `DecryptBallotNonce` remarks, CLAUDE.md); *re-asked in S9c review round 1 as
+  S9c-R1 and pinned by a known-exposure test there*: with the issued list
+  gone, S9b-1's case is open by design. A printed pre-encrypted ballot not yet recorded is in no cast-ballot view,
+  and its id_B, H_I and C_ξB (built as a regular ballot's, §4.2), wrapped as a challenged regular ballot, pass every
+  check of the challenged path, so k shares would give its ξ_B before its voter uses it. Q33 ("the guardians will
+  have no knowledge of preencryptions until they are submitted as part of the tally process") and Q35 put this
+  outside the library: the deployment and its recording tool must keep such requests from the guardians. Carried
+  over next to Q-S7b / Q22 (the RLA authorization path). Q32 and S9b-1/S9b-2/S9b-3 are closed by removal of the path.
+
+**Tests (Core 1895 -> 1840, -55; Perf 231 unchanged).** Generation moved to the test-only
+`test/ElectionGuard.Testing.Common/PreEncryptedBallotFixtures.cs` (deterministic `PreEncrypt` from id_B and ξ_B; a
+random `PreEncrypt` with the §4.1.5 retry; `PreEncryptNext` on a `DeviceChain`; `RecordCast`, which pads to L with
+the first null vectors and takes an optional prover; `RecordUncast`), built on the public primitives. It takes ξ_B
+from the caller; `PreEncryptedElection` remembers each ballot's ξ_B by id_B (`BallotNonceOf`, replacing the
+guardian-decrypting `DecryptNonce`) and its `Guardians` no longer need to be fresh per read.
+- Retargeted, same assertions: `KnownAnswerTests.PreEncryption` P1 (cast, every α, β, summed ξ, c_j, v_j) and P2
+  (uncast, every released nonce) through the fixture, with the KAT prover calling the internal seam;
+  `PreEncryptedBallotVerificationTests` (V16/V17), `PreEncryptedDeviceChainTests` (devices built with
+  `PreEncryptNext`), `PreEncryptedRecordVerificationTests` (V15-V19, the device walk, the mislabelled-vector V18
+  case), `PreEncryptedSerializationTests` (the JSON round trip then cast), `ManifestValidationTests.
+  Encryptors_ManifestReorderedAfterRecordCreation_Throw` (now `PreEncryptionPrimitives.GenerateContests`),
+  `ChallengedBallotDecryptionTests` and `KnownAnswerTests.ChallengedBallots` (issued-list argument dropped).
+- Moved: `BallotRecordingToolTests` lines 1-235 -> `PreEncryption/PreEncryptedCastRecordTests.cs` (8 cases: cast
+  records verify under V5-V7 and V15-V17, publish every hash and the selected vectors, pad an undervote, are refused
+  by V8, tally with regular ballots through V9-V11; uncast records pass V16-V19, with and without ξ_B).
+  `BallotPreEncryptorTests` -> `PreEncryption/PreEncryptionPrimitivesTests.cs` (15 kept, retargeted to the primitives
+  and the fixture). `PreEncryptNext_RefusesARegularBallotChain` -> `DeviceChain_OfRegularBallots_RefusesAPreEncryptedBallot`.
+- New (+5): `GenerateSelection_IsTheContestsVectorOfThatIndex_AndRefusesAnIndexWithNoVector`,
+  `Combine_MultipliesComponentwise_AndSumsTheNonces`, `Combine_RefusesNoVectors_VectorsOfDifferentLengths_AndVectorsWithoutNonces`,
+  `ProveCombinedContest_ProofsPassVerifications6And7`, `ProveCombinedContest_RefusesValuesWithNoValidProof_AndMismatchedLengths`.
+- Deleted, because they tested only removed behaviour (-60 cases):
+  - `IssuedPreEncryptedBallotsTests` (all 12: layout and commitment, order independence, lookups and round trip,
+    own copies, duplicate/31-byte id_B, 7 malformed encodings): the issued list is gone.
+  - `BallotRecordingToolTests`, all but the 8 moved cases (44): `RecordCast_DoesNotModifyTheSelections`;
+    `Record_WrongBallotNonce_Throws`, `Record_BallotWhoseConfirmationCodeDiffers_Throws`,
+    `Record_PrintedBallotThatTheBallotNonceDoesNotRegenerate_IsRefusedPerSelection` (6) (the recording tool's
+    regeneration refusal; at the record level V16-V18 catch forged printed ballots, e.g. the kept
+    `Verification18_MislabelledVector_Fails18A`); `RecordCast_SelectionsItCannotRecord_Throw` (10) and
+    `Constructor_ManifestWithoutHashTrimmingFunction_Throws` (the tool's API refusals; the Ω requirement is now
+    `GenerateContests_ManifestWithoutHashTrimmingFunction_Throws`); every guardian pre-encrypted nonce test:
+    `DecryptPreEncryptedBallotNonce_WithAQuorum_RegeneratesTheBallot`, `..._ACorruptShare_...`,
+    `DecryptBallotNonce_PreEncryptedBallotWithAForeignSelectionIdentifierHash_Throws`,
+    `..._WithAnInvalidSchnorrProof_...` (4), `..._WithANonMemberC0AndAValidProof_...` (2), `..._WithAShortC1_...`,
+    `..._WithNoDeviceId_...` (*S9c review round 1: its serializer half, `"deviceId": null` read back as null and
+    reported by V16 as `16.structure`, covered kept behaviour and was restored as
+    `PreEncryptedSerializationTests.PreEncryptedBallot_Json_NullDeviceId_ReadsAsNull_AndVerification16FailsStructure`*),
+    `..._RegularCastBallotWrappedAsPreEncrypted_WithoutHashTrimming_IsRefused`,
+    `..._WithHashTrimming_IsRefused_S9_6`, and the issued-list/once-only tests (`..._IssuedAndUncast_IsDecryptedOnce_AndRecorded`,
+    `..._NotOnTheIssuedList_...`, `..._IssuedIdentifierWithAnotherEncryptedNonce_...`, `..._SecondRequestForTheSameIssuedBallot_...`,
+    `..._ConsumedIdentifiers_SurviveARestart_...`, `..._TwoRequestsPastTheChecksForOneIssuedBallot_...`,
+    `..._OnceOnlyState_IsTheGuardiansOwnCopyOfEachIdentifier`, `..._MalformedRequestForAnIssuedBallot_DoesNotConsumeIt`,
+    `..._IssuedBallotAlreadyRecordedCast_IsRefusedByTheRecordCheck`, `..._IssuedPreEncryptedBallotWrappedAsChallenged_IsRefused_S9b_1` (*S9c review round 1: replaced by
+    `..._UnrecordedPreEncryptedBallotWrappedAsChallenged_OpensIt_KnownExposure_S9b_1`, its first half*),
+    `..._ListsOfAnotherElection_AreRefused`). The challenged path's own C_ξB checks (membership, proof, short C_1,
+    H_I, cast-ballot record check, foreign view) stay covered by `ChallengedBallotDecryptionTests`.
+  - `BallotPreEncryptorTests` (4): `Constructor_ContestNeedingMoreShortCodesThanTheCodeSpace_Throws` (the tool
+    constructor's check; generating 257 vectors to show the pigeonhole through `HasUniqueShortCodes` would cost tens
+    of seconds) and `GenerateWithUniqueShortCodes_*` (3, the tool's retry loop; the fixture's loop is test code).
+  - Arithmetic: -12 - 44 - 4 + 5 = -55.
+
+Gate before re-pinning (all source and test changes in; nothing failed, so nothing was re-pinned):
+- Build (`--no-incremental`): `0 Warning(s)`, `0 Error(s)`.
+- Tests: Perf `Passed: 231, Total: 231`; Core `Passed: 1840, Total: 1840` (no failing test).
+- Smoke: `correctness passed`. EncryptBallots 0.243 ms/ballot, 165.7 MB; VerifyBallots 1.000 ms/ballot, 12.2 MB;
+  JSON 21,173 bytes, protobuf 12,482 bytes.
+- Console: `Device Device 1: 4 ballots, chaining mode None.`, `Ballot 0, contest 0: contest data "Write-in: Ada
+  Lovelace".`, `Challenged ballot 0-challenged, contest 0: 0-0=1, 0-1=0, contest data "Write-in: Ada Lovelace".`,
+  `Done.`, then the expected ReadKey `InvalidOperationException`. The issued-list line and the pre-encrypted demo
+  tally line are gone. `tally.json`: 0-0: 3, 0-1: 0. No input under `C:/temp/eg/data` changed, so no .bak.
+
+Gate (after the documentation edits): build `0 Warning(s)`, `0 Error(s)`; Perf `Passed: 231, Total: 231`; Core `Passed: 1840,
+Total: 1840`; smoke `correctness passed`, EncryptBallots 0.245 ms/ballot 165.7 MB, VerifyBallots 1.000 ms/ballot
+12.2 MB, JSON 21,258 bytes, protobuf 12,482 bytes; console lines as above, `Done.`, the expected ReadKey exception;
+`tally.json` 0-0: 3, 0-1: 0, every other count 0.
+
+Perf: no ballot hot path changed (encryption, V6-V9, the tally and its decryption are untouched; the challenged path
+lost one hash-set lookup per request). Smoke Encrypt 0.243 / Verify 1.000 ms/ballot (0.245 / 1.000 in the second run) vs S9b's 0.246 / 1.026: noise;
+allocation and protobuf size unchanged.
+
+Decisions taken (low-stakes API shape): see "S9c design and API choices" in Decisions.
+
+Carry-overs: the unrecorded-printed-ballot exposure on the challenged path (above), with Q-S7b / Q22; S10 no longer
+needs the issued list's commitment in the record (S9b's carry-over is void).
 
 ### 2026-10-07 — S9b review round 1 (once-only scope, RLA note, id_B aliasing, the consuming step's race guard)
 Worktree changes only; nothing committed. Five minor findings, all accepted (two are one defect). No hash input,

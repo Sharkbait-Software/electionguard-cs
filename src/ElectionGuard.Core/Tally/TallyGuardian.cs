@@ -44,13 +44,10 @@ namespace ElectionGuard.Core.Tally;
 /// nonce C_ξB (membership of C_ξB,0 and the eq. (38) Schnorr proof) and sends m_i = C_ξB,0^{ẑ_i}
 /// alone (<see cref="DecryptBallotNonce"/>); the administrator recovers ξ_B and releases the
 /// encryption nonces derived from it (<see cref="TallyAdmin.CombineChallengedBallot"/>). Before any
-/// of that the guardian decides whether the request is authorized at all, from lists it holds itself
+/// of that the guardian decides whether the request is authorized at all, from a list it holds itself
 /// (user decision Q31): it refuses any ballot nonce whose id_B, H_I or C_ξB,0 matches a cast ballot of
-/// the published record (<see cref="IPublishedCastBallots"/>), a challenged ballot's whose id_B is an
-/// issued pre-encrypted ballot's, and a pre-encrypted ballot's nonce unless its id_B is on the
-/// printer-committed issued list (<see cref="PreEncryption.IssuedPreEncryptedBallots"/>) and this
-/// guardian has not decrypted it before (a per-guardian rule; see the constructor for when it is
-/// election-wide).
+/// the published record (<see cref="IPublishedCastBallots"/>). The guardians decrypt no pre-encrypted
+/// ballot's nonce: the recording tool of §4.3 is out of this library's scope (user decision Q35).
 ///
 /// A guardian works on one decryption at a time, a tally's or a contest data field's. Either commit
 /// step starts a new one and discards any unfinished one, which is safe: nothing is ever responded
@@ -58,87 +55,18 @@ namespace ElectionGuard.Core.Tally;
 /// </summary>
 public class TallyGuardian
 {
-    /// <summary>
-    /// A guardian with index <paramref name="index"/> and its key shares <paramref name="shares"/>.
-    /// <paramref name="decryptedPreEncryptedBallots"/> restores the id_Bs whose pre-encrypted ballot
-    /// nonce it has already decrypted (from <see cref="DecryptedPreEncryptedBallots"/> before a
-    /// restart), so the at-most-once rule survives one. <paramref name="recordPreEncryptedBallotDecryption"/>,
-    /// when given, is called with each id_B after every check has passed and before the share is
-    /// computed: a deployment persists the id_B there (write-ahead), and if it throws, no share is
-    /// computed and the id_B stays consumed (fail closed). The guardian keeps its own copies of the
-    /// id_Bs it is given and hands out copies.
-    ///
-    /// The at-most-once rule is per guardian (Q31: "guardian-side state"). Each guardian remembers
-    /// only the id_Bs it answered, and guardians share nothing, so the rule holds for the election as
-    /// a whole only when every quorum that could answer a later request includes a guardian that
-    /// answered the first: when more than n - k guardians answered it. That is always so when
-    /// n &lt; 2k, since any two quorums then share a guardian (the default 3-of-2 is such a case), and
-    /// otherwise only when the request went to more than n - k guardians (all n, for instance). With
-    /// n ≥ 2k, a request answered by exactly k guardians leaves n - k ≥ k that never saw it, a
-    /// disjoint quorum answers the same id_B again, and up to ⌊n/k⌋ quorums can each recover ξ_B.
-    /// Detecting that takes every guardian's <see cref="DecryptedPreEncryptedBallots"/> together:
-    /// an id_B consumed by a guardian outside the set that the recording tool asked for its one
-    /// recorded request was answered more than once.
-    /// </summary>
-    public TallyGuardian(
-        GuardianIndex index,
-        GuardianSecretShares shares,
-        IEnumerable<SelectionEncryptionIdentifier>? decryptedPreEncryptedBallots = null,
-        Action<SelectionEncryptionIdentifier>? recordPreEncryptedBallotDecryption = null)
+    /// <summary>A guardian with index <paramref name="index"/> and its key shares <paramref name="shares"/>.</summary>
+    public TallyGuardian(GuardianIndex index, GuardianSecretShares shares)
     {
         _index = index;
         _shares = shares;
-        _decryptedPreEncryptedBallots = decryptedPreEncryptedBallots is null
-            ? []
-            : [.. decryptedPreEncryptedBallots.Select(x => OwnedCopy(x, nameof(decryptedPreEncryptedBallots)))];
-        _recordPreEncryptedBallotDecryption = recordPreEncryptedBallotDecryption;
-    }
-
-    /// <summary>
-    /// A copy of <paramref name="identifier"/>'s bytes. <see cref="SelectionEncryptionIdentifier"/>
-    /// wraps its array without copying and hashes by content, so an id_B held in the once-only set
-    /// must be the guardian's own: an entry that shared the caller's array would move to another
-    /// hash bucket if the caller changed it, and the id_B would be answered again.
-    /// </summary>
-    private static SelectionEncryptionIdentifier OwnedCopy(SelectionEncryptionIdentifier identifier, string parameterName)
-    {
-        byte[]? bytes = identifier;
-        if (bytes is not { Length: SelectionEncryptionIdentifier.ByteLength })
-        {
-            throw new ArgumentException($"An id_B must be {SelectionEncryptionIdentifier.ByteLength} bytes.", parameterName);
-        }
-
-        return SelectionEncryptionIdentifier.FromCanonicalBytes(bytes);
     }
 
     private readonly GuardianIndex _index;
     private readonly GuardianSecretShares _shares;
-    private readonly HashSet<SelectionEncryptionIdentifier> _decryptedPreEncryptedBallots;
-    private readonly Action<SelectionEncryptionIdentifier>? _recordPreEncryptedBallotDecryption;
     private object? _session;
 
     public GuardianIndex Index => _index;
-
-    /// <summary>
-    /// The id_Bs whose pre-encrypted ballot nonce this guardian has decrypted, each at most once by
-    /// this guardian (user decision Q31): a snapshot (of copies) to persist and pass back to the
-    /// constructor after a restart. An id_B here whose ballot the recording tool never recorded is a
-    /// printed ballot burned by a premature or duplicate request: a denial of service, detectable from
-    /// this list. A ballot answered twice by two quorums that share no guardian (possible only when
-    /// n ≥ 2k; see the constructor) shows only across guardians: compare the union of every
-    /// guardian's list with the set of guardians the recording tool asked for each id_B.
-    /// </summary>
-    public IReadOnlyCollection<SelectionEncryptionIdentifier> DecryptedPreEncryptedBallots
-    {
-        get
-        {
-            lock (_decryptedPreEncryptedBallots)
-            {
-                // Copies, so a caller cannot change the set's entries through the arrays.
-                return [.. _decryptedPreEncryptedBallots.Select(x => SelectionEncryptionIdentifier.FromCanonicalBytes((byte[])x))];
-            }
-        }
-    }
 
     /// <summary>
     /// Test seam: supplies u_i for an option, given (ind_c, ind_o), in place of a fresh random
@@ -315,12 +243,9 @@ public class TallyGuardian
     /// §3.6.7 p.52: this guardian's partial decryption of a challenged ballot's encrypted nonce,
     /// m_i = C_ξB,0^{ẑ_i} mod p (eq. 107), with its ballot data encryption key share ẑ_i. In order:
     /// <list type="number">
-    /// <item>Authorization (user decision Q31, S9b): <paramref name="castBallots"/> and
-    /// <paramref name="issuedBallots"/> must be for this election, the request's id_B, H_I and C_ξB,0
-    /// must each match no cast ballot, and its id_B must not be on the printer-committed list of
-    /// issued pre-encrypted ballots (<see cref="BallotNonceDecryptionRefusedException"/> otherwise).
-    /// An issued ballot's nonce is decrypted only through the pre-encrypted path, at most once (Q31);
-    /// pass an empty list in an election without pre-encrypted ballots.</item>
+    /// <item>Authorization (user decision Q31, S9b): <paramref name="castBallots"/> must be for this
+    /// election, and the request's id_B, H_I and C_ξB,0 must each match no cast ballot
+    /// (<see cref="BallotNonceDecryptionRefusedException"/> otherwise).</item>
     /// <item>The ballot must be recorded as challenged, not be a pre-encrypted ballot's record (always
     /// a cast ballot's, §4.3.1), and be well formed and keyed with H_I = H(H_E; 0x20, id_B)
     /// (<see cref="ArgumentException"/> otherwise).</item>
@@ -343,121 +268,31 @@ public class TallyGuardian
     /// opening cast "ballots that are selected in the context of a risk limiting audit". An audit flow
     /// (deferred, user decision Q22) needs an authorization path of its own, such as an
     /// audit-selection list committed after the record is final, which this library does not model.
-    /// A printed pre-encrypted ballot not yet recorded is in no cast-ballot view; the issued-list check
-    /// is what keeps its id_B, H_I and C_ξB, wrapped in a made-up challenged regular ballot, from
-    /// being answered here, outside the pre-encrypted path's once-only rule (S9b-1). Matching id_B
-    /// suffices: an issued C_ξB under another id_B has another H_I, and its eq. (38) proof fails.
+    ///
+    /// Pre-encrypted ballots (§4): a printed pre-encrypted ballot that is not yet recorded is in no
+    /// cast-ballot view, and it carries id_B, H_I and C_ξB under the same construction as a regular
+    /// ballot (§4.2 "as shown in Section 3.3.4"). Wrapped in a made-up challenged regular ballot, its
+    /// values pass every check here, and k shares give its ξ_B ahead of its voter. This library has
+    /// no pre-encrypted ballot tools and the guardians know nothing of pre-encrypted ballots until
+    /// they are recorded (user decisions Q33, Q35), so keeping such requests from the guardians is
+    /// the deployment's job, and its recording tool's.
     /// </summary>
     public BallotNoncePartialDecryption DecryptBallotNonce(
         EncryptedBallot ballot,
         EncryptionRecord encryptionRecord,
-        IPublishedCastBallots castBallots,
-        PreEncryption.IssuedPreEncryptedBallots issuedBallots)
+        IPublishedCastBallots castBallots)
     {
         ArgumentNullException.ThrowIfNull(ballot);
         ArgumentNullException.ThrowIfNull(encryptionRecord);
         ArgumentNullException.ThrowIfNull(castBallots);
-        ArgumentNullException.ThrowIfNull(issuedBallots);
 
-        RequireNotCast(castBallots, encryptionRecord, ballot.Id, ballot.SelectionEncryptionIdentifier, ballot.SelectionEncryptionIdentifierHash, ballot.EncryptedBallotNonce);
-        RequireNotIssued(issuedBallots, encryptionRecord, ballot);
+        RequireNotCast(castBallots, encryptionRecord, ballot);
 
         var statement = ChallengedBallotStatement.For(encryptionRecord, ballot);
         statement.RequireDecryptable($"guardian {_index.Index}");
 
-        return PartialDecryptBallotNonce(ballot.Id, statement.Nonce);
-    }
-
-    /// <summary>
-    /// This guardian's share m_i = C_ξB,0^{ẑ_i} mod p (eq. 107) of a pre-encrypted ballot's
-    /// encrypted nonce, which the recording tool needs whether the ballot is then cast or not
-    /// (§4.3.1; see <see cref="TallyAdmin.DecryptPreEncryptedBallotNonce"/>). In order:
-    /// <list type="number">
-    /// <item>Authorization (user decision Q31, S9b; <see cref="BallotNonceDecryptionRefusedException"/>
-    /// otherwise): <paramref name="castBallots"/> and <paramref name="issuedBallots"/> must be for this
-    /// election; the request's id_B, H_I and C_ξB,0 must each match no cast ballot; its id_B must be on
-    /// the printer-committed issued list, with the C_ξB,0 committed for it; and this guardian must not
-    /// have decrypted that id_B's nonce before.</item>
-    /// <item>The manifest must name a hash-trimming function and the ballot must be well formed and
-    /// keyed with H_I = H(H_E; 0x20, id_B) (<see cref="ArgumentException"/> otherwise).</item>
-    /// <item>C_ξB,0 must be in Z_p^r and the Schnorr proof C_ξB,2 must hold (eq. 38;
-    /// <see cref="TallyDecryptionException"/> naming no guardian otherwise), as for a challenged
-    /// ballot.</item>
-    /// </list>
-    /// Only then is the id_B marked as decrypted (and handed to the constructor's write-ahead
-    /// callback) and the share computed, so a malformed request burns nothing.
-    ///
-    /// Trust model: apart from the shape, which anyone can fabricate, steps 2 and 3 read only id_B,
-    /// H_I and C_ξB, which every published ballot carries under the same construction (§4.2 "as shown
-    /// in Section 3.3.4"), regular ballots included. Step 1 is what keeps a request built around
-    /// another ballot's values from yielding its ξ_B: a regular ballot's id_B is never on the issued
-    /// list, and a guardian decrypts a pre-encrypted ballot once, for its recording, and refuses it
-    /// afterwards (by the once-only rule, and by the record check once it is published as cast). The
-    /// once-only rule is this guardian's: with n ≥ 2k, a quorum that shares no guardian with the one
-    /// that answered can answer again until the ballot is published as cast (see the constructor).
-    /// Both lists are the guardian's own (<see cref="IPublishedCastBallots"/>,
-    /// <see cref="PreEncryption.IssuedPreEncryptedBallots"/>), never the requester's. Cost of the
-    /// once-only rule: a request made for a printed ballot before its voter uses it consumes the
-    /// ballot at every guardian that answered, and its later recording is refused by any quorum
-    /// including one of them, a denial of service that <see cref="DecryptedPreEncryptedBallots"/>
-    /// records.
-    /// </summary>
-    public BallotNoncePartialDecryption DecryptBallotNonce(
-        PreEncryption.PreEncryptedBallot ballot,
-        EncryptionRecord encryptionRecord,
-        IPublishedCastBallots castBallots,
-        PreEncryption.IssuedPreEncryptedBallots issuedBallots)
-    {
-        ArgumentNullException.ThrowIfNull(ballot);
-        ArgumentNullException.ThrowIfNull(encryptionRecord);
-        ArgumentNullException.ThrowIfNull(castBallots);
-        ArgumentNullException.ThrowIfNull(issuedBallots);
-
-        RequireNotCast(castBallots, encryptionRecord, ballot.Id, ballot.SelectionEncryptionIdentifier, ballot.SelectionEncryptionIdentifierHash, ballot.EncryptedBallotNonce);
-        var issued = RequireIssued(issuedBallots, encryptionRecord, ballot);
-
-        // The guardian's own copy of the id_B (32 bytes: it is on the issued list), for every
-        // look-up and the insertion below, whatever later happens to the request's array.
-        var identifier = OwnedCopy(issued.SelectionEncryptionIdentifier, nameof(ballot));
-        lock (_decryptedPreEncryptedBallots)
-        {
-            // Fail fast; the insertion below is what decides.
-            if (_decryptedPreEncryptedBallots.Contains(identifier))
-            {
-                throw AlreadyDecrypted(ballot);
-            }
-        }
-
-        var statement = PreEncryptedBallotNonceStatement.For(encryptionRecord, ballot);
-        statement.RequireDecryptable($"guardian {_index.Index}");
-        BeforeConsumingForTesting?.Invoke();
-
-        // Every check has passed: consume the id_B before the share exists. The insertion is the
-        // test, so of concurrent requests for one id_B exactly one gets past it.
-        lock (_decryptedPreEncryptedBallots)
-        {
-            if (!_decryptedPreEncryptedBallots.Add(identifier))
-            {
-                throw AlreadyDecrypted(ballot);
-            }
-        }
-
-        _recordPreEncryptedBallotDecryption?.Invoke(SelectionEncryptionIdentifier.FromCanonicalBytes((byte[])identifier));
-        return PartialDecryptBallotNonce(ballot.Id, statement.Nonce);
-    }
-
-    /// <summary>
-    /// Test seam: called in the pre-encrypted <see cref="DecryptBallotNonce(PreEncryption.PreEncryptedBallot, EncryptionRecord, IPublishedCastBallots, PreEncryption.IssuedPreEncryptedBallots)"/>
-    /// after every check has passed and before the id_B is consumed, so a test can make a second
-    /// request for the same id_B overtake the first there. Null outside tests.
-    /// </summary>
-    internal Action? BeforeConsumingForTesting { get; set; }
-
-    /// <summary>m_i = C_ξB,0^{ẑ_i} mod p (eq. 107), once every check has passed.</summary>
-    private BallotNoncePartialDecryption PartialDecryptBallotNonce(string ballotId, EncryptedBallotNonce nonce)
-    {
         // ẑ_i is secret and a full-width element of Z_q: the constant-time path.
-        var partialDecryption = MontgomeryModP.PowModP(nonce.C0, _shares.OtherBallotDataEncryptionKeyShare);
+        var partialDecryption = MontgomeryModP.PowModP(statement.Nonce.C0, _shares.OtherBallotDataEncryptionKeyShare);
         if (PartialDecryptionTamperForTesting is { } tamper)
         {
             partialDecryption = tamper(0, 0, partialDecryption);
@@ -466,84 +301,27 @@ public class TallyGuardian
         return new BallotNoncePartialDecryption
         {
             GuardianIndex = _index,
-            BallotId = ballotId,
+            BallotId = ballot.Id,
             Mi = partialDecryption,
         };
     }
 
     /// <summary>Q31: the request's id_B, H_I and C_ξB,0 must each match no cast ballot of the record.</summary>
-    private void RequireNotCast(
-        IPublishedCastBallots castBallots,
-        EncryptionRecord encryptionRecord,
-        string ballotId,
-        SelectionEncryptionIdentifier selectionEncryptionIdentifier,
-        SelectionEncryptionIdentifierHash? selectionEncryptionIdentifierHash,
-        EncryptedBallotNonce? nonce)
+    private void RequireNotCast(IPublishedCastBallots castBallots, EncryptionRecord encryptionRecord, EncryptedBallot ballot)
     {
         if (castBallots.ExtendedBaseHash is null || !((byte[])castBallots.ExtendedBaseHash).AsSpan().SequenceEqual((byte[])encryptionRecord.ExtendedBaseHash))
         {
-            throw new BallotNonceDecryptionRefusedException(_index, ballotId, BallotNonceDecryptionRefusal.ForeignElection,
-                $"Guardian {_index.Index} refuses to decrypt ballot {ballotId}'s nonce: its view of the cast ballots is for another election (H_E differs).");
+            throw new BallotNonceDecryptionRefusedException(_index, ballot.Id, BallotNonceDecryptionRefusal.ForeignElection,
+                $"Guardian {_index.Index} refuses to decrypt ballot {ballot.Id}'s nonce: its view of the cast ballots is for another election (H_E differs).");
         }
 
-        var match = castBallots.Match(selectionEncryptionIdentifier, selectionEncryptionIdentifierHash, nonce?.C0);
+        var match = castBallots.Match(ballot.SelectionEncryptionIdentifier, ballot.SelectionEncryptionIdentifierHash, ballot.EncryptedBallotNonce?.C0);
         if (match != CastBallotMatch.None)
         {
-            throw new BallotNonceDecryptionRefusedException(_index, ballotId, BallotNonceDecryptionRefusal.CastBallot,
-                $"Guardian {_index.Index} refuses to decrypt ballot {ballotId}'s nonce: its {Describe(match)} matches a cast ballot in the published record, whose votes the nonce would reveal.");
+            throw new BallotNonceDecryptionRefusedException(_index, ballot.Id, BallotNonceDecryptionRefusal.CastBallot,
+                $"Guardian {_index.Index} refuses to decrypt ballot {ballot.Id}'s nonce: its {Describe(match)} matches a cast ballot in the published record, whose votes the nonce would reveal.");
         }
     }
-
-    /// <summary>
-    /// Q31: the request's id_B must be on the printer-committed issued list, with the C_ξB,0
-    /// committed for it. Returns the list's entry.
-    /// </summary>
-    private PreEncryption.IssuedPreEncryptedBallot RequireIssued(PreEncryption.IssuedPreEncryptedBallots issuedBallots, EncryptionRecord encryptionRecord, PreEncryption.PreEncryptedBallot ballot)
-    {
-        if (!issuedBallots.IsFor(encryptionRecord.ExtendedBaseHash))
-        {
-            throw new BallotNonceDecryptionRefusedException(_index, ballot.Id, BallotNonceDecryptionRefusal.ForeignElection,
-                $"Guardian {_index.Index} refuses to decrypt pre-encrypted ballot {ballot.Id}'s nonce: its issued list is for another election (H_E differs).");
-        }
-
-        if (!issuedBallots.TryGet(ballot.SelectionEncryptionIdentifier, out var issued))
-        {
-            throw new BallotNonceDecryptionRefusedException(_index, ballot.Id, BallotNonceDecryptionRefusal.NotIssued,
-                $"Guardian {_index.Index} refuses to decrypt pre-encrypted ballot {ballot.Id}'s nonce: its id_B is not on the printer-committed list of issued pre-encrypted ballots.");
-        }
-
-        if (ballot.EncryptedBallotNonce is null || ballot.EncryptedBallotNonce.C0 != issued.EncryptedBallotNonceC0)
-        {
-            throw new BallotNonceDecryptionRefusedException(_index, ballot.Id, BallotNonceDecryptionRefusal.IssuedNonceDiffers,
-                $"Guardian {_index.Index} refuses to decrypt pre-encrypted ballot {ballot.Id}'s nonce: its C_ξB,0 is not the one the printer committed for its id_B.");
-        }
-
-        return issued;
-    }
-
-    /// <summary>
-    /// Q31 (S9b-1): the challenged path never decrypts an issued pre-encrypted ballot's nonce; that
-    /// goes through the pre-encrypted path, at most once.
-    /// </summary>
-    private void RequireNotIssued(PreEncryption.IssuedPreEncryptedBallots issuedBallots, EncryptionRecord encryptionRecord, EncryptedBallot ballot)
-    {
-        if (!issuedBallots.IsFor(encryptionRecord.ExtendedBaseHash))
-        {
-            throw new BallotNonceDecryptionRefusedException(_index, ballot.Id, BallotNonceDecryptionRefusal.ForeignElection,
-                $"Guardian {_index.Index} refuses to decrypt ballot {ballot.Id}'s nonce: its issued list is for another election (H_E differs).");
-        }
-
-        if (issuedBallots.TryGet(ballot.SelectionEncryptionIdentifier, out _))
-        {
-            throw new BallotNonceDecryptionRefusedException(_index, ballot.Id, BallotNonceDecryptionRefusal.IssuedPreEncryptedBallot,
-                $"Guardian {_index.Index} refuses to decrypt challenged ballot {ballot.Id}'s nonce: its id_B is an issued pre-encrypted ballot's, whose nonce is decrypted only for its recording, at most once.");
-        }
-    }
-
-    /// <summary>Q31: this guardian decrypts each id_B's nonce at most once.</summary>
-    private BallotNonceDecryptionRefusedException AlreadyDecrypted(PreEncryption.PreEncryptedBallot ballot) =>
-        new(_index, ballot.Id, BallotNonceDecryptionRefusal.AlreadyDecrypted,
-            $"Guardian {_index.Index} refuses to decrypt pre-encrypted ballot {ballot.Id}'s nonce: it has already decrypted the nonce of this id_B once.");
 
     private static string Describe(CastBallotMatch match)
     {
@@ -967,21 +745,19 @@ public class TallyAdmin
     /// Has each of <paramref name="guardians"/> (U, at least k of them) partially decrypt the
     /// encrypted nonce of the challenged <paramref name="ballot"/> (§3.6.7, eq. 107) and combines the
     /// results with <see cref="CombineChallengedBallot"/>. Each guardian is given
-    /// <paramref name="castBallots"/>, the published record's cast ballots, and
-    /// <paramref name="issuedBallots"/>, the printer-committed issued pre-encrypted ballots (empty in an
-    /// election without them), and refuses (<see cref="BallotNonceDecryptionRefusedException"/>) if
-    /// the ballot's id_B, H_I or C_ξB,0 matches a cast ballot or its id_B is an issued one (user
-    /// decision Q31). In-process, the caller stands in for each guardian's own copy of both; a
-    /// distributed guardian uses its own (see <see cref="IPublishedCastBallots"/>).
+    /// <paramref name="castBallots"/>, the published record's cast ballots, and refuses
+    /// (<see cref="BallotNonceDecryptionRefusedException"/>) if the ballot's id_B, H_I or C_ξB,0
+    /// matches a cast ballot (user decision Q31). In-process, the caller stands in for each
+    /// guardian's own copy of the record; a distributed guardian uses its own (see
+    /// <see cref="IPublishedCastBallots"/>).
     /// </summary>
     public DecryptedChallengedBallot DecryptChallengedBallot(
         IReadOnlyList<TallyGuardian> guardians,
         EncryptedBallot ballot,
         EncryptionRecord encryptionRecord,
-        IPublishedCastBallots castBallots,
-        PreEncryption.IssuedPreEncryptedBallots issuedBallots)
+        IPublishedCastBallots castBallots)
     {
-        var partialDecryptions = guardians.Select(x => x.DecryptBallotNonce(ballot, encryptionRecord, castBallots, issuedBallots)).ToList();
+        var partialDecryptions = guardians.Select(x => x.DecryptBallotNonce(ballot, encryptionRecord, castBallots)).ToList();
         return CombineChallengedBallot(ballot, encryptionRecord, partialDecryptions);
     }
 
@@ -1028,75 +804,6 @@ public class TallyAdmin
         {
             Array.Clear(ballotNonce.ToByteArray());
         }
-    }
-
-    /// <summary>
-    /// Has each of <paramref name="guardians"/> (at least k of them) partially decrypt the
-    /// encrypted nonce of the pre-encrypted <paramref name="ballot"/> and combines the results with
-    /// <see cref="CombinePreEncryptedBallotNonce"/>. Each guardian is given
-    /// <paramref name="castBallots"/> and <paramref name="issuedBallots"/>, and refuses
-    /// (<see cref="BallotNonceDecryptionRefusedException"/>) a ballot that matches a cast ballot, is
-    /// not on the issued list, or whose nonce it has already decrypted (user decision Q31). Every
-    /// guardian in <paramref name="guardians"/> that answers consumes the id_B, so a retry is refused
-    /// by any quorum that includes one of them. The rule is per guardian: it covers every later
-    /// quorum only when more than n - k guardians answered, which any quorum does when n &lt; 2k (the
-    /// default 3-of-2) and which, when n ≥ 2k, takes passing more than n - k guardians (all n, for
-    /// instance). Record which guardians were asked for each id_B: comparing that with every
-    /// guardian's <see cref="TallyGuardian.DecryptedPreEncryptedBallots"/> shows an id_B answered by
-    /// a second, disjoint quorum (see the <see cref="TallyGuardian"/> constructor).
-    /// </summary>
-    public BallotNonce DecryptPreEncryptedBallotNonce(
-        IReadOnlyList<TallyGuardian> guardians,
-        PreEncryption.PreEncryptedBallot ballot,
-        EncryptionRecord encryptionRecord,
-        IPublishedCastBallots castBallots,
-        PreEncryption.IssuedPreEncryptedBallots issuedBallots)
-    {
-        var partialDecryptions = guardians.Select(x => x.DecryptBallotNonce(ballot, encryptionRecord, castBallots, issuedBallots)).ToList();
-        return CombinePreEncryptedBallotNonce(ballot, encryptionRecord, partialDecryptions);
-    }
-
-    /// <summary>
-    /// §4.3.1 and §3.6.7: the ballot nonce ξ_B of the pre-encrypted <paramref name="ballot"/>, from
-    /// the guardians' partial decryptions of its encrypted nonce (eq. 108, then eqs. 35-37), for the
-    /// recording tool (<see cref="PreEncryption.BallotRecordingTool"/>), which needs it for a cast
-    /// ballot as for an uncast one. The ballot is checked as the guardians checked it, the messages
-    /// as <see cref="CombineChallengedBallot"/> checks them, and ξ_B is returned only if it
-    /// regenerates the ballot exactly (every encryption by eq. 121, every selection and contest hash,
-    /// the confirmation code); otherwise a <see cref="TallyDecryptionException"/> naming no guardian:
-    /// a wrong m_i and a device that encrypted a wrong ξ_B cannot be told apart (§3.6.7 defines no
-    /// proof for m_i).
-    ///
-    /// ξ_B is secret for a cast ballot: with it, the published selected vectors name the options
-    /// chosen. The caller holds the recording tool's position (§4.3). The regeneration check protects
-    /// what this method returns, not the shares: whoever collects k shares can combine them without
-    /// it, so the guardians' refusal is what keeps a request built around another published ballot's
-    /// id_B, H_I and C_ξB from yielding its ξ_B (user decision Q31: the issued list, once-only and the
-    /// record check; see
-    /// <see cref="TallyGuardian.DecryptBallotNonce(PreEncryption.PreEncryptedBallot, EncryptionRecord, IPublishedCastBallots, PreEncryption.IssuedPreEncryptedBallots)"/>).
-    /// This method takes neither list, for that reason: repeating the guardians' authorization here
-    /// would protect nothing.
-    /// </summary>
-    public BallotNonce CombinePreEncryptedBallotNonce(
-        PreEncryption.PreEncryptedBallot ballot,
-        EncryptionRecord encryptionRecord,
-        IReadOnlyCollection<BallotNoncePartialDecryption> partialDecryptions)
-    {
-        var statement = PreEncryptedBallotNonceStatement.For(encryptionRecord, ballot);
-        statement.RequireDecryptable("the administrator");
-
-        var ballotNonce = CombineBallotNonce(ballot.Id, "Pre-encrypted ballot", statement.SelectionEncryptionIdentifierHash, statement.Nonce, partialDecryptions);
-        try
-        {
-            new PreEncryption.BallotRecordingTool(encryptionRecord).RecordUncast(ballot, ballotNonce);
-        }
-        catch (ArgumentException exception)
-        {
-            Array.Clear(ballotNonce.ToByteArray());
-            throw new TallyDecryptionException(null, $"Pre-encrypted ballot {ballot.Id}'s nonce did not decrypt to a ξ_B that regenerates the ballot: either a guardian sent a wrong m_i or the device encrypted a wrong ξ_B (§3.6.7 defines no proof that tells them apart). {exception.Message}");
-        }
-
-        return ballotNonce;
     }
 
     /// <summary>

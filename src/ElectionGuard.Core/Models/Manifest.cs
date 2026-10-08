@@ -28,9 +28,12 @@ public record Manifest
     /// its contest, <see cref="BallotStyle.Id"/>) must be unique so that the lists are bijective.
     ///
     /// Throws <see cref="InvalidManifestException"/> on the first violation. Called when an
-    /// <see cref="EncryptionRecord"/> is built (which covers deserialization) and again by the
-    /// ballot encryptors' constructors, the write path where non-conformant indices would be baked
-    /// into ballots. The verifications do not call it: they recompute against a record that was
+    /// <see cref="EncryptionRecord"/> is built (which covers deserialization) and again on the write
+    /// paths where non-conformant indices would be baked into ballots: the
+    /// <see cref="BallotEncryption.BallotEncryptor"/> constructor and
+    /// <see cref="PreEncryption.PreEncryptionPrimitives.GenerateContests"/> (the per-contest
+    /// pre-encryption primitives, which take a bare <see cref="Contest"/>, check its option
+    /// numbering themselves). The verifications do not call it: they recompute against a record that was
     /// validated when it was built, and re-validating per ballot would cost O(manifest) each time.
     /// </summary>
     public void Validate()

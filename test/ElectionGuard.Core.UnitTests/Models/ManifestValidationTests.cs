@@ -269,7 +269,8 @@ public class ManifestValidationTests
 
     /// <summary>
     /// A record's manifest validated on construction and then reordered in place is caught again
-    /// by the ballot encryptors, which would otherwise bake the wrong indices into new ballots. The
+    /// by the ballot encryptor and the pre-encryption primitives, which would otherwise bake the wrong
+    /// indices into new ballots. The
     /// verifications deliberately do not re-validate per ballot (it costs O(manifest) per ballot);
     /// they rely on the validation done when the record was built.
     /// </summary>
@@ -285,7 +286,16 @@ public class ManifestValidationTests
         manifest.Contests[0].Choices.Reverse();
 
         Assert.Throws<InvalidManifestException>(() => new BallotEncryptor(record, "device-1", deviceHash));
-        Assert.Throws<InvalidManifestException>(() => new BallotPreEncryptor(record, "device-1"));
+        var selectionHash = new SelectionEncryptionIdentifierHash(record.ExtendedBaseHash, new SelectionEncryptionIdentifier(new byte[32]));
+        var ballotNonce = new BallotNonce(new byte[32]);
+        var contest = manifest.Contests[0];
+        Assert.Throws<InvalidManifestException>(() => PreEncryptionPrimitives.GenerateContests(record, "ballot-style-1", selectionHash, ballotNonce));
+
+        // The per-contest primitives cannot see the manifest; they check the contest's own option numbering.
+        Assert.Throws<InvalidManifestException>(() => PreEncryptionPrimitives.GenerateContest(record.ElectionPublicKeys, HashTrimmingFunction.TwoHex, selectionHash, ballotNonce, contest));
+        Assert.Throws<InvalidManifestException>(() => PreEncryptionPrimitives.GenerateSelection(record.ElectionPublicKeys, HashTrimmingFunction.TwoHex, selectionHash, ballotNonce, contest, 1));
+        var placeholder = new EncryptedValue { Alpha = 1, Beta = 1, EncryptionNonce = 0 };
+        Assert.Throws<InvalidManifestException>(() => PreEncryptionPrimitives.ProveCombinedContest(record.ElectionPublicKeys, contest, selectionHash, [placeholder, placeholder], [0, 0], new ContestHash(new byte[32])));
     }
 
     // --- S5: per-contest supplemental fields (user decision Q1) ---------------------------------

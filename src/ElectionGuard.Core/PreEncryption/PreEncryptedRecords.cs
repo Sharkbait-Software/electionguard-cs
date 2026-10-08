@@ -64,9 +64,9 @@ public record PreEncryptedCastSelection
 ///
 /// §4.4 also says the ballot nonce ξ_B "is published"; §4.3 and Verification 18 release the
 /// encryption nonces instead, which "enables selective decryption of specific contests". The
-/// recording tool releases the nonces and includes ξ_B only when asked to
-/// (<see cref="BallotRecordingTool.RecordUncast"/>); when it is present Verification 18 also
-/// checks that every released nonce derives from it.
+/// record therefore always holds the nonces and holds ξ_B only when the recording tool (out of this
+/// library's scope, user decision Q35) chose to release it; when it is present Verification 18
+/// also checks that every released nonce derives from it.
 /// </summary>
 public record PreEncryptedUncastBallot
 {

@@ -592,8 +592,9 @@ public class BallotEncryptor
     /// relation (Note 3.4). <paramref name="weight"/>, when given, is hashed as b(weight, 4) after the
     /// option index: the null-vote relation's format.
     ///
-    /// Also the proof code of the pre-encrypted ballot recording tool (§4.3: "generates proofs of
-    /// ballot-correctness as in standard ElectionGuard section 3.3.7"), on its combined vectors.
+    /// Also the proof code for a pre-encrypted ballot's combined vectors (§4.3: "generates proofs of
+    /// ballot-correctness as in standard ElectionGuard section 3.3.7"), through
+    /// <see cref="PreEncryption.PreEncryptionPrimitives.ProveCombinedContest(ElectionPublicKeys, Contest, SelectionEncryptionIdentifierHash, IReadOnlyList{EncryptedValue}, IReadOnlyList{int}, ContestHash)"/>.
     /// <paramref name="proofNoncesForTesting"/>, when given, supplies for the commitment to the
     /// value <c>firstValue + j</c> its u_j and, for every value but the true one, its simulated
     /// challenge c_j, in place of fresh random values; the known-answer tests use it to reproduce

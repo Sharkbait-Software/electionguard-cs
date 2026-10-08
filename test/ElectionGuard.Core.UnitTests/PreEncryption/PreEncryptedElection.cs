@@ -1,19 +1,21 @@
 using ElectionGuard.Core.BallotEncryption;
-using ElectionGuard.Core.KeyGeneration;
 using ElectionGuard.Core.Models;
 using ElectionGuard.Core.PreEncryption;
 using ElectionGuard.Core.Tally;
 using ElectionGuard.Testing.Common;
+using System.Collections.Concurrent;
 using System.Text.Json;
 
 namespace ElectionGuard.Core.UnitTests.PreEncryption;
 
 /// <summary>
-/// A small election that uses pre-encrypted ballots (§4), shared by the recording tool and
+/// A small election that uses pre-encrypted ballots (§4), shared by the pre-encrypted record and
 /// Verification 15-19 tests: contest-1 with three options and L = 1, contest-2 with four options and
 /// L = 2, one ballot style listing both, Ω2 (four hex characters, so short codes practically never
-/// collide), and a 3-of-2 guardian set whose shares decrypt ballot nonces. Built once per chaining
-/// mode; the tests only read it.
+/// collide), and a 3-of-2 guardian set. Ballots are made and recorded by the test-only
+/// <see cref="PreEncryptedBallotFixtures"/> (the library has no encrypting or recording tool, user
+/// decision Q35), which remembers each ballot's ξ_B here. Built once per chaining mode; the tests
+/// only read it.
 /// </summary>
 public sealed class PreEncryptedElection
 {
@@ -40,28 +42,16 @@ public sealed class PreEncryptedElection
     public EncryptionRecord Record { get; }
     private readonly ElectionFixtureBuilder.GuardianSetResult _guardianSet;
 
-    /// <summary>
-    /// The decryption handles of the 3-of-2 guardian set, built fresh on every read: each guardian
-    /// remembers the pre-encrypted ballots whose nonce it decrypted, at most once each (user decision
-    /// Q31), and this election is shared by many tests. A test that needs one guardian's memory
-    /// across calls keeps the list it reads.
-    /// </summary>
+    /// <summary>ξ_B of every ballot this election pre-encrypted, by id_B (hex).</summary>
+    private readonly ConcurrentDictionary<string, BallotNonce> _ballotNonces = new(StringComparer.Ordinal);
+
+    /// <summary>The decryption handles of the 3-of-2 guardian set.</summary>
     public List<TallyGuardian> Guardians => _guardianSet.Guardians
         .Select(x => new TallyGuardian(x.Index, _guardianSet.SecretShares[x.Index]))
         .ToList();
 
-    /// <summary>The secret key shares of the guardian with index <paramref name="index"/>, to build a guardian with state of its own.</summary>
-    public GuardianSecretShares SecretShares(GuardianIndex index) => _guardianSet.SecretShares[index];
-
     /// <summary>A view of the published record with no cast ballot (user decision Q31).</summary>
     public PublishedCastBallots NoCastBallots => new(Record.ExtendedBaseHash);
-
-    /// <summary>An issued list with no ballot on it (user decision Q31).</summary>
-    public IssuedPreEncryptedBallots NoIssuedBallots => new(Record.ExtendedBaseHash, []);
-
-    /// <summary>A printer-committed issued list holding exactly <paramref name="ballots"/> (user decision Q31).</summary>
-    public IssuedPreEncryptedBallots IssuedFor(params PreEncryptedBallot[] ballots) =>
-        IssuedPreEncryptedBallots.FromPrintedBallots(Record.ExtendedBaseHash, ballots);
 
     /// <summary>H_DI of <see cref="DeviceId"/> for pre-encrypted ballots (eq. 119).</summary>
     public VotingDeviceInformationHash DeviceHash { get; }
@@ -95,14 +85,20 @@ public sealed class PreEncryptedElection
         HashTrimmingFunction = HashTrimmingFunction.FourHex,
     };
 
-    public BallotPreEncryptor PreEncryptor() => new(Record, DeviceId);
+    /// <summary>A fresh pre-encrypted ballot of <see cref="DeviceId"/> with unique short codes; its ξ_B is remembered.</summary>
+    public PreEncryptedBallot PreEncrypt(string ballotId, ConfirmationCode? previousConfirmationCode = null)
+    {
+        var (ballot, ballotNonce) = PreEncryptedBallotFixtures.PreEncrypt(Record, DeviceId, ballotId, BallotStyleId, previousConfirmationCode);
+        _ballotNonces[Convert.ToHexString(ballot.SelectionEncryptionIdentifier)] = ballotNonce;
+        return ballot;
+    }
 
-    public PreEncryptedBallot PreEncrypt(string ballotId, ConfirmationCode? previousConfirmationCode = null) =>
-        PreEncryptor().PreEncrypt(ballotId, BallotStyleId, previousConfirmationCode);
-
-    /// <summary>ξ_B of <paramref name="ballot"/>, decrypted by the guardians (§3.6.7, §4.3.1).</summary>
-    public BallotNonce DecryptNonce(PreEncryptedBallot ballot) =>
-        new TallyAdmin().DecryptPreEncryptedBallotNonce(Guardians, ballot, Record, NoCastBallots, IssuedFor(ballot));
+    /// <summary>
+    /// ξ_B of <paramref name="ballot"/>, which this election pre-encrypted (looked up by id_B, so a
+    /// copy or a deserialized ballot works too). It stands in for the ξ_B a recording tool obtains
+    /// (§4.3.1), which is outside this library.
+    /// </summary>
+    public BallotNonce BallotNonceOf(PreEncryptedBallot ballot) => _ballotNonces[Convert.ToHexString(ballot.SelectionEncryptionIdentifier)];
 
     /// <summary>
     /// The voter's selections as a plaintext ballot: the options of contest-1 and contest-2 given
@@ -131,7 +127,7 @@ public sealed class PreEncryptedElection
     public (PreEncryptedBallot PreEncrypted, EncryptedBallot Cast) Cast(string ballotId, int[] contest1, int[] contest2, ConfirmationCode? previousConfirmationCode = null)
     {
         var ballot = PreEncrypt(ballotId, previousConfirmationCode);
-        var cast = new BallotRecordingTool(Record).RecordCast(ballot, DecryptNonce(ballot), Selections(ballotId, contest1, contest2));
+        var cast = PreEncryptedBallotFixtures.RecordCast(Record, ballot, BallotNonceOf(ballot), Selections(ballotId, contest1, contest2));
         return (ballot, cast);
     }
 
@@ -139,6 +135,6 @@ public sealed class PreEncryptedElection
     public PreEncryptedUncastBallot Uncast(string ballotId, bool releaseBallotNonce = false, ConfirmationCode? previousConfirmationCode = null)
     {
         var ballot = PreEncrypt(ballotId, previousConfirmationCode);
-        return new BallotRecordingTool(Record).RecordUncast(ballot, DecryptNonce(ballot), releaseBallotNonce);
+        return PreEncryptedBallotFixtures.RecordUncast(Record, ballot, BallotNonceOf(ballot), releaseBallotNonce);
     }
 }

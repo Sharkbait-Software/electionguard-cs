@@ -178,7 +178,7 @@ public partial class KnownAnswerTests
                 OtherBallotDataEncryptionKeyShare = Q(guardianVector, "z_hat_i_hex"),
             });
 
-            var partial = guardian.DecryptBallotNonce(ballot, record, new PublishedCastBallots(record.ExtendedBaseHash), new ElectionGuard.Core.PreEncryption.IssuedPreEncryptedBallots(record.ExtendedBaseHash, []));
+            var partial = guardian.DecryptBallotNonce(ballot, record, new PublishedCastBallots(record.ExtendedBaseHash));
             Assert.Equal(guardianVector.GetProperty("m_i_hex").GetString(), ToHex(partial.Mi));
 
             var w = TallyDecryptionHashes.LagrangeCoefficient(index, participants);
@@ -286,7 +286,7 @@ public partial class KnownAnswerTests
     {
         var (record, ballot, deviceHash, guardians, contestVectors) = OracleChallengedBallot(ballotName);
 
-        var decrypted = new TallyAdmin().DecryptChallengedBallot(guardians, ballot, record, new PublishedCastBallots(record.ExtendedBaseHash), new ElectionGuard.Core.PreEncryption.IssuedPreEncryptedBallots(record.ExtendedBaseHash, []));
+        var decrypted = new TallyAdmin().DecryptChallengedBallot(guardians, ballot, record, new PublishedCastBallots(record.ExtendedBaseHash));
 
         Assert.Equal(contestVectors.Count, decrypted.Contests.Count);
         for (int c = 0; c < contestVectors.Count; c++)
@@ -377,7 +377,7 @@ public partial class KnownAnswerTests
         new ConfirmationCodeVerification().Verify(encrypted, deviceHash, record, null);
 
         encrypted.RecordStatus(BallotStatus.Challenged);
-        var decrypted = new TallyAdmin().DecryptChallengedBallot(guardians, encrypted, record, new PublishedCastBallots(record.ExtendedBaseHash), new ElectionGuard.Core.PreEncryption.IssuedPreEncryptedBallots(record.ExtendedBaseHash, []));
+        var decrypted = new TallyAdmin().DecryptChallengedBallot(guardians, encrypted, record, new PublishedCastBallots(record.ExtendedBaseHash));
         new ChallengedBallotDecryptionVerification().Verify(record, encrypted, decrypted, deviceHash, null);
         new ChallengedBallotWellFormednessVerification().Verify(record.Manifest, encrypted, decrypted);
         for (int c = 0; c < votes.Length; c++)

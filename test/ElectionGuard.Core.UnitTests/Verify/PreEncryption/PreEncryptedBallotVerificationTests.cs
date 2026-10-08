@@ -32,6 +32,10 @@ public class PreEncryptedBallotVerificationTests
         return ElectionFixtureBuilder.CreateEncryptionRecord(guardianSet, manifest, manifestFile).EncryptionRecord;
     }
 
+    /// <summary>A pre-encrypted ballot of <see cref="DeviceId"/>, made by the test-only fixture (the library has no encrypting tool, user decision Q35).</summary>
+    private static PreEncryptedBallot PreEncrypt(EncryptionRecord record, string ballotId, ConfirmationCode? previousConfirmationCode) =>
+        PreEncryptedBallotFixtures.PreEncrypt(record, DeviceId, ballotId, BallotStyleId, previousConfirmationCode).Ballot;
+
     private static VotingDeviceInformationHash DeviceHash(EncryptionRecord record)
     {
         return VotingDeviceInformationHash.ForPreEncryptedBallots(record.ExtendedBaseHash, DeviceId);
@@ -51,7 +55,7 @@ public class PreEncryptedBallotVerificationTests
     public void ConfirmationCode_ValidBallot_NoChaining_DoesNotThrow()
     {
         var record = CreateEncryptionRecord(selectionLimit: 2);
-        var ballot = new BallotPreEncryptor(record, DeviceId).PreEncrypt("ballot-1", BallotStyleId, null);
+        var ballot = PreEncrypt(record, "ballot-1", null);
 
         var exception = Record.Exception(() => new PreEncryptedConfirmationCodeVerification().Verify(ballot, DeviceHash(record), record, null));
 
@@ -62,9 +66,8 @@ public class PreEncryptedBallotVerificationTests
     public void ConfirmationCode_ValidBallots_SimpleChaining_DoNotThrow()
     {
         var record = CreateEncryptionRecord(ChainingMode.Simple);
-        var encryptor = new BallotPreEncryptor(record, DeviceId);
-        var first = encryptor.PreEncrypt("ballot-1", BallotStyleId, null);
-        var second = encryptor.PreEncrypt("ballot-2", BallotStyleId, first.ConfirmationCode);
+        var first = PreEncrypt(record, "ballot-1", null);
+        var second = PreEncrypt(record, "ballot-2", first.ConfirmationCode);
         var verification = new PreEncryptedConfirmationCodeVerification();
 
         Assert.Null(Record.Exception(() => verification.Verify(first, DeviceHash(record), record, null)));
@@ -75,7 +78,7 @@ public class PreEncryptedBallotVerificationTests
     public void ConfirmationCode_TamperedEncryption_Fails16A()
     {
         var record = CreateEncryptionRecord();
-        var ballot = new BallotPreEncryptor(record, DeviceId).PreEncrypt("ballot-1", BallotStyleId, null);
+        var ballot = PreEncrypt(record, "ballot-1", null);
         var tampered = ReplaceSelection(ballot, 1, s =>
         {
             var vector = s.Vector.ToList();
@@ -95,7 +98,7 @@ public class PreEncryptedBallotVerificationTests
         // A selection hash recomputed from a different vector is self-consistent (16.A passes) but
         // no longer the hash the contest hash was computed from.
         var record = CreateEncryptionRecord();
-        var ballot = new BallotPreEncryptor(record, DeviceId).PreEncrypt("ballot-1", BallotStyleId, null);
+        var ballot = PreEncrypt(record, "ballot-1", null);
         var tampered = ReplaceSelection(ballot, 0, s =>
         {
             var vector = s.Vector.Reverse().ToList();
@@ -112,7 +115,7 @@ public class PreEncryptedBallotVerificationTests
     public void ConfirmationCode_TamperedContestHash_Fails16B()
     {
         var record = CreateEncryptionRecord();
-        var ballot = new BallotPreEncryptor(record, DeviceId).PreEncrypt("ballot-1", BallotStyleId, null);
+        var ballot = PreEncrypt(record, "ballot-1", null);
         var tampered = ballot with { Contests = [ballot.Contests[0] with { ContestHash = new ContestHash(new byte[32]) }] };
 
         var exception = Assert.Throws<VerificationFailedException>(() =>
@@ -125,7 +128,7 @@ public class PreEncryptedBallotVerificationTests
     public void ConfirmationCode_TamperedConfirmationCode_Fails16C()
     {
         var record = CreateEncryptionRecord();
-        var ballot = new BallotPreEncryptor(record, DeviceId).PreEncrypt("ballot-1", BallotStyleId, null);
+        var ballot = PreEncrypt(record, "ballot-1", null);
         var tampered = ballot with { ConfirmationCode = new ConfirmationCode(new byte[32]) };
 
         var exception = Assert.Throws<VerificationFailedException>(() =>
@@ -140,9 +143,8 @@ public class PreEncryptedBallotVerificationTests
         // The published chaining field and confirmation code are consistent (16.C), but not with the
         // predecessor the verifier knows for this device.
         var record = CreateEncryptionRecord(ChainingMode.Simple);
-        var encryptor = new BallotPreEncryptor(record, DeviceId);
-        var first = encryptor.PreEncrypt("ballot-1", BallotStyleId, null);
-        var second = encryptor.PreEncrypt("ballot-2", BallotStyleId, first.ConfirmationCode);
+        var first = PreEncrypt(record, "ballot-1", null);
+        var second = PreEncrypt(record, "ballot-2", first.ConfirmationCode);
 
         var exception = Assert.Throws<VerificationFailedException>(() =>
             new PreEncryptedConfirmationCodeVerification().Verify(second, DeviceHash(record), record, new ConfirmationCode(new byte[32])));
@@ -154,7 +156,7 @@ public class PreEncryptedBallotVerificationTests
     public void ConfirmationCode_DeviceHashForAnotherDevice_Fails16D()
     {
         var record = CreateEncryptionRecord();
-        var ballot = new BallotPreEncryptor(record, DeviceId).PreEncrypt("ballot-1", BallotStyleId, null);
+        var ballot = PreEncrypt(record, "ballot-1", null);
         var otherDevice = VotingDeviceInformationHash.ForPreEncryptedBallots(record.ExtendedBaseHash, "device-2");
         // Recompute the published chaining-dependent values for the other device so 16.C passes.
         var chainingField = ChainingField.ForPreEncryptedBallots(ChainingMode.None, otherDevice, record.ExtendedBaseHash, null);
@@ -174,7 +176,7 @@ public class PreEncryptedBallotVerificationTests
     public void ConfirmationCode_PublishedChainingFieldDiffers_NoChaining_Fails16E()
     {
         var record = CreateEncryptionRecord();
-        var ballot = new BallotPreEncryptor(record, DeviceId).PreEncrypt("ballot-1", BallotStyleId, null);
+        var ballot = PreEncrypt(record, "ballot-1", null);
         var simpleField = ChainingField.ForPreEncryptedBallots(ChainingMode.Simple, DeviceHash(record), record.ExtendedBaseHash, null);
         var tampered = ballot with
         {
@@ -192,9 +194,8 @@ public class PreEncryptedBallotVerificationTests
     public void ConfirmationCode_PublishedChainingFieldDiffers_SimpleChaining_Fails16F()
     {
         var record = CreateEncryptionRecord(ChainingMode.Simple);
-        var encryptor = new BallotPreEncryptor(record, DeviceId);
-        var first = encryptor.PreEncrypt("ballot-1", BallotStyleId, null);
-        var second = encryptor.PreEncrypt("ballot-2", BallotStyleId, first.ConfirmationCode);
+        var first = PreEncrypt(record, "ballot-1", null);
+        var second = PreEncrypt(record, "ballot-2", first.ConfirmationCode);
         // Published as if it were the device's first ballot, though the verifier knows its predecessor.
         var firstBallotField = ChainingField.ForPreEncryptedBallots(ChainingMode.Simple, DeviceHash(record), record.ExtendedBaseHash, null);
         var tampered = second with
@@ -282,7 +283,7 @@ public class PreEncryptedBallotVerificationTests
     {
         // Rehashed reproduces the generator's own hashes, so a shape it leaves alone passes.
         var record = CreateEncryptionRecord(selectionLimit: 2);
-        var ballot = new BallotPreEncryptor(record, DeviceId).PreEncrypt("ballot-1", BallotStyleId, null);
+        var ballot = PreEncrypt(record, "ballot-1", null);
         Assert.Equal(4, Contest(ballot).Selections.Count);
 
         var rehashed = Rehashed(ballot);
@@ -296,7 +297,7 @@ public class PreEncryptedBallotVerificationTests
     public void ConfirmationCode_MalformedButSelfConsistentBallot_Fails16Structure(string shape)
     {
         var record = CreateEncryptionRecord(selectionLimit: 2);
-        var ballot = new BallotPreEncryptor(record, DeviceId).PreEncrypt("ballot-1", BallotStyleId, null);
+        var ballot = PreEncrypt(record, "ballot-1", null);
         var malformed = Rehashed(PreEncryptedShapes[shape](ballot));
 
         var exception = Assert.Throws<VerificationFailedException>(() =>
@@ -311,7 +312,7 @@ public class PreEncryptedBallotVerificationTests
     public void ShortCodes_ValidBallot_DoesNotThrow()
     {
         var record = CreateEncryptionRecord(selectionLimit: 2);
-        var ballot = new BallotPreEncryptor(record, DeviceId).PreEncrypt("ballot-1", BallotStyleId, null);
+        var ballot = PreEncrypt(record, "ballot-1", null);
 
         Assert.Null(Record.Exception(() => new ShortCodeVerification().Verify(ballot, record)));
     }
@@ -320,7 +321,7 @@ public class PreEncryptedBallotVerificationTests
     public void ShortCodes_TamperedShortCode_Fails17A()
     {
         var record = CreateEncryptionRecord();
-        var ballot = new BallotPreEncryptor(record, DeviceId).PreEncrypt("ballot-1", BallotStyleId, null);
+        var ballot = PreEncrypt(record, "ballot-1", null);
         var tampered = ReplaceSelection(ballot, 1, s => s with { ShortCode = new ShortCode(s.ShortCode.Value == "A0" ? "A1" : "A0") });
 
         var exception = Assert.Throws<VerificationFailedException>(() => new ShortCodeVerification().Verify(tampered, record));
@@ -332,7 +333,7 @@ public class PreEncryptedBallotVerificationTests
     public void ShortCodes_TamperedNullVoteShortCode_Fails17A()
     {
         var record = CreateEncryptionRecord();
-        var ballot = new BallotPreEncryptor(record, DeviceId).PreEncrypt("ballot-1", BallotStyleId, null);
+        var ballot = PreEncrypt(record, "ballot-1", null);
         int nullVector = ballot.Contests[0].Selections.FindIndex(s => s.IsNullVote);
         var tampered = ReplaceSelection(ballot, nullVector, s => s with { ShortCode = new ShortCode("??") });
 
@@ -345,7 +346,7 @@ public class PreEncryptedBallotVerificationTests
     public void ShortCodes_CodesFromADifferentTrimmingFunction_Fails17A()
     {
         var record = CreateEncryptionRecord();
-        var ballot = new BallotPreEncryptor(record, DeviceId).PreEncrypt("ballot-1", BallotStyleId, null);
+        var ballot = PreEncrypt(record, "ballot-1", null);
         var contest = ballot.Contests[0];
         var retrimmed = contest.Selections.Select(s => s with { ShortCode = HashTrimming.Trim(HashTrimmingFunction.TwoHex, s.SelectionHash) }).ToList();
         var tampered = ballot with { Contests = [contest with { Selections = retrimmed }] };
@@ -359,7 +360,7 @@ public class PreEncryptedBallotVerificationTests
     public void ShortCodes_ManifestWithoutHashTrimmingFunction_Fails17A()
     {
         var record = CreateEncryptionRecord();
-        var ballot = new BallotPreEncryptor(record, DeviceId).PreEncrypt("ballot-1", BallotStyleId, null);
+        var ballot = PreEncrypt(record, "ballot-1", null);
         var withoutOmega = new EncryptionRecord
         {
             CryptographicParameters = record.CryptographicParameters,

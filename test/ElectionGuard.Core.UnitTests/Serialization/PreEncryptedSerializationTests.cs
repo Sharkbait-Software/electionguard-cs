@@ -5,6 +5,7 @@ using ElectionGuard.Core.Models;
 using ElectionGuard.Core.PreEncryption;
 using ElectionGuard.Core.Serialization;
 using ElectionGuard.Core.UnitTests.PreEncryption;
+using ElectionGuard.Core.Verify;
 using ElectionGuard.Core.Verify.Ballot;
 using ElectionGuard.Core.Verify.PreEncryption;
 using ElectionGuard.Testing.Common;
@@ -290,8 +291,8 @@ public class PreEncryptedSerializationTests
         new PreEncryptedConfirmationCodeVerification().Verify(read, election.DeviceHash, election.Record, null);
         new ShortCodeVerification().Verify(read, election.Record);
 
-        // The recording tool takes the ballot as read back from the record: it regenerates it from ξ_B.
-        var cast = new BallotRecordingTool(election.Record).RecordCast(read, election.DecryptNonce(read), election.Selections("printed-1", [1], [2]));
+        // The ballot as read back regenerates from ξ_B (eq. 121) and records as cast.
+        var cast = PreEncryptedBallotFixtures.RecordCast(election.Record, read, election.BallotNonceOf(read), election.Selections("printed-1", [1], [2]));
         new SelectionVectorAccumulationVerification().Verify(cast, election.Record);
     }
 
@@ -362,7 +363,7 @@ public class PreEncryptedSerializationTests
 
     /// <summary>
     /// S9 review round 3: the printed ballot read on its own (<see cref="JsonPreEncryptedBallotSerializer.DeserializeBallot"/>,
-    /// the recording tool's input) is decoded as strictly as inside an uncast record.
+    /// what a recording tool reads) is decoded as strictly as inside an uncast record.
     /// </summary>
     [Theory]
     [MemberData(nameof(MalformedPrintedBallotJson))]
@@ -376,5 +377,32 @@ public class PreEncryptedSerializationTests
         using var tampered = new MemoryStream(Encoding.UTF8.GetBytes(malform(node).ToJsonString()));
 
         AssertRefused(description, Record.Exception(() => serializer.DeserializeBallot(tampered)));
+    }
+
+    /// <summary>
+    /// S9 review round 3 (kept from the removed recording-tool tests in S9c review round 1): a printed
+    /// ballot whose JSON writes <c>"deviceId": null</c>. The property is required, but the reader does
+    /// not enforce nullable annotations, so the ballot comes back without a device id; H_DI (eq. 119)
+    /// cannot be formed, and Verification 16 reports it as malformed (<c>16.structure</c>) rather than
+    /// failing with an <see cref="ArgumentNullException"/> or a wrong-hash sub-section.
+    /// </summary>
+    [Fact]
+    public void PreEncryptedBallot_Json_NullDeviceId_ReadsAsNull_AndVerification16FailsStructure()
+    {
+        var election = Election;
+        var ballot = election.PreEncrypt("printed-1");
+        var serializer = new JsonPreEncryptedBallotSerializer();
+        using var written = new MemoryStream();
+        serializer.Serialize(written, ballot);
+        var node = JsonNode.Parse(written.ToArray())!;
+        Assert.Equal(ballot.DeviceId, (string?)node["deviceId"]);
+        node["deviceId"] = null;
+
+        using var tampered = new MemoryStream(Encoding.UTF8.GetBytes(node.ToJsonString()));
+        var bad = serializer.DeserializeBallot(tampered)!;
+
+        Assert.Null(bad.DeviceId);
+        Assert.Equal("16.structure", Assert.Throws<VerificationFailedException>(
+            () => new PreEncryptedConfirmationCodeVerification().Verify(bad, election.DeviceHash, election.Record, null)).SubSection);
     }
 }

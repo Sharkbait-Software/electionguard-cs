@@ -54,8 +54,7 @@ public class PreEncryptedDeviceChainTests
         (DeviceChainRecord, List<PreEncryptedBallot>) Device(string deviceId, int count)
         {
             var chain = DeviceChain.ForPreEncryptedBallots(record, deviceId);
-            var preEncryptor = new BallotPreEncryptor(record, deviceId);
-            var ballots = Enumerable.Range(1, count).Select(i => preEncryptor.PreEncryptNext($"{deviceId}-ballot-{i}", BallotStyleId, chain)).ToList();
+            var ballots = Enumerable.Range(1, count).Select(i => PreEncryptedBallotFixtures.PreEncryptNext(record, $"{deviceId}-ballot-{i}", BallotStyleId, chain).Ballot).ToList();
             return (chain.Close(), ballots);
         }
 
@@ -326,11 +325,11 @@ public class PreEncryptedDeviceChainTests
     // --- DeviceChain ----------------------------------------------------------------------------
 
     [Fact]
-    public void PreEncryptNext_RefusesARegularBallotChain()
+    public void DeviceChain_OfRegularBallots_RefusesAPreEncryptedBallot()
     {
-        var record = Build(ChainingMode.Simple).Record;
+        var election = Build(ChainingMode.Simple);
 
-        Assert.Throws<ArgumentException>(() => new BallotPreEncryptor(record, "device-1").PreEncryptNext("ballot-x", BallotStyleId, new DeviceChain(record, "device-1")));
+        Assert.Throws<InvalidOperationException>(() => new DeviceChain(election.Record, "device-1").Append(election.Ballots1[0]));
     }
 
     [Fact]

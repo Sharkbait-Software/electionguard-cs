@@ -371,12 +371,9 @@ try
     // every guardian is in-process, so one view of the record's cast ballots stands in for each
     // guardian's own copy.
     var castBallots = PublishedCastBallots.FromRecord(encryptionRecord.ExtendedBaseHash, encryptedBallots);
-
-    // This election issues no pre-encrypted ballots, so the printer-committed issued list is empty.
-    var issuedPreEncryptedBallots = new ElectionGuard.Core.PreEncryption.IssuedPreEncryptedBallots(encryptionRecord.ExtendedBaseHash, []);
     foreach (var encryptedBallot in encryptedBallots.Where(x => x.Status == BallotStatus.Challenged).OrderBy(x => x.Id, StringComparer.Ordinal))
     {
-        var decrypted = tallyAdmin.DecryptChallengedBallot(tallyGuardians, encryptedBallot, encryptionRecord, castBallots, issuedPreEncryptedBallots);
+        var decrypted = tallyAdmin.DecryptChallengedBallot(tallyGuardians, encryptedBallot, encryptionRecord, castBallots);
 
         // Verification 13
         challengedBallotDecryptionVerification.Verify(encryptionRecord, encryptedBallot, decrypted);
@@ -395,11 +392,6 @@ try
     }
 
     File.WriteAllBytes(Path.Combine(outputDirectory, "challenged-ballots.json"), JsonSerializer.SerializeToUtf8Bytes(decryptedChallengedBallots, tallyJsonOptions));
-
-    // Pre-encrypted ballots (§4), in an election of their own: an election that uses them declares
-    // no supplemental fields or contest data, which this manifest does. Its record is written to
-    // the "pre-encrypted" subdirectory; the tally above is untouched.
-    PreEncryptedElectionDemo.Run(outputDirectory);
 
     Console.WriteLine("Done.");
 }

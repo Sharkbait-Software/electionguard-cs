@@ -30,7 +30,7 @@ public class EncryptedBallotNonce
 /// <summary>
 /// §3.3.4 encryption of the ballot nonce ξ_B to the ballot data encryption key K-hat, and the
 /// derivations its decryption (§3.6.7 p.52, eqs. 107-108) repeats. Shared by
-/// <see cref="BallotEncryptor"/>, the pre-encrypted ballot encrypting tool (§4.2), the guardians
+/// <see cref="BallotEncryptor"/>, any pre-encrypted ballot encrypting tool (§4.2), the guardians
 /// and the administrator, so that no two of them can encode an input differently:
 /// <list type="bullet">
 /// <item>eq. (35): h = H(H_I; 0x22, α_B, β_B), B1 = 0x22 ‖ b(α_B, 512) ‖ b(β_B, 512), 1025 bytes

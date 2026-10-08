@@ -41,9 +41,9 @@ public class EncryptedBallot
     public required string DeviceId { get; init; }
 
     /// <summary>
-    /// Present exactly on a cast pre-encrypted ballot (§4.3, §4.4), which the pre-encrypted ballot
-    /// recording tool (<see cref="PreEncryption.BallotRecordingTool.RecordCast"/>) produces: one
-    /// entry per contest, in the order of <see cref="Contests"/>, with the contest's sorted selection
+    /// Present exactly on a cast pre-encrypted ballot (§4.3, §4.4), as a pre-encrypted ballot
+    /// recording tool publishes it (the tool is out of this library's scope, user decision Q35; its
+    /// primitives are <see cref="PreEncryption.PreEncryptionPrimitives"/>): one entry per contest, in the order of <see cref="Contests"/>, with the contest's sorted selection
     /// hashes and the selected pre-encryption vectors with their short codes. Null on a regular
     /// ballot; JSON leaves it out then, and protobuf (field 12) writes nothing, so regular ballots
     /// serialize as before.

@@ -62,9 +62,6 @@ public class ChallengedBallotDecryptionTests
         /// <summary>A view of the published record with no cast ballot: nothing to refuse on (user decision Q31).</summary>
         public PublishedCastBallots NoCastBallots => new(Record.ExtendedBaseHash);
 
-        /// <summary>An issued pre-encrypted ballot list with no ballot: this election issues none (user decision Q31).</summary>
-        public ElectionGuard.Core.PreEncryption.IssuedPreEncryptedBallots NoIssuedBallots => new(Record.ExtendedBaseHash, []);
-
         public List<TallyGuardian> Guardians(params int[] positions) =>
             positions.Select(i => new TallyGuardian(GuardianSet.Guardians[i].Index, GuardianSet.SecretShares[GuardianSet.Guardians[i].Index])).ToList();
 
@@ -96,7 +93,7 @@ public class ChallengedBallotDecryptionTests
     {
         var election = Shared.Value;
         var ballot = election.Encrypt();
-        return (ballot, new TallyAdmin().DecryptChallengedBallot(election.Guardians(0, 1), ballot, election.Record, election.NoCastBallots, election.NoIssuedBallots));
+        return (ballot, new TallyAdmin().DecryptChallengedBallot(election.Guardians(0, 1), ballot, election.Record, election.NoCastBallots));
     });
 
     private static EncryptedBallot Copy(EncryptedBallot ballot, BallotStatus? status = null, EncryptedBallotNonce? nonce = null, SelectionEncryptionIdentifierHash? selectionHash = null, List<EncryptedContest>? contests = null, string? ballotStyleId = null, string? id = null, SelectionEncryptionIdentifier? identifier = null) => new()
@@ -160,7 +157,7 @@ public class ChallengedBallotDecryptionTests
         var election = Shared.Value;
         var ballot = election.Encrypt(choice1: 0, choice2: 1);
 
-        var decrypted = new TallyAdmin().DecryptChallengedBallot(election.Guardians(positions), ballot, election.Record, election.NoCastBallots, election.NoIssuedBallots);
+        var decrypted = new TallyAdmin().DecryptChallengedBallot(election.Guardians(positions), ballot, election.Record, election.NoCastBallots);
 
         Assert.Equal(ballot.Id, decrypted.BallotId);
         var contest = Assert.Single(decrypted.Contests);
@@ -193,7 +190,7 @@ public class ChallengedBallotDecryptionTests
         var ballot = election.Encrypt(ballotNonce: new BallotNonce((byte[])ballotNonceBytes.Clone()));
         var selectionHash = ballot.SelectionEncryptionIdentifierHash;
 
-        var decrypted = new TallyAdmin().DecryptChallengedBallot(election.Guardians(1, 2), ballot, election.Record, election.NoCastBallots, election.NoIssuedBallots);
+        var decrypted = new TallyAdmin().DecryptChallengedBallot(election.Guardians(1, 2), ballot, election.Record, election.NoCastBallots);
 
         var contest = decrypted.Contests.Single();
         var manifestContest = election.Contest;
@@ -223,7 +220,7 @@ public class ChallengedBallotDecryptionTests
         var election = Shared.Value;
         var ballot = election.Encrypt(choice1: 1, choice2: 1, writeIns: 1);
 
-        var decrypted = new TallyAdmin().DecryptChallengedBallot(election.Guardians(0, 2), ballot, election.Record, election.NoCastBallots, election.NoIssuedBallots);
+        var decrypted = new TallyAdmin().DecryptChallengedBallot(election.Guardians(0, 2), ballot, election.Record, election.NoCastBallots);
 
         var contest = decrypted.Contests.Single();
         Assert.Equal(new[] { 0, 0 }, contest.Choices.Select(x => x.Value));
@@ -270,11 +267,11 @@ public class ChallengedBallotDecryptionTests
         var ballot = election.Encrypt(status: status);
         var guardians = election.Guardians(0, 1);
 
-        Assert.Contains("challenged", Assert.Throws<ArgumentException>(() => guardians[0].DecryptBallotNonce(ballot, election.Record, election.NoCastBallots, election.NoIssuedBallots)).Message);
+        Assert.Contains("challenged", Assert.Throws<ArgumentException>(() => guardians[0].DecryptBallotNonce(ballot, election.Record, election.NoCastBallots)).Message);
 
         // The administrator too, given partial decryptions made for the same ballot once challenged.
         var challenged = Copy(ballot, status: BallotStatus.Challenged);
-        var partials = guardians.Select(x => x.DecryptBallotNonce(challenged, election.Record, election.NoCastBallots, election.NoIssuedBallots)).ToList();
+        var partials = guardians.Select(x => x.DecryptBallotNonce(challenged, election.Record, election.NoCastBallots)).ToList();
         Assert.Throws<ArgumentException>(() => new TallyAdmin().CombineChallengedBallot(ballot, election.Record, partials));
     }
 
@@ -285,8 +282,8 @@ public class ChallengedBallotDecryptionTests
         var ballot = election.Encrypt();
         var guardian = election.Guardians(0)[0];
 
-        Assert.Throws<ArgumentException>(() => guardian.DecryptBallotNonce(Copy(ballot, nonce: With(ballot.EncryptedBallotNonce, c1: ballot.EncryptedBallotNonce.C1[1..])), election.Record, election.NoCastBallots, election.NoIssuedBallots));
-        Assert.Throws<ArgumentException>(() => guardian.DecryptBallotNonce(Copy(ballot, selectionHash: new SelectionEncryptionIdentifierHash(ElectionGuardRandom.GetBytes(32))), election.Record, election.NoCastBallots, election.NoIssuedBallots));
+        Assert.Throws<ArgumentException>(() => guardian.DecryptBallotNonce(Copy(ballot, nonce: With(ballot.EncryptedBallotNonce, c1: ballot.EncryptedBallotNonce.C1[1..])), election.Record, election.NoCastBallots));
+        Assert.Throws<ArgumentException>(() => guardian.DecryptBallotNonce(Copy(ballot, selectionHash: new SelectionEncryptionIdentifierHash(ElectionGuardRandom.GetBytes(32))), election.Record, election.NoCastBallots));
     }
 
     // --- Who may have a ballot's nonce decrypted (user decision Q31) -----------------------------
@@ -316,13 +313,13 @@ public class ChallengedBallotDecryptionTests
         Assert.Null(BallotStructure.FindViolation(relabelled, election.Record.Manifest));
         Assert.True(BallotNonceEncryption.ProofHolds(relabelled.SelectionEncryptionIdentifierHash, relabelled.EncryptedBallotNonce));
 
-        var refused = Assert.Throws<BallotNonceDecryptionRefusedException>(() => guardians[0].DecryptBallotNonce(relabelled, election.Record, published, election.NoIssuedBallots));
+        var refused = Assert.Throws<BallotNonceDecryptionRefusedException>(() => guardians[0].DecryptBallotNonce(relabelled, election.Record, published));
         Assert.Equal(BallotNonceDecryptionRefusal.CastBallot, refused.Reason);
         Assert.Equal(guardians[0].Index, refused.GuardianIndex);
         Assert.Equal(relabelled.Id, refused.BallotId);
         Assert.Contains("id_B, H_I, C_ξB,0", refused.Message);
         Assert.Equal(BallotNonceDecryptionRefusal.CastBallot, Assert.Throws<BallotNonceDecryptionRefusedException>(
-            () => new TallyAdmin().DecryptChallengedBallot(guardians, relabelled, election.Record, published, election.NoIssuedBallots)).Reason);
+            () => new TallyAdmin().DecryptChallengedBallot(guardians, relabelled, election.Record, published)).Reason);
         Assert.False(exponentiated);
     }
 
@@ -350,7 +347,7 @@ public class ChallengedBallotDecryptionTests
         };
 
         Assert.Equal(expected, published.Match(request.SelectionEncryptionIdentifier, request.SelectionEncryptionIdentifierHash, request.EncryptedBallotNonce.C0));
-        var refused = Assert.Throws<BallotNonceDecryptionRefusedException>(() => election.Guardians(0)[0].DecryptBallotNonce(request, election.Record, published, election.NoIssuedBallots));
+        var refused = Assert.Throws<BallotNonceDecryptionRefusedException>(() => election.Guardians(0)[0].DecryptBallotNonce(request, election.Record, published));
         Assert.Equal(BallotNonceDecryptionRefusal.CastBallot, refused.Reason);
         Assert.Contains($"its {shared.Replace(" and ", ", ")} matches", refused.Message);
     }
@@ -368,7 +365,7 @@ public class ChallengedBallotDecryptionTests
         var published = PublishedCastBallots.FromRecord(election.Record.ExtendedBaseHash, [.. castBallots, challenged]);
         Assert.Equal(3, published.Count);
 
-        var decrypted = new TallyAdmin().DecryptChallengedBallot(election.Guardians(0, 2), challenged, election.Record, published, election.NoIssuedBallots);
+        var decrypted = new TallyAdmin().DecryptChallengedBallot(election.Guardians(0, 2), challenged, election.Record, published);
 
         election.Verify13(challenged, decrypted);
         election.Verify14(challenged, decrypted);
@@ -382,7 +379,7 @@ public class ChallengedBallotDecryptionTests
         var election = Shared.Value;
         var other = Build();
         var refused = Assert.Throws<BallotNonceDecryptionRefusedException>(
-            () => election.Guardians(0)[0].DecryptBallotNonce(election.Encrypt(), election.Record, other.NoCastBallots, election.NoIssuedBallots));
+            () => election.Guardians(0)[0].DecryptBallotNonce(election.Encrypt(), election.Record, other.NoCastBallots));
         Assert.Equal(BallotNonceDecryptionRefusal.ForeignElection, refused.Reason);
     }
 
@@ -411,12 +408,12 @@ public class ChallengedBallotDecryptionTests
         var bad = Copy(ballot, nonce: tampered);
         Assert.False(BallotNonceEncryption.ProofHolds(ballot.SelectionEncryptionIdentifierHash, tampered));
 
-        var exception = Assert.Throws<TallyDecryptionException>(() => election.Guardians(0)[0].DecryptBallotNonce(bad, election.Record, election.NoCastBallots, election.NoIssuedBallots));
+        var exception = Assert.Throws<TallyDecryptionException>(() => election.Guardians(0)[0].DecryptBallotNonce(bad, election.Record, election.NoCastBallots));
         Assert.Null(exception.OffendingGuardian);
         Assert.Contains("eq. 38", exception.Message);
 
         // The administrator checks it again before combining anything.
-        var partials = election.Guardians(0, 1).Select(x => x.DecryptBallotNonce(ballot, election.Record, election.NoCastBallots, election.NoIssuedBallots)).ToList();
+        var partials = election.Guardians(0, 1).Select(x => x.DecryptBallotNonce(ballot, election.Record, election.NoCastBallots)).ToList();
         var adminException = Assert.Throws<TallyDecryptionException>(() => new TallyAdmin().CombineChallengedBallot(bad, election.Record, partials));
         Assert.Null(adminException.OffendingGuardian);
     }
@@ -464,7 +461,7 @@ public class ChallengedBallotDecryptionTests
         Assert.True(BallotNonceEncryption.ProofHolds(selectionHash, forged));
         Assert.False(SubgroupMembership.IsMember(forged.C0));
 
-        var exception = Assert.Throws<TallyDecryptionException>(() => election.Guardians(0)[0].DecryptBallotNonce(Copy(ballot, nonce: forged), election.Record, election.NoCastBallots, election.NoIssuedBallots));
+        var exception = Assert.Throws<TallyDecryptionException>(() => election.Guardians(0)[0].DecryptBallotNonce(Copy(ballot, nonce: forged), election.Record, election.NoCastBallots));
         Assert.Null(exception.OffendingGuardian);
         Assert.Contains("Z_p^r", exception.Message);
     }
@@ -486,7 +483,7 @@ public class ChallengedBallotDecryptionTests
             return m * new IntegerModP(EGParameters.G);
         };
 
-        var exception = Assert.Throws<TallyDecryptionException>(() => new TallyAdmin().DecryptChallengedBallot(guardians, ballot, election.Record, election.NoCastBallots, election.NoIssuedBallots));
+        var exception = Assert.Throws<TallyDecryptionException>(() => new TallyAdmin().DecryptChallengedBallot(guardians, ballot, election.Record, election.NoCastBallots));
 
         Assert.Null(exception.OffendingGuardian);
         Assert.Contains("did not decrypt consistently", exception.Message);
@@ -505,7 +502,7 @@ public class ChallengedBallotDecryptionTests
         var otherNonce = BallotNonceEncryption.Encrypt(new BallotNonce(ElectionGuardRandom.GetBytes(32)), ballot.SelectionEncryptionIdentifierHash, election.Record.ElectionPublicKeys.OtherBallotDataEncryptionKey);
         var bad = Copy(ballot, nonce: otherNonce);
 
-        var exception = Assert.Throws<TallyDecryptionException>(() => new TallyAdmin().DecryptChallengedBallot(election.Guardians(0, 1), bad, election.Record, election.NoCastBallots, election.NoIssuedBallots));
+        var exception = Assert.Throws<TallyDecryptionException>(() => new TallyAdmin().DecryptChallengedBallot(election.Guardians(0, 1), bad, election.Record, election.NoCastBallots));
 
         Assert.Null(exception.OffendingGuardian);
         Assert.Contains("does not reproduce", exception.Message);
@@ -532,7 +529,7 @@ public class ChallengedBallotDecryptionTests
             election.Record.ElectionPublicKeys.OtherBallotDataEncryptionKey);
         var bad = Copy(ballot, contests: [contest with { ContestData = otherData }]);
 
-        var exception = Assert.Throws<TallyDecryptionException>(() => new TallyAdmin().DecryptChallengedBallot(election.Guardians(0, 1), bad, election.Record, election.NoCastBallots, election.NoIssuedBallots));
+        var exception = Assert.Throws<TallyDecryptionException>(() => new TallyAdmin().DecryptChallengedBallot(election.Guardians(0, 1), bad, election.Record, election.NoCastBallots));
 
         Assert.Null(exception.OffendingGuardian);
         Assert.Contains("contest data nonce ξ (eq. 64) does not reproduce C_0", exception.Message);
@@ -546,7 +543,7 @@ public class ChallengedBallotDecryptionTests
         var guardians = election.Guardians(0, 2);
         guardians[1].PartialDecryptionTamperForTesting = (_, _, _) => 0;
 
-        var exception = Assert.Throws<TallyDecryptionException>(() => new TallyAdmin().DecryptChallengedBallot(guardians, ballot, election.Record, election.NoCastBallots, election.NoIssuedBallots));
+        var exception = Assert.Throws<TallyDecryptionException>(() => new TallyAdmin().DecryptChallengedBallot(guardians, ballot, election.Record, election.NoCastBallots));
 
         Assert.Equal(guardians[1].Index, exception.OffendingGuardian);
         Assert.Contains("is 0", exception.Message);
@@ -561,8 +558,8 @@ public class ChallengedBallotDecryptionTests
         var guardians = election.Guardians(0, 1);
         var partials = new List<BallotNoncePartialDecryption>
         {
-            guardians[0].DecryptBallotNonce(ballot, election.Record, election.NoCastBallots, election.NoIssuedBallots),
-            guardians[1].DecryptBallotNonce(other, election.Record, election.NoCastBallots, election.NoIssuedBallots),
+            guardians[0].DecryptBallotNonce(ballot, election.Record, election.NoCastBallots),
+            guardians[1].DecryptBallotNonce(other, election.Record, election.NoCastBallots),
         };
 
         var exception = Assert.Throws<TallyDecryptionException>(() => new TallyAdmin().CombineChallengedBallot(ballot, election.Record, partials));
@@ -577,8 +574,8 @@ public class ChallengedBallotDecryptionTests
         var election = Shared.Value;
         var ballot = election.Encrypt();
         var guardians = election.Guardians(0, 1);
-        var first = guardians[0].DecryptBallotNonce(ballot, election.Record, election.NoCastBallots, election.NoIssuedBallots);
-        var second = guardians[1].DecryptBallotNonce(ballot, election.Record, election.NoCastBallots, election.NoIssuedBallots);
+        var first = guardians[0].DecryptBallotNonce(ballot, election.Record, election.NoCastBallots);
+        var second = guardians[1].DecryptBallotNonce(ballot, election.Record, election.NoCastBallots);
 
         var repeated = Assert.Throws<TallyDecryptionException>(() => new TallyAdmin().CombineChallengedBallot(ballot, election.Record, [first, second, first]));
         Assert.Equal(guardians[0].Index, repeated.OffendingGuardian);
@@ -848,7 +845,7 @@ public class ChallengedBallotDecryptionTests
         var ballot = new BallotEncryptor(election.Record, "device-1", election.DeviceHash).Encrypt(
             plaintext, null, new SelectionEncryptionIdentifier(ElectionGuardRandom.GetBytes(32)), new BallotNonce(ElectionGuardRandom.GetBytes(32)));
         ballot.RecordStatus(BallotStatus.Challenged);
-        return (election, ballot, new TallyAdmin().DecryptChallengedBallot(election.Guardians(1, 2), ballot, election.Record, election.NoCastBallots, election.NoIssuedBallots));
+        return (election, ballot, new TallyAdmin().DecryptChallengedBallot(election.Guardians(1, 2), ballot, election.Record, election.NoCastBallots));
     });
 
     [Fact]
@@ -1000,7 +997,7 @@ public class ChallengedBallotDecryptionTests
     {
         var election = Shared.Value;
         var ballot = election.Encrypt(choice1: 0, choice2: 0);
-        var decrypted = new TallyAdmin().DecryptChallengedBallot(election.Guardians(0, 1), ballot, election.Record, election.NoCastBallots, election.NoIssuedBallots);
+        var decrypted = new TallyAdmin().DecryptChallengedBallot(election.Guardians(0, 1), ballot, election.Record, election.NoCastBallots);
         var fields = decrypted.Contests[0].SupplementalFields;
         Assert.Equal(1, fields.Single(x => x.Id == FieldId(SupplementalFieldKind.UndervoteDifferenceCount)).Value);
         Assert.Equal(1, fields.Single(x => x.Id == FieldId(SupplementalFieldKind.UndervoteIndicator)).Value);

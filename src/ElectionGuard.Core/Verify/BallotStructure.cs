@@ -152,11 +152,10 @@ public static class BallotStructure
 
     /// <summary>
     /// The ballot names the device it was encrypted on, S_device (§3.4.3 eq. 72; §4.1.4 eq. 119):
-    /// Verifications 8 and 16 hash it into H_DI, and the recording tool regenerates a pre-encrypted
-    /// ballot on its device. The property is required, but a JSON document that writes null (or a
-    /// protobuf message without the field) yields a ballot without it, which would otherwise surface
-    /// as an <see cref="ArgumentNullException"/> far from the cause, or, on the pre-encrypted nonce
-    /// path, after the guardians had already decrypted their shares (S9 review round 3).
+    /// Verifications 8 and 16 hash it into H_DI. The property is required, but a JSON document that
+    /// writes null (or a protobuf message without the field) yields a ballot without it, which would
+    /// otherwise surface as an <see cref="ArgumentNullException"/> far from the cause (S9 review
+    /// round 3).
     /// </summary>
     private static string? DeviceIdViolation(string ballotId, string? deviceId)
     {
@@ -289,9 +288,7 @@ public static class BallotStructure
     internal static string? FindViolation(PreEncryptedBallot ballot, Manifest manifest)
     {
         // §4.1.5: an election that uses pre-encrypted ballots names Ω in its manifest. Without one
-        // there is no pre-encrypted ballot to verify or whose nonce to decrypt, and a request built
-        // around a regular ballot's id_B, H_I and C_ξB (the same construction, §4.2) is refused
-        // here (S9-6; the guardians also check the issued list and the record, user decision Q31).
+        // there is no pre-encrypted ballot to verify.
         if (manifest.HashTrimmingFunction is null)
         {
             return $"Pre-encrypted ballot {ballot.Id}: the manifest names no hash-trimming function, so the election does not use pre-encrypted ballots (§4.1.5).";

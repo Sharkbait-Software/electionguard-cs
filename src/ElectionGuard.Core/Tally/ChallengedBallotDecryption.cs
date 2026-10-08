@@ -164,107 +164,17 @@ internal sealed class ChallengedBallotStatement
     /// </summary>
     public void RequireDecryptable(string who)
     {
-        RequireDecryptable(SelectionEncryptionIdentifierHash, Nonce, Description, who);
-    }
-
-    /// <summary>
-    /// <see cref="RequireDecryptable(string)"/> for any ballot's encrypted nonce
-    /// <paramref name="nonce"/> keyed with <paramref name="selectionEncryptionIdentifierHash"/>; the
-    /// pre-encrypted ballot path (<see cref="PreEncryptedBallotNonceStatement"/>) shares it.
-    /// </summary>
-    internal static void RequireDecryptable(SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, EncryptedBallotNonce nonce, string description, string who)
-    {
         // IsMember also rejects 0, and raises C_ξB,0 to q as a BigInteger, never as a (zero) IntegerModQ.
-        if (!SubgroupMembership.IsMember(nonce.C0))
+        if (!SubgroupMembership.IsMember(Nonce.C0))
         {
             throw new TallyDecryptionException(null,
-                $"C_ξB,0 of {description}'s encrypted nonce is not in the order-q subgroup Z_p^r (it must satisfy 0 < C_ξB,0 < p and C_ξB,0^q mod p = 1); {who} does not decrypt it.");
+                $"C_ξB,0 of {Description}'s encrypted nonce is not in the order-q subgroup Z_p^r (it must satisfy 0 < C_ξB,0 < p and C_ξB,0^q mod p = 1); {who} does not decrypt it.");
         }
 
-        if (!BallotNonceEncryption.ProofHolds(selectionEncryptionIdentifierHash, nonce))
+        if (!BallotNonceEncryption.ProofHolds(SelectionEncryptionIdentifierHash, Nonce))
         {
             throw new TallyDecryptionException(null,
-                $"The Schnorr proof C_ξB,2 of {description}'s encrypted nonce does not verify (eq. 38: c_B = H_q(H_I; 0x23, g^v_B·C_ξB,0^c_B, C_ξB,0, C_ξB,1)); {who} does not decrypt it (§3.6.7).");
+                $"The Schnorr proof C_ξB,2 of {Description}'s encrypted nonce does not verify (eq. 38: c_B = H_q(H_I; 0x23, g^v_B·C_ξB,0^c_B, C_ξB,0, C_ξB,1)); {who} does not decrypt it (§3.6.7).");
         }
-    }
-}
-
-/// <summary>
-/// A pre-encrypted ballot whose nonce the guardians decrypt for the recording tool (§4.3.1: the
-/// wrapper "obtains the decryption(s) by interacting with guardians"), as §3.6.7 decrypts a
-/// challenged ballot's: the ballot, its H_I recomputed from H_E and id_B, and its encrypted nonce.
-///
-/// Unlike a regular ballot's, the nonce of a cast pre-encrypted ballot is decrypted too: the
-/// recording tool needs ξ_B to regenerate the encryptions the voter's short codes name, whatever the
-/// voter did with the ballot. So there is no status to check. Whoever combines the shares learns ξ_B
-/// and can then link a cast ballot's published selected vectors to options, that is, learn the vote;
-/// that is §4.3's design (the recording tool is given the selections anyway), not a choice of this
-/// library.
-///
-/// Threat model (spec-silent; S9-6, closed by user decision Q31 in S9b): apart from the ballot's
-/// shape, which anyone can fabricate, every check here depends only on id_B, H_I and C_ξB, and every
-/// published ballot carries those: regular ballots, cast or not, as well as cast pre-encrypted
-/// records. §4.2 encrypts the pre-encrypted nonce "as shown in Section 3.3.4", with no domain
-/// separation from a regular ballot's. So anyone can wrap a published ballot's (id_B, H_I, C_ξB) in
-/// a made-up pre-encrypted ballot of the right shape, and k guardians that answered it would return
-/// shares that combine (eq. 108) to that ballot's ξ_B, and so (eq. 33 for a regular ballot, eq. 121
-/// for a pre-encrypted one) to its votes. The administrator's regeneration check
-/// (<see cref="TallyAdmin.CombinePreEncryptedBallotNonce"/>) does not help: whoever collects the
-/// shares can combine them. These checks are therefore not the gate. The guardian's authorization
-/// step, before them, is
-/// (<see cref="TallyGuardian.DecryptBallotNonce(PreEncryption.PreEncryptedBallot, EncryptionRecord, IPublishedCastBallots, PreEncryption.IssuedPreEncryptedBallots)"/>):
-/// the id_B must be on the printer-committed issued list with its committed C_ξB,0 (a regular
-/// ballot's never is), each guardian decrypts each id_B at most once (a recorded ballot is not
-/// decrypted again by a quorum that includes a guardian that answered; every quorum does when
-/// n &lt; 2k), and nothing in the request may match a cast ballot of the published record. The manifest
-/// must also name a hash-trimming function (<see cref="BallotStructure"/>), so the path is closed
-/// outright in every election without pre-encrypted ballots.
-/// </summary>
-internal sealed class PreEncryptedBallotNonceStatement
-{
-    public required PreEncryption.PreEncryptedBallot Ballot { get; init; }
-
-    /// <summary>H_I, recomputed from H_E and the ballot's id_B (eq. 32).</summary>
-    public required SelectionEncryptionIdentifierHash SelectionEncryptionIdentifierHash { get; init; }
-
-    public EncryptedBallotNonce Nonce => Ballot.EncryptedBallotNonce;
-
-    public string Description => $"pre-encrypted ballot {Ballot.Id}";
-
-    /// <summary>
-    /// <paramref name="ballot"/> as a pre-encrypted ballot of <paramref name="encryptionRecord"/>'s
-    /// election. Throws <see cref="ArgumentException"/> if the ballot is malformed
-    /// (<see cref="BallotStructure"/>, which also requires the manifest to name a hash-trimming
-    /// function, so that an election without pre-encrypted ballots never decrypts a nonce here, and
-    /// C_ξB with a 32-byte C_ξB,1) or its H_I is not H(H_E; 0x20, id_B). See the class remarks for
-    /// what these checks cannot tell apart.
-    /// </summary>
-    public static PreEncryptedBallotNonceStatement For(EncryptionRecord encryptionRecord, PreEncryption.PreEncryptedBallot ballot)
-    {
-        ArgumentNullException.ThrowIfNull(encryptionRecord);
-        ArgumentNullException.ThrowIfNull(ballot);
-
-        if (BallotStructure.FindViolation(ballot, encryptionRecord.Manifest) is string violation)
-        {
-            throw new ArgumentException($"Pre-encrypted ballot {ballot.Id} is malformed, so its nonce is not decrypted: {violation}", nameof(ballot));
-        }
-
-        var selectionHash = new SelectionEncryptionIdentifierHash(encryptionRecord.ExtendedBaseHash, ballot.SelectionEncryptionIdentifier);
-        if (!((byte[])selectionHash).AsSpan().SequenceEqual((byte[])ballot.SelectionEncryptionIdentifierHash))
-        {
-            throw new ArgumentException($"Pre-encrypted ballot {ballot.Id}'s H_I is not H(H_E; 0x20, id_B) (Verification 5.B), so its nonce is not decrypted.", nameof(ballot));
-        }
-
-        return new PreEncryptedBallotNonceStatement
-        {
-            Ballot = ballot,
-            SelectionEncryptionIdentifierHash = selectionHash,
-        };
-    }
-
-    /// <summary>See <see cref="ChallengedBallotStatement.RequireDecryptable(string)"/>.</summary>
-    public void RequireDecryptable(string who)
-    {
-        ChallengedBallotStatement.RequireDecryptable(SelectionEncryptionIdentifierHash, Nonce, Description, who);
     }
 }

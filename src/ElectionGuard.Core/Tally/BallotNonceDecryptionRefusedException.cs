@@ -32,29 +32,11 @@ public class BallotNonceDecryptionRefusedException : Exception
 public enum BallotNonceDecryptionRefusal
 {
     /// <summary>
-    /// The cast-ballot view or the issued list given is for another election (its H_E differs from
-    /// the encryption record's), so it cannot vouch for the request.
+    /// The cast-ballot view given is for another election (its H_E differs from the encryption
+    /// record's), so it cannot vouch for the request.
     /// </summary>
     ForeignElection,
 
     /// <summary>The request's id_B, H_I or C_ξB,0 matches a cast ballot of the published record.</summary>
     CastBallot,
-
-    /// <summary>Pre-encrypted path: the request's id_B is not on the printer-committed issued list.</summary>
-    NotIssued,
-
-    /// <summary>
-    /// Pre-encrypted path: the request's id_B is on the issued list, but its C_ξB,0 is not the one
-    /// the printer committed for that id_B.
-    /// </summary>
-    IssuedNonceDiffers,
-
-    /// <summary>Pre-encrypted path: this guardian has already decrypted the nonce of this id_B once.</summary>
-    AlreadyDecrypted,
-
-    /// <summary>
-    /// Challenged path: the request's id_B is on the issued pre-encrypted ballot list. Such a nonce is
-    /// decrypted only through the pre-encrypted path, at most once (S9b-1).
-    /// </summary>
-    IssuedPreEncryptedBallot,
 }
