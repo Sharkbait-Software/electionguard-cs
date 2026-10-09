@@ -217,6 +217,41 @@ public class BallotStatusAndWeightTests
         Assert.Equal(10, election.Count(decrypted, "choice-2"));
     }
 
+    /// <summary>
+    /// <see cref="EncryptedTally.TotalCastWeight"/> (the record header's <c>total_cast_weight</c>) is
+    /// the sum of the cast ballots' weights however the ballots are added: one by one, or in parallel
+    /// through either <c>AddBallots</c> overload, whose workers' partial tallies are merged.
+    /// </summary>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(4)]
+    [InlineData(-1)]
+    public void AddBallots_TotalCastWeight_IsTheCastBallotsWeights_InParallelToo(int maxDegreeOfParallelism)
+    {
+        var election = TallyDecryptionElection.Build(TwoOneVotes);
+        var ballots = election.Ballots
+            .Select((ballot, i) => TallyDecryptionElection.WithWeight(ballot, i + 2, i == 0 ? BallotStatus.Spoiled : BallotStatus.Cast))
+            .ToList();
+        var many = Enumerable.Range(0, 10).SelectMany(_ => ballots).ToList();
+        long expected = many.Where(x => x.Status == BallotStatus.Cast).Sum(x => (long)x.Weight);
+        Assert.Equal(70, expected);
+
+        var sequential = new EncryptedTally(election.Manifest);
+        foreach (var ballot in many)
+        {
+            sequential.AddBallot(ballot);
+        }
+
+        var list = new EncryptedTally(election.Manifest);
+        list.AddBallots(many, maxDegreeOfParallelism);
+        var stream = new EncryptedTally(election.Manifest);
+        stream.AddBallots(many.Select(x => x), maxDegreeOfParallelism);
+
+        Assert.Equal((20, expected), (sequential.BallotsCast, sequential.TotalCastWeight));
+        Assert.Equal((20, expected), (list.BallotsCast, list.TotalCastWeight));
+        Assert.Equal((20, expected), (stream.BallotsCast, stream.TotalCastWeight));
+    }
+
     [Theory]
     [InlineData(BallotStatus.Challenged)]
     [InlineData(BallotStatus.Spoiled)]

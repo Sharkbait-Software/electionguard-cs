@@ -355,15 +355,15 @@ try
     // 13 recomputes the ballot's ciphertexts and confirmation code from them, and Verification 14
     // checks the labels and selection ranges against the manifest.
     //
-    // The guardians refuse any nonce whose id_B, H_I or C_ξB,0 matches a cast ballot of the
-    // published record (user decision Q31): a ballot's status is only the requester's claim. Here
-    // every guardian is in-process, so one view of the record's cast ballots stands in for each
-    // guardian's own copy.
-    var castBallots = PublishedCastBallots.FromRecord(encryptionRecord.ExtendedBaseHash, encryptedBallots);
+    // The guardians refuse any nonce whose id_B, H_I or C_ξB,0 matches a cast or spoiled ballot of
+    // the published record (user decision Q31; spoiled ballots too, 2026-10-09): a ballot's status
+    // is only the requester's claim. Here every guardian is in-process, so one view of the record's
+    // cast and spoiled ballots stands in for each guardian's own copy.
+    var publishedBallots = PublishedCastAndSpoiledBallots.FromRecord(encryptionRecord.ExtendedBaseHash, encryptedBallots);
     var challengedInOrder = encryptedBallots.Where(x => x.Status == BallotStatus.Challenged).OrderBy(x => x.Id, StringComparer.Ordinal).ToList();
     var decryptedChallengedBallots = Publish("challenged-ballots.json",
         stream => recordSerializer.Serialize(stream, challengedInOrder
-            .Select(ballot => tallyAdmin.DecryptChallengedBallot(tallyGuardians, ballot, encryptionRecord, castBallots))
+            .Select(ballot => tallyAdmin.DecryptChallengedBallot(tallyGuardians, ballot, encryptionRecord, publishedBallots))
             .ToList()),
         recordSerializer.DeserializeDecryptedChallengedBallots);
 

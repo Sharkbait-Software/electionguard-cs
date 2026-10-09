@@ -1,5 +1,6 @@
 using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.Models;
+using ElectionGuard.Core.RecordFormat;
 using ElectionGuard.Core.Tally;
 
 namespace ElectionGuard.Core.Verify.Tally;
@@ -20,6 +21,18 @@ namespace ElectionGuard.Core.Verify.Tally;
 /// </summary>
 public class TallyContentsVerification
 {
+    /// <summary>
+    /// Verification 11 on the decrypted tally decoded from the election record (design §4.8): a
+    /// contest or field label its items list twice fails 11.structure (the domain tally is keyed by
+    /// label, so it cannot hold both); then <see cref="RecordItemNotEvaluableException"/> if another
+    /// verification's range finding is on it (10.x); then
+    /// <see cref="Verify(Manifest, DecryptedTally, IReadOnlyCollection{string})"/>. See <see cref="RecordItemGate"/>.
+    /// </summary>
+    internal void Verify(Manifest manifest, RecordDecoded<DecryptedTally> decryptedTally, IReadOnlyCollection<string> contestIdsOnSubmittedBallots)
+    {
+        Verify(manifest, RecordItemGate.Require(decryptedTally, 11), contestIdsOnSubmittedBallots);
+    }
+
     /// <summary>
     /// Checks 11.A-11.D, with 11.D over the contests of <paramref name="submittedBallots"/>.
     /// Throws <see cref="VerificationFailedException"/> with the failing sub-section.

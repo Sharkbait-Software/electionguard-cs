@@ -45,11 +45,49 @@ public class BallotAggregationVerifier
     }
 
     /// <summary>
-    /// The number of ballots added so far. Not part of Verification 9, which compares only the
-    /// aggregate ciphertexts; exposed so a caller can check it against the claimed tally's
-    /// <see cref="EncryptedTally.BallotsCast"/> or the record's own count if it chooses.
+    /// The number of cast ballots added so far. Not part of Verification 9, which compares only the
+    /// aggregate ciphertexts; the election record's header claim is checked against it by
+    /// <see cref="VerifySummary"/>.
     /// </summary>
     public int BallotsAdded => _expected.BallotsCast;
+
+    /// <summary>
+    /// The total weight of the cast ballots added so far (the sum of their weights, §3.5). Not part
+    /// of Verification 9; see <see cref="BallotsAdded"/>.
+    /// </summary>
+    public long WeightAdded => _expected.TotalCastWeight;
+
+    /// <summary>
+    /// Design §6.1 step E: the encrypted tally header's <c>cast_ballot_count</c> and
+    /// <c>total_cast_weight</c> (#17), which a tally decoded from the record carries as
+    /// <see cref="EncryptedTally.BallotsCast"/> and <see cref="EncryptedTally.TotalCastWeight"/>,
+    /// must equal <see cref="BallotsAdded"/> and <see cref="WeightAdded"/>. The spec publishes
+    /// neither and nothing is computed from them, so decoding adds no finding and this is not part
+    /// of Verification 9: a disagreement is <see cref="VerificationFailedException"/> "R.summary", a
+    /// record-level code, which the record verifier (S10b-9) reports beside Verification 9's
+    /// outcome, never as it. Throws <see cref="InvalidOperationException"/> instead if an earlier
+    /// addition threw (see the class remarks).
+    /// </summary>
+    internal void VerifySummary(EncryptedTally encryptedTally)
+    {
+        ArgumentNullException.ThrowIfNull(encryptedTally);
+        if (_faulted)
+        {
+            throw new InvalidOperationException(
+                "The record summary cannot be checked: an earlier AddBallot or AddBallots call threw, " +
+                "so the recount holds an unknown part of the ballots it was given.");
+        }
+
+        if (encryptedTally.BallotsCast != BallotsAdded)
+        {
+            throw new VerificationFailedException("R.summary", $"The encrypted tally header counts {encryptedTally.BallotsCast} cast ballots; the record holds {BallotsAdded}.");
+        }
+
+        if (encryptedTally.TotalCastWeight != WeightAdded)
+        {
+            throw new VerificationFailedException("R.summary", $"The encrypted tally header gives a total cast weight of {encryptedTally.TotalCastWeight}; the record's cast ballots weigh {WeightAdded}.");
+        }
+    }
 
     /// <summary>
     /// Folds <paramref name="encryptedBallot"/> into the recomputed aggregate. If this throws, the

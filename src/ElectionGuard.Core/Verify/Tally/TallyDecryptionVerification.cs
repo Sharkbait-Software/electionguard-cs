@@ -2,6 +2,7 @@ using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.Models;
 using ElectionGuard.Core.Tally;
 using System.Numerics;
+using ElectionGuard.Core.RecordFormat;
 
 namespace ElectionGuard.Core.Verify.Tally;
 
@@ -21,6 +22,17 @@ namespace ElectionGuard.Core.Verify.Tally;
 /// </summary>
 public class TallyDecryptionVerification
 {
+    /// <summary>
+    /// Verification 10 on a decoded encrypted and decrypted tally on an item decoded from the election record (design §4.8): a response v ≥ q fails 10.A, a challenge ≥ q 10.B and a T ≥ p 10.C; any finding of the encrypted tally (9.A, 9.B) leaves 10 not evaluable, then
+    /// <see cref="RecordItemNotEvaluableException"/> if another verification's range finding left no
+    /// domain object, then <see cref="Verify(EncryptionRecord, EncryptedTally, DecryptedTally, int)"/>. See <see cref="RecordItemGate"/>.
+    /// </summary>
+    internal void Verify(EncryptionRecord encryptionRecord, RecordDecoded<EncryptedTally> encryptedTally, RecordDecoded<DecryptedTally> decryptedTally, int maxDegreeOfParallelism = -1)
+    {
+        RecordItemGate.Require(10, decryptedTally, encryptedTally);
+        Verify(encryptionRecord, encryptedTally.Value!, decryptedTally.Value!, maxDegreeOfParallelism);
+    }
+
     /// <summary>
     /// Verifies every option of <paramref name="decryptedTally"/> against its aggregate in
     /// <paramref name="encryptedTally"/>, on up to <paramref name="maxDegreeOfParallelism"/> threads

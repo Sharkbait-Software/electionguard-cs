@@ -86,7 +86,7 @@ public class ElectionRecordSerializationTests
         var contestData = new[] { first, weighted }
             .Select(ballot => admin.DecryptContestData(guardians, ballot, "contest-1", record))
             .ToList();
-        var challengedRecord = admin.DecryptChallengedBallot(guardians, challenged, record, PublishedCastBallots.FromRecord(record.ExtendedBaseHash, ballots));
+        var challengedRecord = admin.DecryptChallengedBallot(guardians, challenged, record, PublishedCastAndSpoiledBallots.FromRecord(record.ExtendedBaseHash, ballots));
 
         return new Election
         {

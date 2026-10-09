@@ -3,6 +3,7 @@ using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.Extensions;
 using ElectionGuard.Core.Models;
 using System.Numerics;
+using ElectionGuard.Core.RecordFormat;
 
 namespace ElectionGuard.Core.Verify.Ballot;
 
@@ -51,6 +52,16 @@ namespace ElectionGuard.Core.Verify.Ballot;
 /// </summary>
 public class AdherenceToVoteLimitsVerification
 {
+    /// <summary>
+    /// Verification 7 on an item decoded from the election record (design §4.8): a limit, undervote-difference or null-vote proof challenge ≥ q fails 7.B and a response ≥ q 7.C, then
+    /// <see cref="RecordItemNotEvaluableException"/> if another verification's range finding left no
+    /// domain object, then <see cref="Verify(EncryptedBallot, EncryptionRecord)"/>. See <see cref="RecordItemGate"/>.
+    /// </summary>
+    internal void Verify(RecordDecoded<EncryptedBallot> encryptedBallot, EncryptionRecord encryptionRecord)
+    {
+        Verify(RecordItemGate.Require(encryptedBallot, 7), encryptionRecord);
+    }
+
     public void Verify(EncryptedBallot encryptedBallot, EncryptionRecord encryptionRecord)
     {
         // The proof challenges recomputed below hash the manifest's contest indices. They are

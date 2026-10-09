@@ -24,6 +24,14 @@ implemented (§9.2: S10b-0, S10b-1, S10b-1b, S10b-2). What the answers changed:
 
 The schema is now `proto/electionguard/egrf/v2/egrf.proto`, compiled by the Core build (§4.6, §8.1).
 
+**Revision 4 (2026-10-09, stage S10b-B): the readings R-1..R-3 are answered (§12) and S10b-3, S10b-4 and S10b-5
+are implemented.** R-1 ("Whenever ξ_B is released") and R-2 ("Pass, flagged incomplete") keep what was built. R-3
+("Ignore them too") removes the near-miss refusal: the manifest reader ignores every unknown property (§4.6). The
+user also answered the open spoiled-ballot question ("Refuse spoiled too"): the guardian's view of the sealed record
+holds cast and spoiled ballots, and a nonce request matching either is refused (§3.3). The canonicality check
+(`CanonicalProtobuf`, §4.4), the domain mappers with the range table fixed (§4.8) and the Merkle tree, TOC and phase
+roots (§4.9) are in `src/ElectionGuard.Core/RecordFormat/`; the vectors are in `test/egrf/vectors/` (§5.7).
+
 Revision 2 summary (kept for the tracker's references):
 
 **Review round 1 and the feasibility proof are applied** (same day). Two design reviews and a four-runtime
@@ -320,14 +328,15 @@ most often; only returned uncast ballots whose ξ_B stays secret are written in 
 ballots. The user wrote (#4): "If we have it in the election record at all, it was by definition submitted." So a
 spoiled ballot counts as submitted: it is in 5.A and 5.B, and its contests count for 11.D. It gets V6-V8 like any
 other ballot, and it is not aggregated (V9 reads cast ballots only). It is not decrypted by this library's paths, and
-a `ChallengedBallotDecryption` that names it is `13.structure` in the record. What stops an administrator from having
-it decrypted anyway is narrower than that suggests. `TallyGuardian.DecryptBallotNonce`'s status test checks only the
-status the requester states, so it is a sanity check; the guardian's real authorization, the Q31 view
-(`IPublishedCastBallots`), protects cast ballots only and cannot hold a spoiled one. An administrator who relabels a
-spoiled ballot as challenged therefore gets its nonce decrypted (unrecorded ballots had the same gap before S10b).
-The recorded status itself is protected by the section seal and the signatures (S10b-6 onward); whether a guardian
-should also refuse an id_B, H_I or C_ξB,0 that matches a spoiled ballot of the sealed record is left to S10b-9 and
-S10b-19. In v2.0 11.D cannot fail on a spoiled ballot alone, because the one tally lists every manifest contest.
+a `ChallengedBallotDecryption` that names it is `13.structure` in the record. `TallyGuardian.DecryptBallotNonce`'s
+status test checks only the status the requester states, so it is a sanity check. The guardian's real authorization
+is its own view of the sealed record, `IPublishedCastAndSpoiledBallots` (S10b-B; was `IPublishedCastBallots`), which
+holds the cast **and spoiled** ballots: a request whose id_B, H_I or C_ξB,0 matches either is refused, with reason
+`CastBallot` or `SpoiledBallot` (user decision "Refuse spoiled too", 2026-10-09; a match on both is reported as
+`CastBallot`). So an administrator who relabels a spoiled ballot as challenged is refused, as one who relabels a cast
+ballot is. Challenged ballots are not in the view (they are the ones a guardian opens), and a ballot of the record
+without a recorded status is refused when the view is built. The recorded status itself is protected by the section
+seal and the signatures (S10b-6 onward). In v2.0 11.D cannot fail on a spoiled ballot alone, because the one tally lists every manifest contest.
 
 ---
 
@@ -704,7 +713,18 @@ Decisions behind the layout:
   indices (eqs. 59, 62, 70, 115). Labels on encrypted ballots would add 5-10 % per ballot, and no verification reads
   them there. Where a verification checks text (V11 tally, V14 challenged decryption, V19 uncast), the item carries
   both: the index drives V13's ciphertext lookup, and the label is compared in V14, so a mislabelled field fails 14.D
-  rather than surfacing as a 13.x crypto failure against the wrong ciphertext.
+  rather than surfacing as a 13.x crypto failure against the wrong ciphertext. The domain decryption carries both
+  (`DecryptedChallengedContest.Index`, `DecryptedChallengedField.Index`, S10b-B review round 1). V14 requires each
+  manifest label at its own index: a contest's under 14.B, a field's under 14.D (two labels swapped, or an index
+  moved to another field); a label that is no manifest label fails 14.C first, as the spec orders the checks. An
+  index moved to another field also opens the wrong ciphertext, so it fails 13.B as well. The at-index rule goes
+  beyond the letter of 14.B and 14.D (each manifest label "appears"/"occurs"; the spec's decryption has no index), and
+  without it a label paired with another contest's or field's index would pass both V13 and V14. Whether it is
+  reported under 14.B/14.D, as built, or as 14.structure is open for the user (S10b-B review round 2).
+- **Lists inside an item are in ascending index order** where the schema says so (a ballot's contests, an uncast
+  ballot's contests and vectors, a challenged decryption's contests, a release's contests). Out of order, the same
+  content would have a second encoding and leaf hash. The decoders report it (§4.8 layer 3); a repeated index is a
+  content error left to the verifications' own structure checks (a contest listed twice).
 - **No device id on ballots.** It comes from the section. The domain `EncryptedBallot.DeviceId` is filled in from
   `DeviceHeader` on decode, which also removes the "ballot names another device" failure class.
 - **`MaximumCount` is not stored.** S10a publishes the per-contest `cast_weight`, and `MaximumCount` is
@@ -732,9 +752,11 @@ Decisions behind the layout:
   of the file is well-formed UTF-8 (RFC 8259 §8.1, RFC 3629), no string or name escapes to a lone surrogate, and
   nesting is at most 64 levels deep (the top-level object is level 1; RFC 8259 §9 lets a parser limit depth), vendor
   values included, so whether a file is a manifest does not depend on which properties a reader knows (S10b-A review
-  round 2). The one unknown name it refuses is a near miss of a member's name
-  (another case, or with `_` or `-`), which a loosely matching reader would read as that member. "As entered"
-  therefore means byte for byte for any document that parser accepts (#19: "need only be a valid document").
+  round 2). Member names are matched exactly, so a name that differs from a member's only in case, `_` or `-`
+  (`ChainingMode`, `chaining_mode`) is an unknown property and is ignored like any other (user decision R-3, "Ignore
+  them too"; S10b-A had refused such near misses). A conformant reader in any language matches names exactly too.
+  "As entered" therefore means byte for byte for any document that parser accepts (#19: "need only be a valid
+  document").
   Whitespace, member order, number spelling and vendor properties survive. A document the parser refuses, such as one
   that starts with a UTF-8 BOM or names a key twice, would make the record unverifiable, so `WriteSetupAsync` parses
   the bytes first and refuses them. It never strips or rewrites them. A carrier may also write the manifest as a plain
@@ -801,24 +823,59 @@ Checks run in three layers, in this order, and each failure carries a fixed code
 
    | Value | Code |
    |---|---|
-   | ballot and pre-encryption-vector α, β (V6 covers every selection encryption, spec §4.5), uncast vectors included | 6.A |
+   | ballot and pre-encryption-vector α, β (V6 covers every selection encryption, spec §4.5): regular ballots, the combined and the selected vectors of a cast pre-encrypted ballot, uncast vectors | 6.A |
    | selection range-proof c, v | 6.B, 6.C |
    | limit, undervote-difference and null-vote proof c, v | 7.B, 7.C |
-   | guardian commitments, κ_i | 2.A |
+   | contest data C_0 and C_2 = (c, v) (hashed into χ by eq. 70, so first read by V8) | 8.structure |
+   | a ballot's encrypted ballot nonce C_ξB,0 and C_ξB,2 (no input to H_C; first read by V13), regular or cast pre-encrypted | 13.structure |
+   | guardian commitments, κ_i; a guardian index of 0 (as V2 reports any index outside 1..n since S2/G25: some G_i is then missing, and its 2.A cannot be confirmed) | 2.A |
    | guardian responses v_{i,j}, v̂_{i,j} | 2.B |
    | guardian challenges c_i, ĉ_i (no letter checks their range; H_q's output is below q, so a stored c ≥ q can never equal the recomputed one) | 2.C |
-   | tally v | 10.A |
-   | tally c (same reasoning as c_i) | 10.B |
-   | contest-data decryption v | 12.A |
-   | contest-data decryption c | 12.B |
-   | any other value | `N.structure`, where N is the first verification that consumes it (for example ξ ≥ q in a challenged decryption is 13.structure; K ≥ p is 3.structure) |
+   | election keys K, K̂ (3.A and 3.B are K = (∏K_i) mod p and K̂ = (∏K̂_i) mod p, p.82: the c_i reasoning) | 3.A, 3.B |
+   | `ver` that is not a version string padded with zero bytes | 1.A |
+   | n, k that are no threshold scheme (not 1 ≤ k ≤ n) | 1.structure |
+   | encrypted tally A, B (the recomputed product is below p, so a stored value ≥ p can never equal it: the c_i reasoning) | 9.A, 9.B |
+   | decrypted tally T (T = K^t mod p cannot hold), c, v | 10.C, 10.B, 10.A |
+   | contest-data decryption β, c, v | 12.structure, 12.B, 12.A |
+   | challenged-ballot released nonces ξ_{i,j}, contest-data ξ | 13.structure |
+   | uncast released nonces ξ_{i,j,k}; an uncast ballot's own C_ξB,0 and C_ξB,2 ("Verification 13 is replaced by Verification 18", p.66) | 18.structure |
+   | a count that does not fit the domain's integers (`cast_ballot_count`, a tally t above 2^31 - 1) | 9.structure, 10.structure |
+   | a decrypted-tally contest or field label listed twice (the domain tally is keyed by label) | 11.structure |
 
-   The final per-field table is fixed in S10b-4 against the Verify classes' current lettering. An item with a range
-   failure is not passed to the domain verifiers, which take `IntegerModP` values. It is still digested,
-   chain-walked (H_C and B_C are hashes) and entered into 5.A.
+   The table is fixed (S10b-4, `RecordValueRanges`). The mappers decode every fixed-width value raw (`RawZp`,
+   `RawZq`: a big-endian compare against `EGParameters.P`/`Q`, never a reduction), collect every range finding of the
+   item, and then hand no domain object on (`RecordDecoded<T>`). The verifications' record-item entry points
+   (internal overloads of V1-V3, V6 for regular, cast pre-encrypted and uncast ballots, V7-V13, V16 and V18) run a
+   gate first: a finding of their own verification is their `VerificationFailedException` with its code; a finding of
+   another on an item they read leaves them not evaluable on the item (`RecordItemNotEvaluableException`); otherwise
+   the existing domain verification runs. Every code in the table has such an owner. A verification gates every item
+   it reads: V10 both tallies, V12 and V13 the decryption and the encrypted ballot it opens (so the ballot's
+   13.structure is V13's failure, and its 6.x-8.structure leave V12 and V13 not evaluable), V9 the encrypted tally
+   and every cast ballot item (a cast ballot with any finding leaves V9 not evaluable, since the recomputed aggregate
+   would miss its factor; a challenged or spoiled one is not aggregated). V6 on a cast pre-encrypted ballot checks
+   6.A on the selected vectors as well as the combined one: two in-range non-members can multiply to a member, so
+   the combined vector's 6.A and V15 do not imply it. The setup is several items
+   decoded together, and each of its findings names its item, so the gate counts only the items a verification reads:
+   V1 the parameters and the manifest, V2 the guardian keys, V3 the guardian keys and the election keys (a guardian's
+   κ_i ≥ p leaves V1 evaluable; K ≥ p, which fails 3.A, leaves V1 and V2 evaluable). Verification 6 on an uncast ballot is 6.A over
+   every vector entry (p.64: V6 covers "all individual selection encryptions within the selection vectors on
+   pre-encrypted ballots"; an uncast ballot has no range proofs). The record verifier (S10b-9) reports each finding
+   once, under its code, whether or not its owner runs on that item: V13 runs only on challenged ballots, so a cast or
+   spoiled ballot's C_ξB,0 ≥ p is reported from the item's findings, not through V13's gate. An item with a range failure
+   is still digested, chain-walked (H_C and B_C are hashes) and entered into 5.A. Decoding never fails on the manifest:
+   a contest index or field position the manifest lacks decodes under an id that is not text, so `BallotStructure`
+   reports it as `N.structure` under the verification that runs it.
 3. **Structure** (`N.structure`): counts fixed by the manifest (k, k+1, R+1, L+1, m+L, the style's contests),
-   required messages and strings (a missing `encrypted_ballot_nonce`, `ballot_style` or `device_id`), the section placement
-   rules of §4.5, and today's `BallotStructure` rules.
+   required messages and strings (a missing `encrypted_ballot_nonce`, `ballot_style` or `device_id`; a contest-data
+   request or decryption with no `ballot` locator 12.structure, a challenged ballot decryption with none 13.structure:
+   an absent message is canonical, since D1 and D2 cover only bytes and enum fields), the section placement
+   rules of §4.5, and today's `BallotStructure` rules. A list inside an item that the schema orders by ascending index
+   and that is out of order (an index below its predecessor's) is reported by the decoder under the structure code of
+   the verification that reads the list in that order: a regular ballot's contests 8.structure (H_C, eq. 59), a cast
+   pre-encrypted ballot's 16.structure (eq. 116; V8 does not apply), an uncast ballot's printed contests and a
+   contest's vectors 16.structure, a challenged decryption's contests 13.structure, a release's contests
+   18.structure. The cast pre-encrypted case has no gate of its owner on the item (V16 is the device pass), so the
+   record verifier reports it from the item's findings, as it does a cast ballot's C_ξB.
 
 The pass or fail verdict is the same as S10a's range-strict serializers would give; only the code differs, and it is
 the spec's.
@@ -1135,11 +1192,17 @@ Follow-up #18: "Alongside, not signed".
   the device section, the device's TOC entry, the TOC path) it serves §3.7's lookup tool. A voter's checker needs only
   SHA-256, and a proof is under 1 KB.
 - **Sorted id_B index:** (id_B, locator), strictly ascending. It is an optional O(1)-memory V5.A path (§6.5) and can
-  back the record-side `IPublishedCastBallots` (Q31).
+  back the record-side `IPublishedCastAndSpoiledBallots` (Q31; spoiled ballots too, 2026-10-09).
 - **Offset sidecars:** ordinal → byte offset per segment, for random access.
 
 ### 5.7 Conformance artifacts (`test/egrf/`)
 
+- **In place since S10b-B:** `test/egrf/vectors/items.json` (a golden canonical item per `RecordItem` member and a
+  segment header, with leaf hash and proto3 JSON; newer-minor items with their verdict), `negatives.json` (one or more
+  per rule W1-W6, W8, D1-D6 and the §4.9 statement codes, with the record's minor; W7 is a schema property, S3) and
+  `merkle-rfc9162.json` (the Certificate Transparency reference roots for 0..8 leaves and its inclusion and consistency
+  proofs, transcribed from transparency-dev/merkle). The first two are generated by the C# tests from synthetic byte
+  patterns (`EGRF_WRITE_VECTORS=1` rewrites them); the feasibility run's draft-schema vectors were not reused.
 - **Golden vectors** (`test/egrf/vectors/`):
   - every item type: canonical bytes (hex), proto3 JSON and leaf hash. The JSON is compared by structure: parse
     both sides and compare members and values. The feasibility run's comparison matched C# against Python for 31 of
@@ -1188,7 +1251,7 @@ Follow-up #18: "Alongside, not signed".
 | B. Setup | sections 0x0001-0x0005 | V1 against `EGParameters`; parse the manifest from `ManifestFile.content` by media type (`ManifestSerializer`: known members strict, unknown properties ignored, then `Manifest.Validate`); V2 per guardian, in parallel; V3; V4. Build `EncryptionRecord` from claims (`ElectionPublicKeys.FromKeys`, manifest from bytes). | A V1 failure, an unparseable manifest or a V4 failure stops all cryptography (later outcomes `NotEvaluable`). Digests and structure still run to the end. |
 | C. Join prep | `device_attestations` and the four join sections (`contest_data_requests`, `challenged_ballot_decryptions`, `contest_data_decryptions`, `uncast_nonce_releases`) | A **framing pre-scan**: read each item's leading locator (field 1 of the inner message, within its first 60 bytes) to check sort order (`R.order`), and record the offset where each device key's run begins (O(D)). Load the attestation statements per device (O(D)). | |
 | D. Ballots | device sections, in parallel across sections | per §6.2 | Findings are collected, and the run continues. |
-| E. Tally | `encrypted_tally`, `decrypted_tally` | Merge the V9 partials and compare (9.A, 9.B), and each contest's `cast_weight` (`9.structure`). Header counts against recounted cast ballots and weight (`R.summary`). V10 per field, in parallel. V11.A-C. V11.D from the bitset of contests on submitted ballots. | |
+| E. Tally | `encrypted_tally`, `decrypted_tally` | Merge the V9 partials and compare (9.A, 9.B), and each contest's `cast_weight` (`9.structure`). Header counts against recounted cast ballots and weight (`R.summary`, `BallotAggregationVerifier.VerifySummary`; beside V9's outcome, never as it: a false header still passes V9). V10 per field, in parallel. V11.A-C. V11.D from the bitset of contests on submitted ballots. | |
 | F. Completion | | Finish 5.A (§6.5). Every cursor exhausted (leftovers are `12.structure`, `13.structure` or `18.structure`). Section roots against the TOC (`R.root`). Phase roots against any `Expected*Root` option. Record signatures (`R.signature`, governed by the policy). | |
 
 ### 6.2 The device pass
@@ -1486,7 +1549,7 @@ public enum BallotStatus
     Unrecorded = 0,   // in memory only: no decision yet. Never written; a writer refuses it. (was NotSubmitted)
     Cast = 1,
     Challenged = 2,
-    Spoiled = 3,      // in the record, neither cast nor challenged (#4). Not tallied; not decrypted by this library's paths (§3.3).
+    Spoiled = 3,      // in the record, neither cast nor challenged (#4). Not tallied; never opened: guardians refuse a match (§3.3).
 }
 // EncryptedBallot.RecordStatus accepts Cast, Challenged or Spoiled, once.
 ```
@@ -1517,39 +1580,56 @@ public readonly record struct SectionKey(RecordSectionType Type, ReadOnlyMemory<
 public readonly record struct RecordItemBytes(ReadOnlyMemory<byte> Bytes, long Ordinal);
 
 // ---- canonical profile ---------------------------------------------------------------------------------------
-public static class CanonicalProtobuf
+public static class CanonicalProtobuf                             // implemented in S10b-3
 {
-    /// Method B (§4.4) on the hot path; Method A when the record's minor is newer than this library's.
+    /// Method B (§4.4); on a rejection Method A names the rule. For a newer minor, Method B keeping unknown fields
+    /// and then Method A's W6 branch.
     public static CanonicalCheck Check(ReadOnlySpan<byte> item, ushort recordFormatMinor);
+    public static CanonicalCheck CheckSegmentHeader(ReadOnlySpan<byte> header, ushort recordFormatMinor);   // D6
+    public static CanonicalCheck CheckSignedStatement(ReadOnlySpan<byte> item, ushort recordFormatMinor);   // §4.9
 }
-public readonly record struct CanonicalCheck(bool IsCanonical, string? Rule /* "W4", "D1", ... */, bool HasUnknownContent);
+public readonly record struct CanonicalCheck(bool IsCanonical, string? Rule /* "W4", "D1", ... */, bool HasUnknownContent,
+    string? Message = null);
 
-// Mappers (internal): domain <-> generated message, decoding raw Z_p/Z_q bytes and returning range and structure
-// findings instead of throwing (§4.8). The uncast mapper splits PreEncryptedUncastBallot into the printed item and
-// its UncastNonceRelease, and joins them on read.
+// Mappers (internal, S10b-4; RecordFormat/Mappers): SetupMapper, BallotMapper (regular and cast pre-encrypted),
+// DeviceMapper (DeviceChainRecord = DeviceHeader + DeviceClose; locators), UncastMapper (Split/Join, compact iff ξ_B
+// is released, R-1), TallyMapper (EncryptedTally + header, DecryptedTally), DecryptionMapper (ContestDataRequest,
+// ContestDataDecryption, ChallengedBallotDecryption), joined to string ballot ids by RecordBallotIndex. They decode
+// raw Z_p/Z_q bytes and return RecordDecoded<T> (the object, or the §4.8 range findings) instead of throwing.
 public readonly record struct RawZp(ReadOnlyMemory<byte> Bytes) { public bool TryToModP(out IntegerModP value); }
 public readonly record struct RawZq(ReadOnlyMemory<byte> Bytes) { public bool TryToModQ(out IntegerModQ value); }
 
 // ---- Merkle (RFC 9162) ---------------------------------------------------------------------------------------
-public sealed class MerkleFrontier                                // O(log n) state; serializable for checkpoints
+public sealed class MerkleFrontier                                // O(log n) state; serializable for checkpoints (S10b-5)
 {
     public static Sha256Digest LeafHash(ReadOnlySpan<byte> canonicalItem);
+    public void Append(ReadOnlySpan<byte> canonicalItem);
     public void AppendLeafHash(in Sha256Digest leaf);              // workers hash; the sequencer appends
     public long Count { get; }
     public Sha256Digest Root();
+    public byte[] Serialize(); public static MerkleFrontier Deserialize(ReadOnlySpan<byte> state);
 }
+public static class MerkleTree { EmptyRoot; LeafHash; NodeHash; Root(IEnumerable<Sha256Digest>) }
 public static class MerkleProofs
 {
+    public static IReadOnlyList<Sha256Digest> InclusionProof(IReadOnlyList<Sha256Digest> leafHashes, long index);
+    public static IReadOnlyList<Sha256Digest> ConsistencyProof(IReadOnlyList<Sha256Digest> leafHashes, long oldSize);
     public static bool VerifyInclusion(Sha256Digest leaf, long index, long size, Sha256Digest root, IReadOnlyList<Sha256Digest> path);
     public static bool VerifyConsistency(long oldSize, Sha256Digest oldRoot, long newSize, Sha256Digest newRoot, IReadOnlyList<Sha256Digest> proof);
 }
-public sealed record TocEntry(RecordSectionType Type, ReadOnlyMemory<byte> Key, bool Critical, long ItemCount, Sha256Digest Root);
-public sealed record TableOfContents(IReadOnlyList<TocEntry> Entries)
+public sealed record TocEntry(RecordSectionType Type, ReadOnlySpan<byte> Key, bool Critical, long ItemCount, Sha256Digest Root)
+{
+    public byte[] ToRecordItemBytes(); public Sha256Digest LeafHash();     // key compared by content
+}
+public sealed class TableOfContents(IEnumerable<TocEntry> entries)  // refuses a non-canonical order or a repeat
 {
     public RecordPhase Phase { get; }
+    public Sha256Digest Root { get; }
     public Sha256Digest PhaseRoot(RecordPhase phase);
-    public bool Extends(TableOfContents earlier);
+    public bool Extends(TableOfContents earlier);                   // same entries for every phase up to earlier's
+    public IReadOnlyList<Sha256Digest> ConsistencyProof(TableOfContents earlier);
 }
+public static class RecordDigests { ConfirmationCodeLeafBytes; CodesRoot; SectionRoot }
 
 // ---- items not already in the domain model ------------------------------------------------------------------
 public sealed record DeviceHeader(DeviceChainBallotKind Kind, string DeviceId, VotingDeviceInformationHash DeviceInformationHash,
@@ -1557,7 +1637,7 @@ public sealed record DeviceHeader(DeviceChainBallotKind Kind, string DeviceId, V
 public sealed record DeviceClose(long BallotCount, ChainingField? ClosingChainingField, ConfirmationCode? ClosingHash,
     DateTimeOffset? ClosedAt);
 public sealed record ContestDataRequest(BallotLocator Ballot, SelectionEncryptionIdentifierHash IdentifierHash, int ContestIndex);
-public sealed record EncryptedTallyHeader(long CastBallotCount, long TotalCastWeight);
+public sealed record EncryptedTallyHeader(long CastBallotCount, long TotalCastWeight);   // EncryptedTally.TotalCastWeight is new (S10b-4)
 // §3.7 bullet 1's election facts are Manifest.ElectionName, ElectionDate, ElectionType, Jurisdiction, Location (NQ-4).
 
 public sealed record RecordSetup(RecordFormatVersion Format, CryptographicParameters Parameters, GuardianParameters GuardianParameters,
@@ -1565,6 +1645,9 @@ public sealed record RecordSetup(RecordFormatVersion Format, CryptographicParame
     IReadOnlyList<GuardianPublicView> Guardians, ElectionPublicKeys Keys, ExtendedBaseHash ExtendedBaseHash)
 {
     public EncryptionRecord ToEncryptionRecord();                  // Manifest parsed from ManifestFile (S10a); keys via FromKeys
+    public GuardianRecord ToGuardianRecord();
+    public static RecordSetup FromEncryptionRecord(EncryptionRecord record);
+    public static RecordSetup FromGuardianRecord(GuardianRecord record, ExtendedBaseHash extendedBaseHash);  // the keys item carries H_E
 }
 
 // ---- reading -------------------------------------------------------------------------------------------------
@@ -1755,11 +1838,11 @@ updates the tracker.
 |---|---|---|
 | **S10b-0** Nonce hazard (first; independent). **Done (S10b-A).** | Delete `EncryptionNonce` from `ProtobufEncryptedValueWithProofs` and `ProtobufEncryptedValue` **and the line-83 copy** into the DTO | A reflection test that no serialization DTO has a nonce member; protobuf round trips unchanged |
 | **S10b-1** Ballot status. **Done (S10b-A).** | `BallotStatus.NotSubmitted` → `Unrecorded` (0); add `Spoiled = 3`. `RecordStatus` accepts Cast, Challenged or Spoiled, once. `EncryptedTally.AddBallot` skips Spoiled as it skips Challenged (and still rejects Unrecorded). The guardians' nonce path and V13/V14 treat Spoiled as not challenged. The existing ballot serializers carry the new value until they retire. | Aggregation excludes spoiled ballots; a spoiled ballot's nonce request is refused; `RecordStatus` is once-only across all three; V5-V8 accept a spoiled ballot; serializer round trips of each status |
-| **S10b-1b** Manifest (NQ-1, NQ-4). **Done (S10b-A).** | Optional `ElectionName`, `ElectionDate`, `ElectionType`, `Jurisdiction`, `Location` on `Manifest` (strings, informational, omitted from the written form when null); `ManifestSerializer` ignores unknown properties at every level, refuses near-miss member names, and keeps refusing duplicate keys, malformed JSON, wrong types and missing required members | Unknown properties at every level parse to the manifest without them while H_B differs; near misses, duplicate unknown keys and wrong types refused; the election facts round-trip and are absent from a manifest that does not set them |
+| **S10b-1b** Manifest (NQ-1, NQ-4). **Done (S10b-A).** | Optional `ElectionName`, `ElectionDate`, `ElectionType`, `Jurisdiction`, `Location` on `Manifest` (strings, informational, omitted from the written form when null); `ManifestSerializer` ignores unknown properties at every level (near-miss names too since S10b-B, R-3), and keeps refusing duplicate keys, malformed JSON, wrong types and missing required members | Unknown properties at every level parse to the manifest without them while H_B differs; near misses are ignored like any unknown property (S10b-B); duplicate unknown keys and wrong types refused; the election facts round-trip and are absent from a manifest that does not set them |
 | **S10b-2** Schema and codegen. **Done (S10b-A).** | Move `egrf_v2.proto` to `proto/electionguard/egrf/v2/egrf.proto` (with the NQ-1 outcome); Google.Protobuf and Grpc.Tools in Core, generated types internal; a schema lint test enforcing S1-S8 on the compiled descriptor; a test that writes `test/egrf/schema.json` (numbers, types, labels, width options, reserved numbers) and checks every schema change against it for S6 | The lint test fails on a deliberately added map, `int32`, packed repeated scalar, out-of-order declaration, unannotated fixed-width field or regular field numbered inside a oneof's range (run against fixture descriptors); the append-only check fails on a removed, renumbered or retyped field, a field added below the highest number, and a dropped reservation; C# Google.Protobuf's unknown-field behaviour (§4.4) is pinned |
-| **S10b-3** Canonicality checker | `CanonicalProtobuf.Check`: Method B (parse keeping unknown fields, D1-D6, re-serialize, compare; a discard-unknown parse when the record's minor is not newer than the library's) and Method A (descriptor-driven wire walk, with W6's unknown-field rule for newer-minor records); the `SegmentHeader` check (D6) and the signed-statement check (§4.9); the first golden item vectors, seeded from the feasibility run's `vectors.json` and `negatives.json`, and every negative vector of §5.7 under `test/egrf/vectors/` | Each negative vector rejected with its rule by both methods; the newer-minor vectors accepted with their unknown content reported, and re-encoded to the same bytes; property tests: encode-then-check always passes; every single-byte mutation of a golden item is rejected or decodes to a different item, and Methods A and B never disagree |
-| **S10b-4** Domain mappers | One mapper per item type; `RawZp`/`RawZq` and the §4.8 range table, fixed against the Verify classes' lettering; the uncast split and join, with NQ-2's compact form (mandatory for never-returned ballots; the form follows from whether ξ_B is released); `RecordSetup` | A **reflection completeness test** pins every public property of every recorded domain type to a schema field or an explicit exclusion list (nonces, the device id taken from the section, computed properties), replacing the "add it in both" hazard; domain → bytes → domain is the identity; values ≥ p and ≥ q give the lettered codes |
-| **S10b-5** Merkle, TOC, phase roots | `MerkleFrontier`, `MerkleProofs`, `Sha256Digest`, TOC and phase-root functions, `Extends` | RFC 9162 published vectors; MTH for n = 0..17 and 1,000; inclusion and consistency proofs; frontier serialize/resume equals an uninterrupted run |
+| **S10b-3** Canonicality checker. **Done (S10b-B).** | `CanonicalProtobuf.Check`: Method B (parse keeping unknown fields, D1-D6, re-serialize, compare; a discard-unknown parse when the record's minor is not newer than the library's) and Method A (descriptor-driven wire walk, with W6's unknown-field rule for newer-minor records); the `SegmentHeader` check (D6) and the signed-statement check (§4.9); the first golden item vectors and every negative vector of §5.7 under `test/egrf/vectors/` (regenerated from the current schema in S10b-B: the feasibility run's `vectors.json` and `negatives.json` were built against the draft schema, so only their rule list was kept) | Each negative vector rejected with its rule by both methods; the newer-minor vectors accepted with their unknown content reported, and re-encoded to the same bytes; property tests: encode-then-check always passes; every single-byte mutation of a golden item is rejected or decodes to a different item, and Methods A and B never disagree |
+| **S10b-4** Domain mappers. **Done (S10b-B).** | One mapper per item type; `RawZp`/`RawZq` and the §4.8 range table, fixed against the Verify classes' lettering; the uncast split and join, with NQ-2's compact form (mandatory for never-returned ballots; the form follows from whether ξ_B is released); `RecordSetup` | A **reflection completeness test** pins every public property of every recorded domain type to a schema field or an explicit exclusion list (nonces, the device id taken from the section, computed properties), replacing the "add it in both" hazard; domain → bytes → domain is the identity; values ≥ p and ≥ q give the lettered codes |
+| **S10b-5** Merkle, TOC, phase roots. **Done (S10b-B).** | `MerkleFrontier`, `MerkleProofs`, `Sha256Digest`, TOC and phase-root functions, `Extends` | RFC 9162 published vectors; MTH for n = 0..17 and 1,000; inclusion and consistency proofs; frontier serialize/resume equals an uninterrupted run |
 | **S10b-6** Directory carrier: writer and reader | Delimited `.binpb` segments and `SegmentHeader`; the 64 MiB frame ceiling on both sides; the §5.3.1 layout and discovery rules; `ElectionRecordWriter` phase gates; `DeviceSectionWriter` (final status required, `AppendUncastAsync` with its `UncastDisposition`); `ResumeAsync` with torn-tail repair, zero-filled tails included; presence rules; the optional `setup/manifest.json` copy | Write then read gives the same domain objects (S10a's strict round-trip tests ported); segment rollover does not change roots; a torn tail is repaired and a corrupt middle item refused; decryption and release writers throw before R_aggregated; R_setup ⊑ R_sealed ⊑ R_aggregated ⊑ R_final; a manifest copy that differs is `R.container`; the manifest bytes survive byte for byte (whitespace, member order, number spelling and vendor properties preserved), and a manifest the parser refuses (a BOM, a duplicate key) is refused by `WriteSetupAsync`; a never-returned uncast ballot is written compact whatever the caller passes, and a release of the wrong form is refused; an oversized item is refused by the writer and a hostile length by the reader before allocation; every §5.3.1 layout negative |
 | **S10b-7** `.zip` carrier | `System.IO.Compression` writer (STORED protobuf entries, optional DEFLATE for JSON, ZIP64) and a seekable reader that checks every local header it reads against the central directory; a non-seekable `Stream` is spooled to disk (NQ-6) | Roots equal the directory's; any entry order is accepted; a duplicate entry, a local/central mismatch, an unlisted entry and a case-folding collision are each `R.container`; a DEFLATEd JSON record verifies with sequential join cursors; a > 4 GiB synthetic entry round-trips (manual or nightly) |
 | **S10b-8** Streaming verifier pieces | `DeviceChainWalker`; `SpillingIdentifierSet`; `BallotAggregationVerifier.Merge` and standard-form export; merge cursors with run offsets | The walker agrees with `DeviceChainWalk` on every existing V8/V16 test; 5.A with planted duplicates at random positions, **adversarially skewed id_B prefixes** and a 1 MiB budget forcing spills; AVX-512 and scalar partials merged through the standard form equal one engine (`DOTNET_EnableAVX512F=0`) |
@@ -1773,7 +1856,7 @@ updates the tracker.
 | **S10b-16** Retire superseded code | Remove `ProtobufEncryptedBallotSerializer` and its `Protobuf*` DTO tree, the protobuf-net package, `IEncryptedBallotSerializer`, the JSON ballot serializer, `JsonElectionRecordSerializer` (**replaced** by the proto3 JSON projection; its per-object API has no use once records are read and written as a whole, and `egrecord show` prints any item as JSON), `JsonPreEncryptedBallotSerializer`, `JsonDeviceChainRecordSerializer`, `StrictBase64` and `EncryptedBallotShape` (folded into the mappers). `ManifestSerializer` stays as the manifest parser; its writer stays only as an authoring helper whose output has no canonical status. | No remaining reference; the full suite green; CLAUDE.md's Serialization bullet rewritten |
 | **S10b-17** Live tailing (may be deferred) | `FollowLiveRecord`, prefix-checkpoint checking | Tail a record while a writer appends; a checkpoint mismatch is caught |
 | **S10b-18** Documentation and publication | CLAUDE.md "Record" architecture bullet; a formal-spec skeleton generated from §4 and the `.proto`; register `width`, `width_multiple` and `omittable` in protobuf's global extension registry and replace the draft numbers 50001-50003 (a user action: it is a pull request to the protobuf project) | Review only; the lint test pins the registered numbers |
-| **S10b-19** Guardians open uncast pre-encrypted ballots (NQ-5; after S10b, needs S10b-9) | `TallyGuardian.DecryptBallotNonce` (and the administrator's combine) also opens a pre-encrypted uncast item taken from a sealed record the guardian has verified (`VerifiedAggregate`, §6.9): it decrypts C_ξB as §3.6.7 does, and the administrator publishes the release (ξ_B for a compact item; the ξ_{i,j,k} by eq. 121 for a full one) only if it regenerates the item. It refuses any id_B that is cast in that record (Q31). No issued list and no once-only state (Q35, Q36: guardians decrypt only after the record is sealed). | A never-returned ballot opened by k guardians gives a release that passes V16 and V18 (17.A and 19.A-D hold by construction on the compact item, §3.2); decide whether the guardian also refuses an id_B, H_I or C_ξB,0 that matches a spoiled ballot of the sealed record (§3.3; review round 1 of S10b-A); an id_B cast in the record is refused; a ballot not in the sealed record is refused; a wrong m_i is detected and nothing is published |
+| **S10b-19** Guardians open uncast pre-encrypted ballots (NQ-5; after S10b, needs S10b-9) | `TallyGuardian.DecryptBallotNonce` (and the administrator's combine) also opens a pre-encrypted uncast item taken from a sealed record the guardian has verified (`VerifiedAggregate`, §6.9): it decrypts C_ξB as §3.6.7 does, and the administrator publishes the release (ξ_B for a compact item; the ξ_{i,j,k} by eq. 121 for a full one) only if it regenerates the item. It refuses any id_B, H_I or C_ξB,0 that matches a cast or spoiled ballot of that record (Q31; "Refuse spoiled too"). No issued list and no once-only state (Q35, Q36: guardians decrypt only after the record is sealed). | A never-returned ballot opened by k guardians gives a release that passes V16 and V18 (17.A and 19.A-D hold by construction on the compact item, §3.2); an id_B, H_I or C_ξB,0 that matches a spoiled ballot of the sealed record is refused as one matching a cast ballot is (decided 2026-10-09, "Refuse spoiled too"; the regular-ballot view does it since S10b-B); an id_B cast in the record is refused; a ballot not in the sealed record is refused; a wrong m_i is detected and nothing is published |
 
 **No legacy importer.** v1's S10b-9 planned importers for today's JSON ballots, device chains and pre-encrypted
 JSON. No election record has been published in those formats, and the fixtures are regenerated (S10b-15), so the
@@ -1913,8 +1996,10 @@ out to cost much more than the prescribed entry order (§5.4), and NQ-6 confirme
 
 NQ-1 to NQ-6, asked in revision 2 with options and recommendations, are answered (2026-10-09). The answers are in
 §11 and applied throughout; revision 2's option text is in the repository history. Applying them took three readings
-that the answers did not spell out. Each is implemented or written into this design as stated, and is listed here
-for the user to confirm:
+that the answers did not spell out. The user answered them on 2026-10-09 (tracker, "S10b-A readings, answered
+2026-10-09"): R-1 "Whenever ξ_B is released" and R-2 "Pass, flagged incomplete" keep what is written below; R-3
+"Ignore them too" changed the manifest reader (S10b-B). The same answers settled the spoiled-ballot question
+("Refuse spoiled too", §3.3). The readings as they were put:
 
 - **R-1 (NQ-2) When the compact form applies.** "Compact required for unreturned" makes the compact item mandatory
   for never-returned ballots. Revision 2's option (b), which (c) extends, also allowed it for any uncast ballot whose
@@ -1931,7 +2016,8 @@ for the user to confirm:
   everything it understands" is read as informational: `Passed` means no failures, `Complete = false` is reported
   beside it, and `egrecord verify` exits 2 instead of 0 (§6.9, risk 16). Revision 2 required `Complete` for `Passed`.
   Unknown critical sections and unknown item types in sections that must verify stay `R.version` failures.
-- **R-3 (NQ-1) Near-miss manifest properties.** The manifest reader ignores unknown properties but refuses one whose
+- **R-3 (NQ-1) Near-miss manifest properties.** *Answered "Ignore them too": the refusal is removed (S10b-B), and a
+  near-miss name is ignored like any unknown property.* As asked: the manifest reader ignores unknown properties but refuses one whose
   name equals a member's name once case, `_` and `-` are disregarded (`ChainingMode`, `chaining_mode`), because a
   loosely matching reader in another language would read it as that member and compute with another manifest under
   the same H_B (§4.6, S10b-1b). Ignoring those too would follow "ignores unknown properties" literally.

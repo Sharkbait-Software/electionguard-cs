@@ -30,8 +30,16 @@ namespace ElectionGuard.Core.Verify.Tally;
 /// selections.</item>
 /// </list>
 /// Supplemental fields (§3.1.3 p.19: "treated like and listed with the option selection fields") are
-/// checked by 14.C and 14.D like options. A partial decryption that leaves out contests, which
-/// Verification 13 accepts in an RLA setting, fails 14.B as written.
+/// checked by 14.C and 14.D like options. The decryption states an index and a label for each contest
+/// and field (design §4.6): Verification 13 opens the ciphertexts at the index, so 14.B and 14.D
+/// require each label of the manifest at its own index, and a label at another index (two labels
+/// swapped, or an index changed) fails them. That goes beyond the letter of 14.B and 14.D, which
+/// ask only that each manifest label "appears" or "occurs" on the decryption (the spec's decrypted
+/// ballot carries no index); without it a decryption that pairs a label with another contest's or
+/// field's index would pass both Verification 13 (by index) and 14 (by label). Whether the pairing
+/// is reported under 14.B/14.D or as 14.structure is an open question for the user (S10b-B review
+/// round 2). A partial decryption that leaves out contests, which Verification 13 accepts in an RLA
+/// setting, fails 14.B as written.
 /// </summary>
 public class ChallengedBallotWellFormednessVerification
 {
@@ -41,7 +49,7 @@ public class ChallengedBallotWellFormednessVerification
     /// <see cref="VerificationFailedException"/>: "14.structure" if the decryption is for another
     /// ballot, the ballot is not recorded as challenged or is a pre-encrypted ballot's record, its
     /// ballot style is not in the manifest, or a list or entry of the decryption is missing or
-    /// repeated; otherwise "14.A" to "14.D" for the first
+    /// repeated (by label or by index); otherwise "14.A" to "14.D" for the first
     /// label check that fails over the whole ballot, then "14.E" or "14.F" for the first contest that is
     /// not well formed.
     /// </summary>
@@ -72,6 +80,7 @@ public class ChallengedBallotWellFormednessVerification
 
         var contests = decrypted.Contests ?? throw Failure("14.structure", $"the decryption of {where} has no contest list.");
         var seenContests = new HashSet<string>(StringComparer.Ordinal);
+        var seenContestIndices = new HashSet<int>();
         foreach (var contest in contests)
         {
             if (contest?.ContestId is null || contest.Choices is null || contest.SupplementalFields is null
@@ -80,9 +89,9 @@ public class ChallengedBallotWellFormednessVerification
                 throw Failure("14.structure", $"the decryption of {where} has a null contest, option list or option entry.");
             }
 
-            if (!seenContests.Add(contest.ContestId))
+            if (!seenContests.Add(contest.ContestId) || !seenContestIndices.Add(contest.Index))
             {
-                throw Failure("14.structure", $"the decryption of {where} lists contest {contest.ContestId} more than once.");
+                throw Failure("14.structure", $"the decryption of {where} lists contest {contest.ContestId} (index {contest.Index}) more than once.");
             }
         }
 
@@ -95,16 +104,20 @@ public class ChallengedBallotWellFormednessVerification
             }
         }
 
+        // A style contest appears where the decryption names its index (design §4.6: Verification 13
+        // opened the ciphertexts at that index), under its own label.
         foreach (var contestId in style.ContestIds)
         {
-            if (!seenContests.Contains(contestId))
+            int index = manifest.Contests.Single(x => x.Id == contestId).Index;
+            if (contests.FirstOrDefault(x => x.Index == index) is not { } atIndex || atIndex.ContestId != contestId)
             {
-                throw Failure("14.B", $"contest {contestId} of ballot style {style.Id} does not appear on the decryption of {where}.");
+                throw Failure("14.B", $"contest {contestId} (index {index}) of ballot style {style.Id} does not appear at its index on the decryption of {where}.");
             }
         }
 
         // 14.C, then 14.D, contest by contest. Every contest is a manifest contest by 14.A, since
-        // Manifest.Validate requires a ballot style's contests to be in the manifest.
+        // Manifest.Validate requires a ballot style's contests to be in the manifest; by 14.B each
+        // stands at its own index.
         foreach (var contest in contests)
         {
             var manifestContest = manifest.Contests.Single(x => x.Id == contest.ContestId);
@@ -144,6 +157,7 @@ public class ChallengedBallotWellFormednessVerification
             where T : Choice
         {
             var seen = new HashSet<string>(StringComparer.Ordinal);
+            var seenIndices = new HashSet<int>();
             foreach (var field in released)
             {
                 if (!declared.Any(x => x.Id == field.Id))
@@ -151,17 +165,19 @@ public class ChallengedBallotWellFormednessVerification
                     throw Failure("14.C", $"{kind} {field.Id} of contest {contestId} on {where} is not a {kind} of that contest in the manifest.");
                 }
 
-                if (!seen.Add(field.Id))
+                if (!seen.Add(field.Id) || !seenIndices.Add(field.Index))
                 {
-                    throw Failure("14.structure", $"contest {contestId} on the decryption of {where} lists {kind} {field.Id} more than once.");
+                    throw Failure("14.structure", $"contest {contestId} on the decryption of {where} lists {kind} {field.Id} (index {field.Index}) more than once.");
                 }
             }
 
+            // Each label the manifest lists occurs, at its own index (design §4.6: the index is the
+            // one Verification 13 opened, so a label on another index is a mislabelled field).
             foreach (var field in declared)
             {
-                if (!seen.Contains(field.Id))
+                if (released.FirstOrDefault(x => x.Index == field.Index) is not { } atIndex || atIndex.Id != field.Id)
                 {
-                    throw Failure("14.D", $"{kind} {field.Id} of contest {contestId} in the manifest does not occur on the decryption of {where}.");
+                    throw Failure("14.D", $"{kind} {field.Id} (index {field.Index}) of contest {contestId} in the manifest does not occur at its index on the decryption of {where}.");
                 }
             }
         }

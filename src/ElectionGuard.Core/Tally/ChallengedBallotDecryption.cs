@@ -40,25 +40,41 @@ public class DecryptedChallengedBallot
     public required List<DecryptedChallengedContest> Contests { get; init; }
 }
 
-/// <summary>One decrypted contest of a challenged ballot, keyed by its label.</summary>
+/// <summary>
+/// One decrypted contest of a challenged ballot: its index and its label. The index names the
+/// contest whose ciphertexts Verification 13 recomputes; the label is what Verification 14 compares
+/// with the manifest's label for that index (design §4.6: "the index drives V13's ciphertext lookup,
+/// and the label is compared in V14").
+/// </summary>
 public class DecryptedChallengedContest
 {
+    /// <summary>ind_c(Λ), the contest's index in the manifest.</summary>
+    public required int Index { get; init; }
+
+    /// <summary>The contest's label as the decryption states it.</summary>
     public required string ContestId { get; init; }
 
-    /// <summary>The selectable options, keyed by their labels, in manifest order.</summary>
+    /// <summary>The selectable options, in manifest order.</summary>
     public required List<DecryptedChallengedField> Choices { get; init; }
 
-    /// <summary>The supplemental fields the contest declares (§3.3.9), keyed by their labels, in manifest order.</summary>
+    /// <summary>The supplemental fields the contest declares (§3.3.9), in manifest order.</summary>
     public required List<DecryptedChallengedField> SupplementalFields { get; init; }
 
     /// <summary>The contest data field (§3.3.10), exactly where the contest declares one; null otherwise.</summary>
     public required DecryptedChallengedContestData? ContestData { get; init; }
 }
 
-/// <summary>One verifiable field of a decrypted challenged contest: its label, σ and ξ_{i,j}.</summary>
+/// <summary>
+/// One verifiable field of a decrypted challenged contest: its index, its label, σ and ξ_{i,j}. The
+/// index selects the ciphertext Verification 13 recomputes; Verification 14 checks the label against
+/// the manifest's label for that index.
+/// </summary>
 public class DecryptedChallengedField
 {
-    /// <summary>The option's (or supplemental field's) label in the manifest.</summary>
+    /// <summary>The field's index j within its contest (the options 1..n, then the supplemental fields), the j of eq. (33).</summary>
+    public required int Index { get; init; }
+
+    /// <summary>The option's (or supplemental field's) label as the decryption states it.</summary>
     public required string Id { get; init; }
 
     /// <summary>σ_{i,j}, the plaintext the field encrypts (eq. 109).</summary>
@@ -109,8 +125,9 @@ internal sealed class ChallengedBallotStatement
     /// Every check reads the ballot object it is given, so it cannot tell a cast ballot copied (under
     /// its own or a new string id) and marked challenged from a challenged one; the status check is a
     /// sanity check only. The guardian's authorization check against the published record's cast
-    /// ballots, on id_B, H_I and C_ξB,0 (<see cref="IPublishedCastBallots"/>, user decision Q31), runs
-    /// before this and is what refuses such a copy.
+    /// and spoiled ballots, on id_B, H_I and C_ξB,0 (<see cref="IPublishedCastAndSpoiledBallots"/>,
+    /// user decision Q31; spoiled ballots too, 2026-10-09), runs before this and is what refuses such
+    /// a copy, or a spoiled ballot marked challenged.
     /// </summary>
     public static ChallengedBallotStatement For(EncryptionRecord encryptionRecord, EncryptedBallot ballot)
     {

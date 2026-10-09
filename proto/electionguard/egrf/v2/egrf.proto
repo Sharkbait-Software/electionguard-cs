@@ -287,7 +287,7 @@ message PreEncryptedCastBallot {
   reserved 4;                                   // status: CAST, implied by the item type
   uint32 weight = 5;
   google.protobuf.Timestamp encrypted_at = 6;   // when the cast record was formed
-  repeated PreEncryptedCastContest contests = 7;
+  repeated PreEncryptedCastContest contests = 7;  // ascending contest.index; exactly the style's contests
   bytes confirmation_code = 8 [(width) = 32];   // eq. (116)
   bytes chaining_field = 9 [(width) = 36];
   HashedCiphertext encrypted_ballot_nonce = 10;  // C_xiB

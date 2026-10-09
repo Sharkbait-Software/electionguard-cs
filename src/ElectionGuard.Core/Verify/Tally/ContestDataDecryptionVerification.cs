@@ -3,6 +3,7 @@ using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.Models;
 using ElectionGuard.Core.Tally;
 using System.Numerics;
+using ElectionGuard.Core.RecordFormat;
 
 namespace ElectionGuard.Core.Verify.Tally;
 
@@ -24,6 +25,20 @@ namespace ElectionGuard.Core.Verify.Tally;
 /// </summary>
 public class ContestDataDecryptionVerification
 {
+    /// <summary>
+    /// Verification 12 on items decoded from the election record (design §4.8), the decryption and the
+    /// encrypted ballot whose contest data it opens: a response v ≥ q fails 12.A, a challenge ≥ q 12.B
+    /// and β ≥ p, or a locator or H_I that is not the ballot's, 12.structure; then
+    /// <see cref="RecordItemNotEvaluableException"/> if another verification's range finding is on
+    /// either item (the ballot's 6.x, 7.x, 8.structure or 13.structure); then
+    /// <see cref="Verify(EncryptionRecord, EncryptedBallot, DecryptedContestData)"/>. See <see cref="RecordItemGate"/>.
+    /// </summary>
+    internal void Verify(EncryptionRecord encryptionRecord, RecordDecoded<EncryptedBallot> ballot, RecordDecoded<DecryptedContestData> decrypted)
+    {
+        RecordItemGate.Require(12, decrypted, ballot);
+        Verify(encryptionRecord, ballot.Value!, decrypted.Value!);
+    }
+
     /// <summary>
     /// Verifies <paramref name="decrypted"/> against the contest data field of its contest on
     /// <paramref name="ballot"/>. K-hat, H_E (from which H_I is recomputed with the ballot's id_B),

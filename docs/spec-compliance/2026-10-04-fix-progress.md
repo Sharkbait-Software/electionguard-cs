@@ -328,6 +328,9 @@ User answers (2026-10-04):
     bytes.
   - **Guardian refusal of spoiled ballots:** "Refuse spoiled too". This is a CHANGE: the guardian's sealed-record view
     and Q31 check refuse any id_B, H_I or C_ξB,0 that matches a cast OR spoiled ballot.
+- **V14 failure labeling (S10b-B question), answered 2026-10-10:** "14.structure for mismatches". 14.B and 14.D stay
+  pure label-presence checks. A decrypted contest or field whose index and label do not match the manifest reports
+  as 14.structure. This is a CHANGE from the S10b-B build and is applied in S10b-C.
 - **Cadence:** "Keep going". After each stage: commit, update this tracker, push, start the next stage. Stop only
   for a new spec contradiction or question.
 - **S7 design and API choices** (2026-10-06; implementer choices, none changes bytes the spec fixes; the first two are
@@ -593,6 +596,8 @@ User answers (2026-10-04):
     understood; `egrecord verify` exits 0 / 2 / 1 for passed-complete / passed-incomplete / failed. Unknown critical
     sections and unknown item types in sections that must verify stay `R.version` failures. G-6 now promises that no
     reader reports `Complete` with unread content.
+  - *R-3 superseded by the user's answer "Ignore them too" (2026-10-09): S10b-B removed the refusal; see "S10b-B design
+    and API choices".*
   - **R-3, near-miss manifest properties (NQ-1).** `ManifestSerializer` ignores unknown properties at every level but
     refuses one whose name equals a member's once case, `_` and `-` are disregarded (`ChainingMode`, `chaining_mode`,
     `Selection-Limit`): a loosely matching reader elsewhere would read it as that member and compute with another
@@ -656,7 +661,8 @@ User answers (2026-10-04):
     round 1: that status test reads the requester's claim and the guardian's Q31 view holds cast ballots only, so a
     spoiled ballot relabelled Challenged would be opened, as an unrecorded one already could; the record's section
     seal and signatures protect the status. Whether a guardian should also refuse a match against a spoiled ballot
-    of the sealed record is left to S10b-9/S10b-19.)
+    of the sealed record is left to S10b-9/S10b-19.) *Superseded: the user answered "Refuse spoiled too"; S10b-B made the
+    guardian's view hold spoiled ballots (see "S10b-B design and API choices").*
   - **Oneof members are messages (S8; review round 1).** W2 writes a set oneof member even at its default, so a
     scalar member would put an explicit VARINT 0 on the wire, which W6 tells an older reader to reject in an unknown
     field. Of the two fixes offered, the lint now refuses scalar oneof members (`RecordItem` complies; no bytes
@@ -674,6 +680,118 @@ User answers (2026-10-04):
     tallied (tally unchanged: 0-0: 3, 0-1: 0) and not decrypted. Output only (`encrypted-json-ballots/0-spoiled.json`
     in C:\temp\eg\data\1); no input file changed.
 
+- **S10b-B design and API choices** (2026-10-09; low-stakes implementer choices under the S10b-A readings' answers and
+  design §4, §5.7, §8.3, §9.2; none changes a hash input, `test/kat/` is unchanged and every KAT family passes):
+  - **R-3 applied.** `ManifestSerializer.RejectNearMisses` and its walk are deleted; the class remarks say member names
+    are matched exactly, so a near miss is an unknown property and is ignored. The four `NearMisses_AreRefused_ReadingR3`
+    rows became `NearMisses_AreIgnoredLikeAnyUnknownProperty_R3` (three optional-member rows and an election fact: the
+    member keeps the exactly named value or its default, the written form is the manifest without the near miss, H_B
+    differs) and a `Malformations` row "required property in another case" (the required member is then missing).
+  - **Spoiled refusal: a status-aware view, `IPublishedCastAndSpoiledBallots` / `PublishedCastAndSpoiledBallots`**
+    (replaces `IPublishedCastBallots` / `PublishedCastBallots`; the task's example name `IPublishedSubmittedBallots`
+    was not taken because "submitted" already means cast + challenged + spoiled in V5.A/11.D, and a challenged ballot
+    must never be in the view). `Match` returns `PublishedBallotMatch(Cast, Spoiled)`, each a `BallotValueMatch` flag set
+    (was `CastBallotMatch`). `BallotNonceDecryptionRefusal.SpoiledBallot` is new; a request matching a cast and a spoiled
+    ballot is refused as `CastBallot`. `Add` accepts Cast or Spoiled only; `FromRecord` skips Challenged and now
+    **refuses** (`ArgumentException`) a ballot with no recorded status or an undeclared one, where the old view skipped
+    every non-cast ballot silently (skipping would leave it unprotected). `Count` became `CastCount` and
+    `SpoiledCount`. The parameter of `DecryptBallotNonce`/`DecryptChallengedBallot` is `publishedBallots`.
+  - **An enum value that is no int32 encoding** (a varint in [2^31, 2^64 - 2^31)) is D2 at any reader age: no later
+    minor can declare it, and C# truncates it (Method B rejects it). Found by review after the gate (advisor): Method A
+    had accepted it as a newer minor's value, the one A/B disagreement the mutation test could not reach; a negative
+    vector pins it.
+  - **Canonicality check API (§8.3 amended).** `CanonicalCheck` gained an optional `Message`; besides `Check`, public
+    `CheckSegmentHeader` (D6: canonical as a `SegmentHeader`, magic "EGRF", major 2; any failure reported as "D6" with
+    the inner rule in the message) and `CheckSignedStatement` (§4.9; "R.attestation" / "R.signature"). `Check` runs Method
+    B and, on a rejection, Method A for the rule (Method B alone reports "B" for a byte mismatch). Methods A and B are
+    internal. Every enum field is required (D2 refuses an absent one): all six are (section type, device kind, status,
+    phase). Method A reads the schema from a table built once from the compiled `FileDescriptorProto` (reserved ranges
+    and width options), as the lint does, plus `google.protobuf.Timestamp`; it never consults runtime descriptors.
+  - **Vectors.** Regenerated from the current schema by the C# test helper `EgrfVectors` (synthetic byte patterns, so
+    the committed files never churn), not seeded from the feasibility run's `vectors.json`/`negatives.json`, which were
+    built against the draft schema (RecordHeader field 3 and RecordItem 2047 live, no member 16); the negative cases
+    follow the same rule list plus the W6 newer-minor cases. Layout, framing, torn-tail and zip negatives come with the
+    carriers (S10b-6/7). `EGRF_WRITE_VECTORS=1` rewrites them, as `EGRF_WRITE_SCHEMA=1` does the schema table.
+  - **Merkle vectors.** RFC 9162 has no test vectors; the Certificate Transparency reference vectors (roots for 0..8
+    leaves, and the happy-path inclusion and consistency probes) were fetched from transparency-dev/merkle
+    (`testonly/constants.go`, `testdata/{inclusion,consistency}/N/happy-path.json`) and transcribed to
+    `test/egrf/vectors/merkle-rfc9162.json`; the frontier is also cross-checked against a naive recursive MTH written
+    from the RFC's definition for 0..17 and 1,000 leaves. `VerifyConsistency` gives the two cases the RFC algorithm does
+    not reach their natural meaning (equal sizes: empty proof, equal roots; empty old tree: empty proof, empty root).
+  - **TOC.** `TableOfContents` refuses entries out of canonical (type, key) order, repeats, and the pseudo-section types;
+    `Extends(earlier)` = the earlier TOC's phase is not later and this TOC's entries of phases up to it are exactly the
+    earlier entries (so a device section appended after the seal breaks it even if it sorts last); `ConsistencyProof`
+    gives the RFC 9162 proof between the two roots. `RecordSections.FixedCritical` is true for every v2.0 type and null
+    otherwise.
+  - **Range table (§4.8, fixed).** Beyond the design's draft rows: contest data C_0/C_2 8.structure (χ hashes them,
+    eq. 70), the ballot nonce C_ξB 13.structure, guardian index 0 2.A, `ver` not a padded version string 1.A, n/k no
+    threshold scheme 1.structure, tally A/B 9.A/9.B and T 10.C (the c_i reasoning: the recomputed side is reduced, so a
+    stored value ≥ p can never match; review round 3 applied it to the election keys too, K 3.A and K̂ 3.B, which were
+    3.structure until then), contest-data β 12.structure, challenged nonces 13.structure, uncast nonces
+    18.structure, counts too large for the domain's `int` 9.structure / 10.structure. `RecordDecoded<T>` carries the
+    object or the findings (never both); findings are sorted by verification, then sub-section. The Verify entry points
+    are internal overloads (V1-V3 take a decoded `RecordSetup`; V6, V7, V8 a decoded ballot; V9 a decoded encrypted
+    tally; V10 both tallies; V12, V13 a decoded decryption; V16 and V18 a joined uncast ballot) through `RecordItemGate`;
+    the existing public APIs are unchanged. `RecordItemNotEvaluableException` is internal (VerifyAll, S10b-9, catches it).
+  - **Mapper conventions.** Generated types are aliased `Pb` in every mapper file (`Pb.EncryptedBallot` vs the domain's).
+    Encoding refuses what the record cannot carry (`ArgumentException`): status `Unrecorded`, weight below 1, a
+    pre-1970 or non-millisecond time, a contest or field the manifest lacks, a pre-encrypted record not Cast. Decoding
+    never fails on the manifest: an unknown contest index or extra field decodes under an id beginning with U+0000
+    (`WireValues.UnknownLabel`), which no manifest label is, so `BallotStructure` reports it. The domain string id is
+    `ballot_ref`, or the lowercase hex of id_B when absent (unverified either way). `RecordBallotIndex` joins locators to
+    string ids (a string id two ballots share is refused) and checks each final-phase item's H_I binding
+    ("12.structure"/"13.structure"). `EncryptedTally.TotalCastWeight` is new (the header's `total_cast_weight`; 0 for a
+    tally read from the JSON format, which does not publish it); its upkeep in `AddBallot` is one addition.
+  - **`RecordSetup`** as sketched, plus `ToGuardianRecord`, `FromEncryptionRecord` and `FromGuardianRecord(record, H_E)`
+    (the keys item requires H_E, which a guardian record does not hold). `ManifestMediaTypeFormat1` is the v2.0 media
+    type constant. DeviceKey/BallotLocator/DeviceHeader/DeviceClose/ContestDataRequest/EncryptedTallyHeader are public
+    records as sketched; the DeviceKind byte is mapped explicitly (`DeviceKey.KindNumber`/`KindOf`).
+  - **Compact uncast join.** Regenerates with `PreEncryptionPrimitives.GenerateContests` and keeps the item's χ and
+    H_C, so V16.B/V16.C catch a sealed χ that ξ_B does not regenerate; the released nonces are the regenerated
+    vectors' (eq. 121). A compact item that cannot be regenerated is "16.structure"; a release of the wrong form
+    (R-1), a foreign H_I, or a contest listed twice is "18.structure".
+  - **Completeness tests.** `RecordCompletenessTests` maps every public member (properties and fields) of 43 recorded
+    domain types to a schema field or a parenthesized exclusion; a test checks every named field exists in the schema,
+    and one that no schema field outside `RecordItem`'s envelope is named for a nonce, key, share, secret or private
+    value except an explicit list (the C_ξB ciphertexts, the final-phase openings, public keys and signature metadata).
+  - **Review round 1** (see that log entry for the reasons):
+    - `DecryptedChallengedContest.Index` and `DecryptedChallengedField.Index` are required. V13 matches by index, and
+      V14 requires each label at its index (14.B for contests, 14.D for fields).
+    - Setup findings name their item (`RecordFinding.Item`), and V1-V3 gate only the items they read.
+      `RecordDecoded<T>.Value` is still null whenever there is any finding. The decoded object is kept internally,
+      and only `ValueReading(items)` hands it on, when the items given have no finding; the setup gate is its only
+      caller.
+    - V12 and V13 gate the decoded ballot too.
+    - V6 has an uncast overload (6.A over the vectors) and V11 a record overload.
+    - An uncast ballot's C_ξB range is 18.structure.
+    - `PublishedCastAndSpoiledBallots.Add(status, id_B, H_I, C_ξB,0 bytes)` is added.
+    - `TallyMapper.ToItems` refuses a total cast weight below the cast count.
+  - **Review round 2** (see that log entry for the reasons):
+    - V6 on a cast pre-encrypted ballot checks 6.A on every entry of every selected vector (p.64), as one batch before
+      the fused/in-order dispatch, behind `IsPreEncrypted`.
+    - A guardian index of 0 stays 2.A (not 2.structure as the reviewer suggested): V2 has reported any index outside
+      1..n as 2.A since S2 (G25), and splitting index 0 off would give one condition two codes.
+    - The 14.B/14.D at-index rule is kept as built and flagged for the user (question in the round 2 log entry).
+    - `RecordBallotIndex` never joins on `ballot_ref`: reading resolves a locator, writing locates by H_I, so the
+      decryption writers take the `EncryptedBallot`. Two ballots sharing id_B make `Locate` throw (a 5.A failure).
+    - Lists the schema orders by ascending index are checked by the decoders (an index below its predecessor's):
+      ballot contests 8.structure (pre-encrypted 16.structure), uncast printed contests and vectors 16.structure,
+      challenged decryption contests 13.structure, release contests 18.structure. A repeated index is left to the
+      verifications' own structure checks.
+    - V9's record overload takes `IEnumerable<RecordDecoded<EncryptedBallot>>`; a cast ballot item with any finding
+      makes V9 not evaluable (raised after the stream is consumed). `RecordDecoded<T>.Placeholder` exposes the
+      placeholder object for that status read only.
+  - **Review round 3** (see that log entry for the reasons):
+    - K ≥ p is 3.A and K̂ ≥ p is 3.B (`RecordValueRanges.ElectionKey`/`ElectionKeyHat`), by the rule already applied to
+      9.A/9.B and 10.C: 3.A/3.B are equalities with a product reduced mod p (p.82).
+    - A final-phase item with no `ballot` locator is a finding, not a decoder exception: contest-data request and
+      decryption 12.structure, challenged ballot decryption 13.structure (`RecordBallotIndex.Resolve(Pb.BallotLocator?)`).
+      `DecryptionMapper.FromItem(Pb.ContestDataRequest)` now returns `RecordDecoded<ContestDataRequest>`.
+    - The encrypted tally header is checked as design §6.1 step E already specified: `R.summary`, by
+      `BallotAggregationVerifier.VerifySummary` (internal), not by V9 (the reviewer suggested 9.structure inside V9).
+      `BallotAggregationVerifier.WeightAdded` is new, beside `BallotsAdded`.
+    - The TOC critical-bit check (§4.5 `R.root`) is deferred to S10b-9, which reads the claimed TOC (see its row).
+
 ## Stages
 
 | Stage | G-IDs | Blocked on | Status | Commit |
@@ -690,16 +808,17 @@ User answers (2026-10-04):
 | S9 Pre-encrypted recording tool | G31 (now primitives + verifications; the tools are out of scope, user decision Q35) | after S5, S7 | done (nonce-decryption gate: S9b); partly superseded by S9c (encrypting and recording tools removed per Q35) | 97aac86 |
 | S9b Nonce-decryption authorization gate (Q31) | Q31 / S9-6; the security review finding on S7's `TallyGuardian.DecryptBallotNonce` (caller-controlled Status) | S9 | done; partly superseded by S9c (pre-encrypted half, issued list and once-only state removed per Q35; the cast-ballot record check stays) | 5d5e43c |
 | S9c Pre-encryption scope: primitives only (Q35) | remove encrypting/recording tools and guardian pre-encrypted nonce path | after S9b | done | 99296bd |
-| S10a Record correctness gaps (Q37 part A) | G40 (G39 won't fix, per Q9); S2 carry-overs: bind the parsed `Manifest` to `ManifestFile` (S2 review R1), record JSON round trip; S3/S5 carry-over: typed errors for malformed ballot documents; S4 carry-overs: a `DecryptedTally` record serializer, and a tally loaded from a record must carry or recompute each option's `MaximumCount` (S4 review R1/F2); S6/S7 carry-overs: `DecryptedContestData` and `DecryptedChallengedBallot` serializers | — | done | see next commit |
+| S10a Record correctness gaps (Q37 part A) | G40 (G39 won't fix, per Q9); S2 carry-overs: bind the parsed `Manifest` to `ManifestFile` (S2 review R1), record JSON round trip; S3/S5 carry-over: typed errors for malformed ballot documents; S4 carry-overs: a `DecryptedTally` record serializer, and a tally loaded from a record must carry or recompute each option's `MaximumCount` (S4 review R1/F2); S6/S7 carry-overs: `DecryptedContestData` and `DecryptedChallengedBallot` serializers | — | done | c4f1093 |
 | S10b Canonical ElectionRecord bundle (Q37 part B) | streaming, multi-representation election record (EGRF v2, `2026-10-08-election-record-design.md`); verify-everything entry point; device-close signing/timestamp (S8b). Split into the stages below, one per design step (§9.2) | S10a; the design (answers recorded 2026-10-09) | in progress | |
-| S10b-A EGRF groundwork | design update for NQ-1..NQ-6; S10b-0 nonce DTO cleanup; S10b-1 statuses (`Unrecorded`, `Spoiled`); S10b-1b manifest election facts and unknown-property tolerance (NQ-1, NQ-4); S10b-2 schema at `proto/electionguard/egrf/v2/egrf.proto`, codegen, schema lint | S10a | done (gate green; awaiting commit) | |
-| S10b-3 Canonicality checker | Method A and B (unknown fields per NQ-1 / W6), D1-D6, segment header, signed statements; first golden and negative vectors | S10b-A | todo | |
-| S10b-4 Domain mappers | one mapper per item; `RawZp`/`RawZq` range attribution; uncast split/join with the compact form (NQ-2); `RecordSetup`; reflection completeness test | S10b-3 | todo | |
-| S10b-5 Merkle, TOC, phase roots | RFC 9162 frontier and proofs; TOC; phase roots | S10b-A | todo | |
+| S10b-A EGRF groundwork | design update for NQ-1..NQ-6; S10b-0 nonce DTO cleanup; S10b-1 statuses (`Unrecorded`, `Spoiled`); S10b-1b manifest election facts and unknown-property tolerance (NQ-1, NQ-4); S10b-2 schema at `proto/electionguard/egrf/v2/egrf.proto`, codegen, schema lint | S10a | done | 72ce53c |
+| S10b-B EGRF core | S10b-3, S10b-4, S10b-5; R-3 change (near misses ignored); spoiled-ballot refusal in the guardian's view | S10b-A | done | see next commit |
+| S10b-3 Canonicality checker | Method A and B (unknown fields per NQ-1 / W6), D1-D6, segment header, signed statements; first golden and negative vectors | S10b-A | done (S10b-B) | |
+| S10b-4 Domain mappers | one mapper per item; `RawZp`/`RawZq` range attribution; uncast split/join with the compact form (NQ-2); `RecordSetup`; reflection completeness test | S10b-3 | done (S10b-B) | |
+| S10b-5 Merkle, TOC, phase roots | RFC 9162 frontier and proofs; TOC; phase roots | S10b-A | done (S10b-B) | |
 | S10b-6 Directory carrier | writer and reader; frame ceiling; layout rules; phase gates; `DeviceSectionWriter` (`UncastDisposition`); torn tails | S10b-4, S10b-5 | todo | |
 | S10b-7 `.zip` carrier | STORED/DEFLATE, ZIP64, local/central check; non-seekable input spooled (NQ-6) | S10b-6 | todo | |
 | S10b-8 Streaming verifier pieces | `DeviceChainWalker`, `SpillingIdentifierSet`, `BallotAggregationVerifier.Merge`, join cursors | S10b-A | todo | |
-| S10b-9 `VerifyAllAsync` | steps A-F, profiles, report (`Complete` informational for a newer minor; compact items counted as 17.A/19.A-D held by construction), checkpoints, `VerifiedAggregate`; tests that a spoiled ballot's id_B is in 5.A (a spoiled ballot sharing id_B with a cast one fails 5.A); decide, with S10b-19, whether a guardian refuses an id_B/H_I/C_ξB,0 matching a spoiled ballot of the sealed record (S10b-A review round 1) | S10b-6, S10b-8 | todo | |
+| S10b-9 `VerifyAllAsync` | steps A-F, profiles, report (`Complete` informational for a newer minor; compact items counted as 17.A/19.A-D held by construction), checkpoints, `VerifiedAggregate`; tests that a spoiled ballot's id_B is in 5.A (a spoiled ballot sharing id_B with a cast one fails 5.A); build the guardian's `IPublishedCastAndSpoiledBallots` from the sealed record (spoiled refusal decided 2026-10-09, "Refuse spoiled too"; done for regular ballots in S10b-B), from the parsed items with the raw-value `Add(status, id_B, H_I, C_ξB,0)` so items with range findings are held too (S10b-B review round 1); report every mapper finding under its code even where its owner does not run on the item (a cast or spoiled ballot's C_ξB: V13 runs on challenged ballots only; a cast pre-encrypted ballot's contests out of order, 16.structure); pass the decoded ballot items to V9's record overload (S10b-B review round 2); step E: call `BallotAggregationVerifier.VerifySummary` on the merged recount and report a mismatch of the tally header as `R.summary`, beside V9's outcome; report a contest-data request's decode finding (no locator, 12.structure) and let step C's framing pre-scan, which reads each join item's leading locator, treat an item with no locator as that structure finding, not as `R.order`; read the claimed TOC and report a standard-type entry whose `critical` bit differs from `RecordSections.FixedCritical` as `R.root` (design §4.5), with the §5.7 negative vector for it (S10b-B review round 3) | S10b-6, S10b-8 | todo | |
 | S10b-10 JSON projection, converter, diff | proto3 JSON with duplicate-member refusal; `ConvertAsync`; `DiffAsync` | S10b-6 | todo | |
 | S10b-11 Attestations and signatures | statements, signers, verifiers, policies | S10b-9 | todo | |
 | S10b-12 Python reference reader and golden records | `test/egrf/egrf_ref.py` (Method A with W6), golden records, schema-table diff against `test/egrf/schema.json` | S10b-6, S10b-7 | todo | |
@@ -709,7 +828,7 @@ User answers (2026-10-04):
 | S10b-16 Retire superseded code | old DTO tree, protobuf-net, JSON ballot/record serializers | S10b-15 | todo | |
 | S10b-17 Live tailing | may be deferred | S10b-9 | todo | |
 | S10b-18 Documentation and publication | CLAUDE.md record bullet, formal-spec skeleton, registered option numbers (user action) | S10b-16 | todo | |
-| S10b-19 Guardians open uncast pre-encrypted ballots (NQ-5) | `TallyGuardian.DecryptBallotNonce` opens an uncast pre-encrypted item from a sealed, verified record; refuses an id_B cast in it (Q31); no issued list, no once-only state; with S10b-9, decide whether it also refuses an id_B/H_I/C_ξB,0 matching a spoiled ballot of the sealed record (today the Q31 view holds cast ballots only, so a spoiled ballot relabelled challenged is opened; S10b-A review round 1) | S10b-9 | todo (after S10b) | |
+| S10b-19 Guardians open uncast pre-encrypted ballots (NQ-5) | `TallyGuardian.DecryptBallotNonce` opens an uncast pre-encrypted item from a sealed, verified record; refuses an id_B, H_I or C_ξB,0 matching a cast or spoiled ballot of it (Q31; "Refuse spoiled too", 2026-10-09; the view holds both since S10b-B); no issued list, no once-only state | S10b-9 | todo (after S10b) | |
 
 ## Pinned-value inventory
 
@@ -906,6 +1025,465 @@ every KAT family passes. No test expectation was re-pinned. What moved, by desig
   new. Counts unchanged (0-0: 3, 0-1: 0). No input under `C:/temp/eg/data` changed, so no .bak.
 
 ## Log
+
+### 2026-10-09 — S10b-B review round 3 (K and K̂ under 3.A/3.B, absent locators, tally header R.summary, 6.A order row, TOC critical bit)
+Worktree changes only; nothing committed. Five findings (spec 1, code 2, tests 2). Applied: 3 as suggested (F1, F2, F4),
+widening F2 to the contest-data request decoder. Applied differently, because the premise was wrong: 1 (F3, header).
+Deferred to S10b-9 with an explicit row entry: 1 (F5, critical bit). No hash input, KAT vector or committed fixture
+moved, and nothing was re-pinned.
+
+Per finding:
+- **Spec minor (F1), K and K̂ ≥ p were 3.structure.** Fixed. Spec p.82: 3.A is K = (∏K_i) mod p and 3.B is K̂ = (∏K̂_i)
+  mod p, so a stored K ≥ p can never satisfy 3.A. That is the c_i reasoning that put tally A/B under 9.A/9.B and T
+  under 10.C. `RecordValueRanges.ElectionKey` = "3.A" and the new `ElectionKeyHat` = "3.B"; `SetupMapper` uses them; the
+  class remark lists 3.A and 3.B among the "can never equal" codes. Checked against the other N.structure rows: none
+  is an equality with a value reduced mod p. Contest-data β (12.structure) is only a hash input to 12.B, and C_0/C_2
+  (8.structure) only hash inputs to χ. The setup theory's rows K and K-hat now expect 3.A and 3.B (V1 and V2 pass,
+  and V3 fails with that code). Design §4.8's row and the read-set example, the V3 and `SetupMapper` remarks and
+  CLAUDE.md's code list are updated.
+- **Code minor (F2), an absent locator made the decryption decoders throw.** Fixed. The new
+  `RecordBallotIndex.Resolve(Pb.BallotLocator?, ...)` reports an item that names no ballot under the caller's code and
+  returns an id that is not text. Both decryption decoders call it: contest data 12.structure, challenged
+  13.structure. The reviewer missed `DecryptionMapper.FromItem(Pb.ContestDataRequest)`, which had the same throw. It
+  now returns `RecordDecoded<ContestDataRequest>`, and no locator is 12.structure, the request join rule's code
+  (design §6.2), with a default placeholder locator that no verifier gets. Tests: a "no locator" row in
+  `ContestDataDecryption_ValueOutOfRangeOrUnbound_IsReportedUnderItsCode` and in
+  `ChallengedBallotDecryption_NonceOutOfRangeOrUnbound_Fails13Structure` (single finding, and V12 or V13 fails with
+  the code), plus a request case in `BallotLocatorsAndContestDataRequests_RoundTrip`. `ThroughBytes` runs the
+  canonicality check, so each of these rows also shows that the item with no locator is canonical. Design §4.8
+  layer 3 lists the case.
+- **Code minor (F3), nothing compares the tally header with the ballots.** Applied differently. The reviewer's
+  premise ("design §4.5 and #17 ... specify no check") is wrong. Design §6.1 step E already says "Header counts
+  against recounted cast ballots and weight (`R.summary`)", and `egrf.proto` says "checked (R.summary)". So the code
+  is `R.summary`, a record-level code, not 9.structure, and the check sits beside V9, not inside it. If V9 threw it,
+  verify-all would report an R.summary as a Verification 9 failure. `RecordFinding` cannot carry it either, because
+  `Verification` parses the number before the dot. Built:
+  - `BallotAggregationVerifier.WeightAdded`, beside `BallotsAdded`;
+  - internal `VerifySummary(EncryptedTally)`, which throws `VerificationFailedException("R.summary")` when
+    `BallotsCast` or `TotalCastWeight` differs from the recount, and refuses to run on a faulted verifier, as `Verify`
+    does.
+
+  V9 and its record overload are unchanged, so a false header still passes V9. That is right: the spec publishes
+  neither number, and nothing is computed from them. Test: `EncryptedTallyHeader_IsCheckedAgainstTheRecount_AsRSummary`,
+  5 rows (as written; count ±1; weight ±1). Each row decodes with no finding, passes V9's record overload, and checks
+  `VerifySummary`. The S10b-9 row now says to call it in step E. `EncryptedTally`'s remarks, which called the header
+  "informational", now say that decoding adds no finding and the record verifier checks it as R.summary. Design §6.1
+  step E names the method.
+- **Tests minor (F4), nothing pinned that the selected-vector 6.A comes first.** Fixed. The theory has a 4th row: it
+  negates α_1 of contest 2's selected vectors and also flips the low bit of c_0 in contest 1's first combined range
+  proof. The challenge stays below q, so there is no decode finding, the structural checks pass, and the fused path
+  runs. V6 must report 6.A. Mutation check: with the selected-vector call moved after the fused/in-order dispatch,
+  only this row failed (`Expected: "6.A"`, `Actual: "6.D"`). The other 3 still passed, so before this nothing pinned
+  the order. Reverted.
+- **Tests minor (F5), no check or vector for a TOC entry whose `critical` bit disagrees with §4.5.** Deferred, now
+  explicitly. §4.5 makes such a *claimed* entry `R.root`. Only S10b-9 reads a claimed TOC: `TableOfContents` is the
+  TOC a verifier rebuilds (its remarks say so), and a writer guard in `TocEntry` would not reach a claimed TOC.
+  The S10b-9 row now lists the check (a standard-type entry whose bit differs from `RecordSections.FixedCritical` is
+  `R.root`) and the §5.7 negative vector.
+
+Decisions taken (low-stakes; no interoperable byte moves; the codes follow design §4.8's rule and §6.1):
+- K and K̂ ≥ p are 3.A and 3.B.
+- An absent `ballot` locator is the join rule's structure code.
+- The header check is `R.summary` (§6.1 step E). It is exposed as `BallotAggregationVerifier.VerifySummary` for the
+  record verifier, not run by V9.
+- The critical-bit check belongs to S10b-9.
+
+Gate before re-pinning (all code and test changes in; nothing failed, so nothing to re-pin):
+- Build: `0 Warning(s)`, `0 Error(s)`.
+- Tests: `Passed!  - Failed:     0, Passed:   231, Skipped:     0, Total:   231` (Perf);
+  `Passed!  - Failed:     0, Passed:  2273, Skipped:     0, Total:  2273` (Core). Failing tests at that moment: none.
+  The 8 new rows: 1 contest-data, 1 challenged, 5 summary, 1 V6 order.
+- Smoke: `correctness passed`; `EncryptBallots     244       0.244       165.7      0.1657      12/4/2     1,000`,
+  `VerifyBallots      986       0.986       12.2       0.0122      1/0/0      1,000`, Tally 0.008, VerifyTally 0.004,
+  DecryptTally 0.034, VerifyDecryption 0.008 ms/ballot.
+- Console: `Challenged ballot 0-challenged, contest 0: 0-0=1, 0-1=0, contest data "Write-in: Ada Lovelace".`;
+  `Tally, contest 0: 0-0=3, 0-1=0, overvotes=0, null-votes=0, undervotes=0, undervote-difference=0, write-ins=0.`;
+  `Done.`; then the expected ReadKey `InvalidOperationException`. `tally.json` shows 0-0 voteCount 3 and 0-1 voteCount 0.
+  No input under C:\temp\eg\data changed, so there is no .bak.
+
+Gate after: the same run (only docs changed afterwards).
+
+Perf: no hot path changed (`VerifySummary` has no caller on the smoke path; the decoder changes are record-only).
+Against round 2 (0.239/0.994 ms/ballot, 165.8/12.2 MB), this round measured 0.244/0.986 and 165.7/12.2 MB: noise.
+
+Re-pinned tests: none. Changed by decision: the setup theory's K and K-hat rows (3.structure → 3.A, 3.B), and the
+request round-trip test now reads `.Value` from the `RecordDecoded` the decoder returns.
+
+Carry-overs (all in the S10b-9 row):
+- Call `VerifySummary` in step E.
+- Report a request's no-locator finding.
+- Step C's framing pre-scan must treat a join item with no locator as that structure finding, not as `R.order`.
+- The claimed TOC's critical bits (`R.root`), with the §5.7 negative vector.
+- The round 1 and round 2 carry-overs stand.
+- The 14.B/14.D question from round 2 is still open.
+
+### 2026-10-09 — S10b-B review round 2 (cast selected vectors under 6.A, ballot_ref join, in-item order, V9 gate, test gaps)
+Worktree changes only; nothing committed. Eleven findings (spec 3, code 4, tests 4). Applied: 8 (the spec-major and
+code-minor V6 findings are one gap, fixed once). Kept as built with an explanation: 1 (guardian index 0). Kept as
+built and flagged for the user: 1 (14.B at index). No hash input, KAT vector or committed fixture moved, and nothing
+was re-pinned.
+
+Per finding:
+- **Spec major + code minor, V6 on a cast pre-encrypted ballot's selected vectors.** Fixed. Before this, only the
+  mapper's ≥ p check covered them: −α_1 and −α_2 in two selected vectors multiply to the combined vector's member, so
+  V6 (combined only), V15 (product) and V7 all passed. `SelectionEncryptionsWellFormedVerification.Verify(EncryptedBallot, ...)`
+  now runs one `SubgroupMembership.IndexOfFirstNonMember` batch over every α and β of every selected vector, behind
+  `IsPreEncrypted`, after `BallotStructure.Require` and before the fused/in-order dispatch. So 6.A still precedes
+  every other failure, and the regular-ballot path is unchanged. Missing lists or vectors are skipped: their shape is
+  V15-V17's structure check. Test: `PreEncryptedCastBallot_Verification6_ChecksEverySelectedVectorEntryIsInTheSubgroup`
+  (3 rows: α_1, β_1, β_4; both of contest 2's selected vectors negated, so V15 and V7 pass, V6 fails 6.A naming the
+  entry). With the call removed, all 3 rows fail.
+- **Spec minor, guardian index 0 → 2.structure.** Not changed. `GuardianPublicKeyVerification.Verify(guardians)` has
+  reported an index outside 1..n as 2.A since S2 (G25, `GuardianSet.RequireComplete`): the set must be G_1..G_n, and
+  with an index outside it some G_i is missing, whose 2.A ("for each guardian G_i, 1 ≤ i ≤ n ... are in Z_p^r")
+  cannot be confirmed. The mapper's index 0 is the same condition. Moving only it to 2.structure would report index
+  0 as 2.structure and index n + 1 as 2.A. `RecordValueRanges.GuardianIndex` (= `GuardianKey`) now names the code
+  and its basis, and the §4.8 row says why.
+- **Spec minor, 14.B at index.** Kept as built and flagged for the user (see the question below). The class remarks and
+  design §4.6 now say that the at-index rule is an extension of 14.B/14.D's letter, and why it is needed: without it a
+  label paired with another contest's index passes V13 (by index) and V14 (by label presence).
+- **Code major, `RecordBallotIndex` keyed on `ballot_ref`.** Fixed. The index no longer has a string-id dictionary.
+  `_byLocator` holds (string id, H_I), so `Resolve` and `BallotId` never look up a string. `Locate` takes an H_I and
+  throws only for an H_I that no ballot or two ballots have (two would share id_B, a 5.A failure). `AddDevice` never
+  throws. `DecryptionMapper.ToItem` for contest data and challenged ballots now takes the `EncryptedBallot` and
+  refuses a decryption of another ballot id. Test: `BallotIndex_TwoDevicesWithTheSameBallotRef_StillJoinEveryItem`
+  (two devices with "0001": both resolve, H_I stays binding, both locate; a shared id_B makes `Locate` throw).
+- **Code minor, ascending order inside items.** Fixed in the decoders. `WireValues.RequireAscending` reports an
+  index below its predecessor's:
+  - a regular ballot's contests: 8.structure (V8 hashes them into H_C in index order, eq. 59);
+  - a cast pre-encrypted ballot's contests: 16.structure (eq. 116; V8 does not apply, p.64);
+  - an uncast ballot's printed contests (full and compact) and a contest's vectors: 16.structure;
+  - a challenged decryption's contests: 13.structure;
+  - a release's contests: 18.structure.
+  A repeated index is not reported there: it is a content error that the verifications' structure checks already
+  report (a contest listed twice). `egrf.proto` gains the missing "ascending contest.index" comment on
+  `PreEncryptedCastBallot.contests` (a comment only; the descriptor and `schema.json` are unchanged). Design §4.6 and
+  §4.8 layer 3 state the rule. Tests: `Items_ContestsOutOfIndexOrder_AreReportedUnderTheirStructureCode` (3 rows) and
+  4 new rows in `UncastBallot_ReleaseOrValueOutOfShape_IsReportedUnderItsCode`.
+- **Code minor, V9 record overload.** Fixed. It takes `IEnumerable<RecordDecoded<EncryptedBallot>>`. It gates the tally
+  first. It then streams the ballots, skipping those without a domain object, and remembers the first cast one
+  (status read through the new `RecordDecoded<T>.Placeholder`). After aggregation it throws
+  `RecordItemNotEvaluableException(9, finding)`. A challenged or spoiled item's finding does not matter to V9. Test:
+  `Verification9_ACastBallotItemWithAFinding_IsNotEvaluable_ASpoiledOneIsLeftOut` (maxDegreeOfParallelism 1 and −1).
+- **Tests major, setup read sets.** Fixed. The theory's read sets are written out from design §4.8 (`SetupReads`);
+  `Setup_ReadSets_AreTheDesigns` checks the production sets against them. New row: K_i,0 ≥ p (2.A; V3 not evaluable,
+  V1 passes). With `GuardianItem` dropped from `ReadByVerification3`, the 6 guardian rows and the read-set test fail
+  (under the old theory every row passed).
+- **Tests minor, challenged writer refusals.** Added `ChallengedBallotDecryption_TheWriterRefusesAMislabelledOrIncompleteDecryption`
+  (5 rows): contest index/label not a manifest pair, field label not the manifest's at its index, declared field
+  missing, undeclared field, decryption of another ballot.
+- **Tests minor, `TotalCastWeight` through `AddBallots`.** Added
+  `BallotStatusAndWeightTests.AddBallots_TotalCastWeight_IsTheCastBallotsWeights_InParallelToo`: weighted ballots
+  (one spoiled), maxDegreeOfParallelism 1, 4 and −1, both `AddBallots` overloads against the sequential `AddBallot`
+  (total 70).
+- **Tests minor, uncast V6 coverage.** `UncastBallot_Verification6_ChecksEveryVectorEntryIsInTheSubgroup` is now a
+  4-row theory: α_1 and β_1 of the first vector, β_3 of the first vector, and α_4 of the last vector of the last
+  contest. Each row checks 6.A and the entry named in the message.
+
+Decisions taken (low-stakes; no interoperable byte moves):
+- The guardian-index code stays 2.A, following G25.
+- In-item order findings use the structure code of the verification that reads the list in that order. Repeats stay
+  with the existing structure checks.
+- The decryption writers take the ballot, not a string id.
+- `RecordDecoded<T>.Placeholder` is for the V9 status read only.
+
+Question for the user (does not block; the code keeps the S10b-B round 1 behaviour):
+- **14.B/14.D at index.** The decryption carries an index and a label per contest and field. V13 opens ciphertexts by
+  index. The spec's 14.B and 14.D only require each manifest label to appear. Options:
+  - (a) Keep as built: a label at another contest's or field's index fails 14.B (contest) or 14.D (field).
+  - (b) Keep 14.B/14.D as presence checks, and report an (index, label) pair that is not the manifest's as
+    14.structure, for contests and fields alike.
+  Either way the decryption fails V14. Only the code differs, and other-language verifiers must use the same one.
+  Recommendation: (b). It follows §4.8's "lettered where the spec assigns a letter; N.structure otherwise", which
+  this round applied to the other codes. Note that HEAD's design text already said "a mislabelled field fails 14.D",
+  which is the field half of (a).
+
+Gate before re-pinning (all code and test changes in; nothing failed, so nothing to re-pin):
+- Build: `0 Warning(s)`, `0 Error(s)`.
+- Tests: `Passed!  - Failed:     0, Passed:   231, Skipped:     0, Total:   231` (Perf);
+  `Passed!  - Failed:     0, Passed:  2265, Skipped:     0, Total:  2265` (Core). Failing tests at that moment: none.
+- Smoke: `correctness passed`; `EncryptBallots     239       0.239       165.8      0.1658      12/3/2     1,000`,
+  `VerifyBallots      994       0.994       12.2       0.0122      0/0/0      1,000`, Tally 0.008, VerifyTally 0.004,
+  DecryptTally 0.036, VerifyDecryption 0.008 ms/ballot.
+- Console: `Challenged ballot 0-challenged, contest 0: 0-0=1, 0-1=0, contest data "Write-in: Ada Lovelace".`;
+  `Tally, contest 0: 0-0=3, 0-1=0, overvotes=0, null-votes=0, undervotes=0, undervote-difference=0, write-ins=0.`;
+  `Done.`; then the expected ReadKey `InvalidOperationException`. `tally.json` shows 0-0 voteCount 3 and 0-1 voteCount 0.
+  No input under C:\temp\eg\data changed, so there is no .bak.
+
+Gate after: the same run (docs changed afterwards only).
+
+Perf: V6's only new work is behind `IsPreEncrypted`, and smoke has no pre-encrypted ballots. Against round 1 (0.240/0.994
+ms/ballot, 165.6/12.3 MB), this round measured 0.239/0.994 and 165.8/12.2 MB: noise.
+
+Re-pinned tests: none. Changed by decision: `RecordBallotIndex.Locate` takes an H_I and the decryption writers take the
+ballot, so their test call sites changed. The V9 record-overload call sites now pass decoded ballots.
+
+Carry-overs:
+- S10b-9:
+  - Pass decoded ballot items to V9.
+  - Report a cast pre-encrypted ballot's 16.structure order finding from the item's findings.
+  - The record writer must pair each decryption with its ballot by locator, not by string id.
+    `DecryptionMapper.ToItem` checks only `ballot.Id == decrypted.BallotId`, so with two ballots sharing a
+    `ballot_ref` a caller that passes the wrong one is not caught. The domain decryption carries no H_I.
+  - The round 1 carry-overs stand.
+- A cast pre-encrypted item with a missing `contest` message after the first position reads as index 0 in the order
+  check, so it is reported as a 16.structure order finding rather than as a shape error. It is 16.structure either
+  way.
+- The 14.B/14.D code question above.
+
+### 2026-10-09 — S10b-B review round 1 (challenged indices, per-item setup gate, owners for every range code, raw view Add, tamper gaps)
+Worktree changes only; nothing committed. Ten findings (spec 3, code 3, tests 4); all applied, none rejected. Two
+are applied differently from the suggestion, as noted. No hash input, KAT vector or committed fixture moved, and
+nothing was re-pinned.
+
+Per finding:
+- **Spec major, challenged-ballot indices (DecryptionMapper, V13).** Design §4.6 says "the index drives V13's
+  ciphertext lookup, and the label is compared in V14". `DecryptedChallengedContest` and `DecryptedChallengedField`
+  gain a required `Index` (ind_c, and the j of eq. 33). `TallyGuardian` fills it, the mapper decodes it (an index
+  above 2^31 - 1 decodes as -1), and the writer refuses an object whose index and label disagree with the manifest.
+  The JSON serializer writes it as `index`, and its strict reader requires it.
+  V13 keys contests and fields by index. V14 requires each manifest label at its own index: a contest's under 14.B, a
+  field's under 14.D. A duplicate index is 14.structure.
+  Results:
+  - Swapped indices with labels kept: 13.B and 14.D.
+  - Swapped labels with indices kept: V13 passes, 14.D.
+  - A label that is no manifest label: V13 passes, 14.C, not 14.D as the finding expected. The spec checks 14.C ("each
+    option label ... occurs ... in the manifest") before 14.D, and 14.C fails first.
+  - An unknown contest index with the label kept: 13.structure and 14.B.
+  Without the at-index rule, a label swap would pass both V13 (crypto by index) and V14 (set comparison).
+  Tests:
+  - `RecordMapperTests.ChallengedBallotDecryption_IndicesDriveVerification13_LabelsVerification14` (5 rows).
+  - `ChallengedBallotDecryptionTests.MislabelledFields_PassVerification13_AndFailVerification14`.
+  - V13 rows: "unknown option index", "contest index not on the ballot", "two options' indices swapped, labels kept".
+  - V14 rows: labels swapped, indices swapped, contest at another index, index listed twice.
+  - The V13 row "unknown option label" (13.structure) is removed. Under the decision above it is V14's (14.C), and the
+    new Fact covers it. V13 no longer reads contest or field labels at all: a null contest label now passes V13 and
+    fails 14.structure.
+  - "contest not on the ballot" now also moves the index.
+  - `RecordCompletenessTests` maps both `Index` members.
+- **Spec and code minor, setup gate per item (SetupMapper, V1-V3).** `RecordFinding` gains `Item`, the `RecordItem`
+  member the value came from. `RecordDecodeContext.Item` sets it. `RecordDecoded<T>` gains `FindingsOn` and
+  `ValueReading`. `RecordItemGate.Require(item, n, reads)` counts only the findings on the items the verification
+  reads:
+  - V1: `parameters` and `manifest_file`.
+  - V2: `guardian_public_key`. V2 and V3 take n and k from `EGParameters`, never from the record.
+  - V3: `guardian_public_key` and `election_keys`.
+  Placeholders sit only in items the verification does not read. `Setup_ValueOutOfRange_IsReportedUnderItsCode` now
+  asserts, for every row, the owner's failure, `RecordItemNotEvaluableException` on the verifications that read the
+  item, and a pass on the others. For example, K ≥ p: V1 and V2 pass and V3 fails 3.structure. The old line 239
+  pinned the cross-item behaviour and is replaced.
+- **Spec minor, the raw view Add.** `PublishedCastAndSpoiledBallots.Add(status, id_B, H_I, C_ξB,0 bytes)` holds a sealed
+  record item's raw values. The C_ξB,0 key is the SHA-256 of its 512 bytes, the same key the domain Add uses. An empty
+  C_ξB,0 holds id_B and H_I only. There is no H_I = H(H_E; 0x20, id_B) check, because holding more only refuses more.
+  Other statuses and widths are refused. Tests: `Add_RawValues_MatchAsTheDomainBallotDoes` and
+  `Add_RawValues_HeldAsStored_OtherStatusesAndWidthsRefused`. The S10b-9 stage row now uses it.
+- **Code major, codes with no owning entry point.**
+  - (a) The record overloads of V13 and V12 take `RecordDecoded<EncryptedBallot>` and gate both items, as V10 does. The
+    ballot's 13.structure is V13's failure, and a ballot finding of 6.x-8.structure leaves V12 and V13 not evaluable.
+    Before this, V12 could not even be called for a ballot with a finding.
+  - (b) V6 gains `Verify(RecordDecoded<PreEncryptedUncastBallot>)` and a public `Verify(PreEncryptedUncastBallot)`.
+    An uncast ballot has no proofs, so this is 6.A over every vector entry, using
+    `SubgroupMembership.IndexOfFirstNonMember`. Spec p.64: V6 covers "all individual selection encryptions within the
+    selection vectors on pre-encrypted ballots". Before this, no code checked it.
+  - (c) V11 gains `Verify(Manifest, RecordDecoded<DecryptedTally>, IReadOnlyCollection<string>)`, the owner of
+    11.structure (a label listed twice).
+  - Found while doing (a)-(c) and not raised by the reviewer: an uncast ballot's own C_ξB was reported as 13.structure,
+    but V13 never runs on an uncast ballot ("Verification 13 is replaced by Verification 18", p.66). It is now
+    `RecordValueRanges.UncastBallotNonce` = 18.structure, a new row in the design §4.8 table.
+  - Every code in the table now has an owner. The design §4.8 text now says that the record verifier reports each
+    finding once, under its code, even when its owner does not run on the item. V13 runs only on challenged ballots,
+    so a cast ballot's C_ξB ≥ p is reported from the item's findings. This is an S10b-9 carry-over.
+- **Code minor, a false `total_cast_weight`.** `TallyMapper.ToItems` refuses a tally whose `TotalCastWeight` is below
+  `BallotsCast` (`ArgumentException`). Every weight is at least 1, so that total is unknown: it is what a tally
+  restored from JSON carries. The header stays informational (#17), and decoding adds no finding.
+  Test: `EncryptedTally_WithoutItsTotalCastWeight_IsRefusedByTheWriter`.
+- **Tests major, pre-encrypted cast tampers.** New: `PreEncryptedCastBallot_ValueOutOfRange_IsReportedUnderItsCode`, 6
+  rows (selected-vector α and β, combined α: 6.A; combined proof c/v: 6.B/6.C; limit proof c: 7.B). Each row checks a
+  single finding, the owner's failure and the other verification's `RecordItemNotEvaluableException`. V8 is not used
+  for pre-encrypted ballots (p.64), so it is not called.
+- **Tests minor, V16 own-code check.** The uncast theory now asserts `Assert.Single` and, for every row, V6, V16 and V18
+  through the gate: the owner throws its code and the other two throw NotEvaluable. New Fact:
+  `UncastBallot_Verification6_ChecksEveryVectorEntryIsInTheSubgroup` (−α passes the range and fails 6.A and 18.x).
+- **Tests minor, unreported rows.** All three kinds now assert a verification outcome: the ballot nonce rows through
+  V13 (and V12 NotEvaluable), uncast 6.A through V6, and 11.structure through V11.
+- **Tests minor, missing rows.** Added:
+  - Setup: guardian index 0 (2.A), K-hat ≥ p (3.structure).
+  - Ballot: c_B and v_B ≥ q (13.structure), undervote-difference proof c (7.B), null-vote proof v (7.C).
+  - Tally: `cast_ballot_count` = 2^31 (9.structure), an encrypted contest listed twice (the `Restore` failure,
+    9.structure), t = 2^31 (10.structure), a decrypted contest or field label listed twice (11.structure). This theory
+    now asserts V9, V10 and V11 for every row.
+  - Uncast: a compact item whose release lacks ξ_B (18.structure), and the uncast C_ξB,0 ≥ p (18.structure).
+
+Decisions taken (low-stakes, internal or additive; no interoperable byte moves):
+- The challenged decryption carries a required `Index` on contests and fields. The domain object, not only the
+  record, matches by index, so the in-memory path and the record path agree. The JSON form gains `index`; it is the
+  library's own retiring format, which the console writes and reads back within one run.
+- The at-index rule is reported under 14.B (contests) and 14.D (fields), following design §4.6's "a mislabelled field
+  fails 14.D". It is not a new 14.structure code.
+- Setup findings are tagged by item, rather than splitting `RecordSetup` into per-item decoded objects. The test API
+  and every caller stay the same.
+- An uncast ballot's C_ξB range is 18.structure (p.66).
+- `TallyMapper.ToItems` refuses an unknown total weight. It does not compute a total from per-contest weights, because
+  that is impossible when ballot styles differ.
+
+Gate before re-pinning (all code and test changes in; nothing failed, so nothing to re-pin):
+- Build: `0 Warning(s)`, `0 Error(s)`.
+- Tests: `Passed!  - Failed:     0, Passed:   231, Skipped:     0, Total:   231` (Perf);
+  `Passed!  - Failed:     0, Passed:  2238, Skipped:     0, Total:  2238` (Core). Failing tests at that moment: none.
+- Smoke: `correctness passed`; `EncryptBallots     244       0.244       165.8      0.1658      12/4/2     1,000`,
+  `VerifyBallots      1,001     1.001       12.4       0.0124      2/1/1      1,000`.
+- Console: all verifications ran; `Challenged ballot 0-challenged, contest 0: 0-0=1, 0-1=0, ...`;
+  `Tally, contest 0: 0-0=3, 0-1=0, overvotes=0, null-votes=0, undervotes=0, undervote-difference=0, write-ins=0.`;
+  `Done.`; then the expected ReadKey `InvalidOperationException`. `tally.json` shows 0-0 voteCount 3 and 0-1 voteCount 0.
+
+Gate after (final, once the uncast C_ξB code and the challenged-ballot ballot choice were added):
+- Build: 0 warnings, 0 errors.
+- Tests: Perf 231/231; Core `Passed: 2239, Total: 2239`.
+- Smoke: `correctness passed`; `EncryptBallots     240       0.240       165.6      0.1656      12/3/2     1,000`,
+  `VerifyBallots      994       0.994       12.3       0.0123      0/0/0      1,000`, Tally 0.008, VerifyTally 0.004,
+  DecryptTally 0.035, VerifyDecryption 0.008 ms/ballot.
+- Console: same lines. `challenged-ballots.json` now carries `index`, and reads back. No input under C:\temp\eg\data
+  changed, so there is no .bak.
+
+Perf: no hot path changed. The pipeline's only touch is one more `int` set per challenged field. Smoke against S10b-B
+(0.248/1.007, 0.241/1.003) is 0.244/1.001 and 0.240/0.994, with allocation unchanged: noise.
+
+Re-pinned tests: none. Expectations changed by decision:
+- The V13 "unknown option label" row is removed (now 14.C).
+- The setup theory's cross-item NotEvaluable assertion is replaced by the per-item one.
+
+Carry-overs:
+- S10b-9:
+  - Fill the guardian's view with the raw `Add` from parsed items.
+  - Report every mapper finding under its code even where its owner does not run on the item.
+  - Call V6's uncast overload and V11's record overload.
+  - Pass decoded ballots to V12 and V13.
+- No in-memory pipeline calls the new public `SelectionEncryptionsWellFormedVerification.Verify(PreEncryptedUncastBallot)`
+  yet; the pre-encryption tests run V15-V19 only. S10b-9 wires the record path, and S10b-15 can wire the console.
+- A `challenged-ballots.json` written before this change has no `index` members, so the strict reader refuses it. No
+  fixture or KAT holds one, and the console regenerates its own; the format retires in S10b-16.
+- The earlier S10b-B carry-overs stand.
+
+### 2026-10-09 — S10b-B (EGRF core: canonicality checker, domain mappers, Merkle/TOC/phase roots; R-3 change, spoiled refusal)
+Worktree changes only; nothing committed (S10b-A was committed as 72ce53c while this ran). Implements design steps
+S10b-3, S10b-4 and S10b-5 and the two changes the user's answers to S10b-A's readings ask for ("S10b-A readings,
+answered 2026-10-09"). No hash input, KAT vector (`git diff HEAD -- test/kat test/data` empty), committed fixture or
+pinned value moved, and nothing was re-pinned. Decisions: "S10b-B design and API choices" under Decisions.
+
+Per item:
+- **R-3 change (near-miss manifest names).** `ManifestSerializer.RejectNearMisses`, its walk and `Loose` are deleted;
+  the remarks now say member names are matched exactly and a near miss is ignored like any unknown property. Tests:
+  `NearMisses_AreRefused_ReadingR3` (4 rows) became `NearMisses_AreIgnoredLikeAnyUnknownProperty_R3` (4 rows: optional
+  member in another case and in snake case, a kebab-case name beside the member, an election fact in another case;
+  each reads, the member keeps its value or default, the written form is the manifest without it, H_B differs) and
+  a `Malformations` row "required property in another case" (still refused: the required member is then missing).
+  Design §4.6, §12 (R-3 answered), §9.2 S10b-1b row; CLAUDE.md's manifest sentence; the S10b-A decision bullet is
+  marked superseded.
+- **Spoiled refusal (guardian's view).** `IPublishedCastBallots`/`PublishedCastBallots` became
+  `IPublishedCastAndSpoiledBallots`/`PublishedCastAndSpoiledBallots` (status-aware: per status, id_B/H_I/SHA-256(C_ξB,0)
+  sets; `Match` returns `PublishedBallotMatch(Cast, Spoiled)` of `BallotValueMatch` flags). `TallyGuardian.DecryptBallotNonce`
+  refuses a match on a spoiled ballot with the new `BallotNonceDecryptionRefusal.SpoiledBallot` (a cast match wins when
+  both match). `FromRecord` skips challenged ballots and refuses an unrecorded or undeclared status. Call sites: the
+  console, three KAT constructors (no KAT value involved), two fixtures, `ElectionRecordSerializationTests`. Tests:
+  `PublishedCastAndSpoiledBallotsTests` (replaces `PublishedCastBallotsTests`: holds cast and spoiled, regular and
+  pre-encrypted, not challenged; status refused when unrecorded or 7; per-status matching by content; Add refusals);
+  `ChallengedBallotDecryptionTests`: `DecryptBallotNonce_SpoiledBallotRelabelledChallenged_IsRefusedByTheRecordCheck`
+  (same id and new id; the copy passes structure, the eq. (38) proof and an empty view, and is refused with
+  `SpoiledBallot` before any exponentiation, by guardians and the administrator) and
+  `DecryptBallotNonce_ChallengedBallotSharingAValueWithASpoiledBallot_IsRefused` (id_B+H_I, H_I, C_ξB,0; plus a request
+  matching a spoiled id_B and a cast C_ξB,0, refused as `CastBallot`). Docs: `BallotStatus.Spoiled`,
+  `ChallengedBallotStatement.For`, `TallyGuardian`, design §3.3/§5.6/§8.3/§9.2 (S10b-9 and S10b-19 rows: decided),
+  CLAUDE.md Tally paragraph; the S10b-A status bullet is marked superseded.
+- **S10b-3, canonicality checker** (`RecordFormat/CanonicalProtobuf.cs`, `EgrfSchema.cs`). Method A (the wire walk over a
+  schema table built from the compiled `FileDescriptorProto`: W1-W6, W8 during the walk, then D1-D5; W6's unknown-field
+  branch for a record of a newer minor: after every known field, ascending, above every declared or reserved number,
+  VARINT ≠ 0 or LEN, a VARINT not repeated; a `RecordItem`'s only field may be an unknown member, not at a reserved
+  number) and Method B (discard-unknown parse at the reader's minor, keep-unknown plus Method A's W6 branch for a newer
+  one; D1-D5 by reflection; re-serialize and compare). `Check` = B, then A for the rule. `CheckSegmentHeader` (D6) and
+  `CheckSignedStatement` (§4.9). Vectors (`test/egrf/vectors/items.json`, `negatives.json`; generated by `EgrfVectors`,
+  `EGRF_WRITE_VECTORS=1`): 27 golden items (one per member) and a segment header with leaf hash and proto3 JSON, 7
+  newer-minor items, 59 negatives covering W1-W6, W8, D1-D6, R.attestation, R.signature. Tests (`CanonicalProtobufTests`,
+  9): committed vectors are the generated ones; goldens canonical by both methods, re-encode, leaf hash and JSON round
+  trip; every negative rejected by both methods with Method A naming its rule; newer-minor items accepted with unknown
+  content, re-encoded unchanged, rejected at the reader's own minor; encode-then-check; every single-byte mutation of
+  every golden item (3 masks, both reader ages) judged the same by A and B (no disagreement found); the hand-built
+  vectors likewise; out-of-range values are canonical.
+- **S10b-4, domain mappers** (`RecordFormat/Mappers/`, internal; `RawValues.cs`, `RecordItems.cs`). One mapper per item
+  type: setup (`RecordSetup` ↔ header, parameters, manifest file byte for byte, guardian keys, election keys),
+  ballots (regular and cast pre-encrypted, all statuses, B_C, contest data, C_ξB, timestamp as `Timestamp` ms),
+  uncast split/join (compact iff ξ_B released, R-1; the compact join regenerates from ξ_B), device header/close ↔
+  `DeviceChainRecord`, locators, contest-data requests and decryptions, challenged-ballot decryptions, encrypted
+  tally + header (new `EncryptedTally.TotalCastWeight`), decrypted tally. `RawZp`/`RawZq` and the §4.8 range table
+  (`RecordValueRanges`, fixed; design §4.8 rewritten), `RecordDecoded<T>`, and internal record-item overloads of V1-V3,
+  V6-V10, V12, V13, V16, V18 through `RecordItemGate` (`Verify/RecordItemGate.cs`). Tests: `RecordMapperTests` (53:
+  round trips per type with the decoded object passing the verifications that read it and re-encoding to the same
+  bytes; manifest bytes byte for byte with vendor data and whitespace; GuardianRecord through the setup items;
+  the writer's refusals; range tampers per type asserting the code, the owning verification's failure and the others'
+  `RecordItemNotEvaluableException`: setup 2.A ×2, 2.B, 2.C, 3.structure, 1.A, 1.structure; ballot 6.A ×2, 6.B, 6.C,
+  7.B, 7.C, 8.structure ×2, 13.structure; uncast 18.structure ×4, 6.A, 16.structure, and a compact χ that ξ_B does not
+  regenerate failing V16; tallies 9.A, 9.B, 10.C, 10.B, 10.A; contest data 12.structure ×3, 12.B, 12.A; challenged
+  13.structure ×3; manifest-unknown contest and field failing 6.structure; `RawZp`/`RawZq` never reduce) and
+  `RecordCompletenessTests` (3: every public member of 43 recorded domain types mapped or excluded, `EncryptedValue.EncryptionNonce` among them; every named field
+  exists; no schema field named for a secret beyond an explicit list).
+- **S10b-5, Merkle, TOC, phase roots** (`RecordFormat/Sha256Digest.cs`, `Merkle.cs`, `RecordSections.cs`,
+  `TableOfContents.cs`). `MerkleTree`, `MerkleFrontier` (serialize/resume), `MerkleProofs` (RFC 9162 §2.1.3/§2.1.4
+  generation and verification), `TocEntry`/`TableOfContents` (canonical order enforced, `PhaseRoot`, `Extends`,
+  `ConsistencyProof`), `RecordSections` (phase, vendor range, fixed critical bit), `RecordDigests` (codes root with the
+  design's exact leaf bytes, section root), `RecordFormatVersion`, `RecordPhase`, `RecordSectionType`. Vectors:
+  `test/egrf/vectors/merkle-rfc9162.json`, the Certificate Transparency reference vectors transcribed from
+  transparency-dev/merkle (fetched 2026-10-09; RFC 9162 has none). Tests: `MerkleTests` (8: reference roots for 0..8,
+  reference inclusion and consistency probes verify and equal the generated proofs; frontier = naive recursive MTH for
+  0..17 and 1,000; serialize/resume at every cut of 70 leaves; all inclusion proofs for 1..17 leaves with tampers;
+  consistency for every prefix pair up to 17 and 600/1,000 with a changed leaf rejected; codes-root leaf bytes;
+  digest round trip and order), `TableOfContentsTests` (7: TOC leaf bytes canonical and tagged 0x92 0x03; phase of a
+  type; phase roots are prefixes with consistency proofs and equal each earlier record's own root; `Extends` holds for
+  every earlier phase and fails for a ballot appended after the seal, a changed root, a late device sorting last and a
+  removed section; order, repeat and pseudo-section refusals; key equality by content).
+
+Gate before re-pinning (all code and test changes in; no test failed, so nothing to re-pin; the gate before is the gate
+after):
+- Build: `0 Warning(s)`, `0 Error(s)`.
+- Tests: `Passed!  - Failed:     0, Passed:   231, Skipped:     0, Total:   231` (Perf);
+  `Passed!  - Failed:     0, Passed:  2204, Skipped:     0, Total:  2204` (Core; 2114 + 90). Failing tests at that
+  moment: none.
+- Smoke: `correctness passed`; `EncryptBallots     248       0.248       165.7      0.1657      12/3/2     1,000`,
+  `VerifyBallots      1,007     1.007       12.2       0.0122      0/0/0      1,000`, Tally 0.008, VerifyTally 0.004,
+  DecryptTally 0.035, VerifyDecryption 0.008 ms/ballot; a second run 0.241 / 1.003.
+- Console: all verifications ran, `Tally, contest 0: 0-0=3, 0-1=0, overvotes=0, null-votes=0, undervotes=0,
+  undervote-difference=0, write-ins=0.`, `Done.`, then the expected ReadKey `InvalidOperationException`; `tally.json`
+  0-0 voteCount 3, 0-1 voteCount 0. No input under C:\temp\eg\data changed, so no .bak.
+
+Perf: no hot path changed except one addition per cast ballot in `EncryptedTally.AddBallot` (`TotalCastWeight`).
+Smoke vs S10b-A (Encrypt 0.240, Verify 0.979 ms/ballot): 0.248 / 1.007 and 0.241 / 1.003, allocation 165.7 and 12.2 MB
+as before. Within S10b-A's own spread (0.240-0.245 encrypt, 0.981-1.005 verify across its runs): noise.
+
+Re-pinned tests: none. Test expectations changed by decision: `NearMisses_AreRefused_ReadingR3` (R-3 now ignores them;
+rows kept as positive cases, one moved to `Malformations`), `PublishedCastBallotsTests` replaced by
+`PublishedCastAndSpoiledBallotsTests` ("not as cast" refusal of a spoiled ballot became acceptance as spoiled), and
+`ChallengedBallotDecryptionTests` adapted to the renamed match type (`CastBallotMatch` → `PublishedBallotMatch.Cast`).
+
+Carry-overs:
+- S10b-6: carriers use `CheckSegmentHeader` (path agreement is theirs), the frame ceiling, and `MerkleFrontier` per
+  section; layout/framing/torn-tail/zip negatives join `negatives.json` then.
+- S10b-9: drive the internal record-item overloads (catch `RecordItemNotEvaluableException` as NotEvaluable); build the
+  guardian's `IPublishedCastAndSpoiledBallots` from the sealed record; the S10b-A carry-overs (5.A spoiled id_B test,
+  compact items counted for V17/V19) stand.
+- S10b-12: the Python reader reproduces `items.json`, `negatives.json` (Method A rules) and `merkle-rfc9162.json`.
+- S10b-15: allocation of the Google.Protobuf parse path (Method B copies each item once) measured then.
+- S10b-9: an item with a range finding has no domain object (`RecordDecoded.Value` is null), but design §4.8 still
+  digests it, chain-walks it and enters it into 5.A: take id_B, H_I, H_C and B_C (and the `DeviceChainLink`) from the
+  parsed `Pb` item, not from `Value`.
+- S10b-9 (or S10b-6): the mappers never fail on the manifest, but an absent required *message* (a `ballot` locator on a
+  request, release or decryption; `contest` in a `PreEncryptedCastContest`) throws `ArgumentException` or
+  `NonCanonicalEncodingException` from the mapper (D1 covers absent width fields, not messages); the record verifier
+  reports those as the consuming verification's `N.structure`.
+
+After the gate (test and check changes only, re-run): `RecordCompletenessTests` gained `EncryptedValue` (whose
+`EncryptionNonce` is the member the test exists for), `SchnorrProof`, `GuardianParameters`, `ManifestFile`, `DeviceKey`
+and `BallotNonce` (43 types); Method A refuses an enum value that is no int32 encoding at any reader age (one negative
+vector added, `negatives.json` regenerated, 59 vectors). Re-run: build `0 Warning(s)`, `0 Error(s)`; RecordFormat
+119/119; full suite Perf `Passed: 231, Total: 231`, Core `Passed: 2204, Total: 2204` (the new negative is a row of an
+existing test). Smoke and console were not re-run: neither path reads the canonicality check.
 
 ### 2026-10-09 — S10b-A review round 2 (ignored manifest values still text, nesting limit stated, spoiled ballots fail V6-V8)
 Worktree changes only; nothing committed. Three minor findings (spec, code, tests); all applied. The spec and code

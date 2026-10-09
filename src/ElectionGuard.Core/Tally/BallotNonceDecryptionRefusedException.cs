@@ -32,11 +32,20 @@ public class BallotNonceDecryptionRefusedException : Exception
 public enum BallotNonceDecryptionRefusal
 {
     /// <summary>
-    /// The cast-ballot view given is for another election (its H_E differs from the encryption
+    /// The view of the published cast and spoiled ballots given is for another election (its H_E differs from the encryption
     /// record's), so it cannot vouch for the request.
     /// </summary>
     ForeignElection,
 
-    /// <summary>The request's id_B, H_I or C_ξB,0 matches a cast ballot of the published record.</summary>
+    /// <summary>The request's id_B, H_I or C_ξB,0 matches a cast ballot of the published record (user decision Q31).</summary>
     CastBallot,
+
+    /// <summary>
+    /// The request's id_B, H_I or C_ξB,0 matches a spoiled ballot of the published record, and none
+    /// matches a cast one (user decision "Refuse spoiled too", 2026-10-09). A spoiled ballot was
+    /// neither cast nor challenged; §3.6.7 opens only challenged ballots, and its selections may be
+    /// its voter's real intent. A request matching both a cast and a spoiled ballot is refused as
+    /// <see cref="CastBallot"/>.
+    /// </summary>
+    SpoiledBallot,
 }

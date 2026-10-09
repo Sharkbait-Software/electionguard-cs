@@ -2,6 +2,7 @@
 using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.Models;
 using ElectionGuard.Core.Tally;
+using ElectionGuard.Core.RecordFormat;
 
 namespace ElectionGuard.Core.Verify.Tally;
 
@@ -48,6 +49,20 @@ namespace ElectionGuard.Core.Verify.Tally;
 public class ChallengedBallotDecryptionVerification
 {
     /// <summary>
+    /// Verification 13 on items decoded from the election record (design §4.8), the decryption and
+    /// the encrypted ballot it opens: a released nonce ≥ q, a locator or H_I that is not the ballot's,
+    /// or the ballot's C_ξB,0 ≥ p or c_B, v_B ≥ q fails 13.structure; then
+    /// <see cref="RecordItemNotEvaluableException"/> if another verification's range finding is on
+    /// either item (the ballot's 6.x, 7.x or 8.structure); then
+    /// <see cref="Verify(EncryptionRecord, EncryptedBallot, DecryptedChallengedBallot)"/>. See <see cref="RecordItemGate"/>.
+    /// </summary>
+    internal void Verify(EncryptionRecord encryptionRecord, RecordDecoded<EncryptedBallot> ballot, RecordDecoded<DecryptedChallengedBallot> decrypted)
+    {
+        RecordItemGate.Require(13, decrypted, ballot);
+        Verify(encryptionRecord, ballot.Value!, decrypted.Value!);
+    }
+
+    /// <summary>
     /// Verifies <paramref name="decrypted"/> against the challenged <paramref name="ballot"/>. K, K-hat,
     /// H_E (from which H_I is recomputed with the ballot's id_B), every index, b_Λ and the chaining mode
     /// come from <paramref name="encryptionRecord"/>; the chaining field B_C is formed from
@@ -60,7 +75,11 @@ public class ChallengedBallotDecryptionVerification
     /// (Verification 5.B), or a decrypted contest is not on the ballot, is listed twice, does not
     /// release exactly one nonce and value for each of the contest's options and declared
     /// supplemental fields, or releases contest data exactly where the ballot carries none (or none
-    /// where it carries some).</item>
+    /// where it carries some). Contests and fields are matched by their indices
+    /// (<see cref="DecryptedChallengedContest.Index"/>, <see cref="DecryptedChallengedField.Index"/>;
+    /// design §4.6): the labels the decryption states are Verification 14's to check, so a
+    /// mislabelled field is a 14.C/14.D failure, not a 13.x one against another field's
+    /// ciphertext.</item>
     /// <item>"13.A", then "13.B", for the first lettered check that fails.</item>
     /// </list>
     /// </summary>
@@ -128,22 +147,25 @@ public class ChallengedBallotDecryptionVerification
             throw Structure($"{where}'s H_I is not H(H_E; 0x20, id_B).");
         }
 
-        var decryptedContests = new Dictionary<string, DecryptedChallengedContest>(StringComparer.Ordinal);
+        // Keyed by index (design §4.6: "the index drives V13's ciphertext lookup"); the labels are
+        // Verification 14's.
+        var decryptedContests = new Dictionary<int, DecryptedChallengedContest>();
         foreach (var decryptedContest in decrypted.Contests ?? throw Structure($"the decryption of {where} has no contest list."))
         {
-            if (decryptedContest?.ContestId is null)
+            if (decryptedContest is null)
             {
                 throw Structure($"the decryption of {where} has a null contest entry.");
             }
 
-            if (!ballot.Contests.Any(x => x.Id == decryptedContest.ContestId))
+            var onBallot = manifest.Contests.SingleOrDefault(x => x.Index == decryptedContest.Index);
+            if (onBallot is null || !ballot.Contests.Any(x => x.Id == onBallot.Id))
             {
-                throw Structure($"the decryption of {where} has contest {decryptedContest.ContestId}, which is not on the ballot.");
+                throw Structure($"the decryption of {where} has contest index {decryptedContest.Index} ({decryptedContest.ContestId}), which is not a contest on the ballot.");
             }
 
-            if (!decryptedContests.TryAdd(decryptedContest.ContestId, decryptedContest))
+            if (!decryptedContests.TryAdd(decryptedContest.Index, decryptedContest))
             {
-                throw Structure($"the decryption of {where} lists contest {decryptedContest.ContestId} more than once.");
+                throw Structure($"the decryption of {where} lists contest index {decryptedContest.Index} more than once.");
             }
         }
 
@@ -154,7 +176,7 @@ public class ChallengedBallotDecryptionVerification
         {
             var manifestContest = manifest.Contests.Single(x => x.Id == contest.Id);
             List<EncryptedValueWithProofs> fields;
-            if (decryptedContests.TryGetValue(contest.Id, out var decryptedContest))
+            if (decryptedContests.TryGetValue(manifestContest.Index, out var decryptedContest))
             {
                 // (13.1), (13.2): every value is public; ξ_{i,j} is a full-width element of Z_q.
                 fields = new List<EncryptedValueWithProofs>(manifestContest.VerifiableFieldCount());
@@ -214,10 +236,11 @@ public class ChallengedBallotDecryptionVerification
                 var recomputed = new List<EncryptedValueWithProofs>(manifestFields.Count);
                 foreach (var manifestField in manifestFields)
                 {
-                    var matches = released.Where(x => x?.Id == manifestField.Id).ToList();
+                    // By index j, the j of eq. (33): a released label is compared in Verification 14.
+                    var matches = released.Where(x => x is not null && x.Index == manifestField.Index).ToList();
                     if (matches.Count != 1)
                     {
-                        throw Structure($"the decryption of {where}, contest {contest.Id} releases {matches.Count} values for {kind} {manifestField.Id}; it releases exactly one.");
+                        throw Structure($"the decryption of {where}, contest {contest.Id} releases {matches.Count} values for {kind} {manifestField.Index} ({manifestField.Id}); it releases exactly one.");
                     }
 
                     var field = matches[0];

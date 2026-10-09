@@ -1,5 +1,6 @@
 ﻿using ElectionGuard.Core.Models;
 using ElectionGuard.Core.PreEncryption;
+using ElectionGuard.Core.RecordFormat;
 
 namespace ElectionGuard.Core.Verify.PreEncryption;
 
@@ -21,6 +22,16 @@ namespace ElectionGuard.Core.Verify.PreEncryption;
 /// </summary>
 public class PreEncryptedConfirmationCodeVerification
 {
+    /// <summary>
+    /// Verification 16 for one uncast ballot joined from its printed item and its release on an item decoded from the election record (design §4.8): a compact item that cannot be regenerated from its released ξ_B fails 16.structure, then
+    /// <see cref="RecordItemNotEvaluableException"/> if another verification's range finding left no
+    /// domain object, then <see cref="Verify(PreEncryptedBallot, VotingDeviceInformationHash, EncryptionRecord, ConfirmationCode?)"/>. See <see cref="RecordItemGate"/>.
+    /// </summary>
+    internal void Verify(RecordDecoded<PreEncryptedUncastBallot> uncast, VotingDeviceInformationHash deviceInformationHash, EncryptionRecord encryptionRecord, ConfirmationCode? previousConfirmationCode)
+    {
+        Verify(RecordItemGate.Require(uncast, 16).Ballot, deviceInformationHash, encryptionRecord, previousConfirmationCode);
+    }
+
     /// <param name="deviceInformationHash">The pre-encrypted device information hash HDI of the device
     /// the ballot was generated on.</param>
     /// <param name="previousConfirmationCode">Under simple chaining, the confirmation code of the

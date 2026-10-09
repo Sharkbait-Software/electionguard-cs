@@ -45,8 +45,9 @@ namespace ElectionGuard.Core.Tally;
 /// alone (<see cref="DecryptBallotNonce"/>); the administrator recovers ξ_B and releases the
 /// encryption nonces derived from it (<see cref="TallyAdmin.CombineChallengedBallot"/>). Before any
 /// of that the guardian decides whether the request is authorized at all, from a list it holds itself
-/// (user decision Q31): it refuses any ballot nonce whose id_B, H_I or C_ξB,0 matches a cast ballot of
-/// the published record (<see cref="IPublishedCastBallots"/>). The guardians decrypt no pre-encrypted
+/// (user decision Q31; spoiled ballots too, 2026-10-09): it refuses any ballot nonce whose id_B, H_I
+/// or C_ξB,0 matches a cast or spoiled ballot of the published record
+/// (<see cref="IPublishedCastAndSpoiledBallots"/>). The guardians decrypt no pre-encrypted
 /// ballot's nonce: the recording tool of §4.3 is out of this library's scope (user decision Q35).
 ///
 /// A guardian works on one decryption at a time, a tally's or a contest data field's. Either commit
@@ -243,9 +244,11 @@ public class TallyGuardian
     /// §3.6.7 p.52: this guardian's partial decryption of a challenged ballot's encrypted nonce,
     /// m_i = C_ξB,0^{ẑ_i} mod p (eq. 107), with its ballot data encryption key share ẑ_i. In order:
     /// <list type="number">
-    /// <item>Authorization (user decision Q31, S9b): <paramref name="castBallots"/> must be for this
-    /// election, and the request's id_B, H_I and C_ξB,0 must each match no cast ballot
-    /// (<see cref="BallotNonceDecryptionRefusedException"/> otherwise).</item>
+    /// <item>Authorization (user decisions Q31, S9b, and "Refuse spoiled too", 2026-10-09):
+    /// <paramref name="publishedBallots"/> must be for this election, and the request's id_B, H_I and
+    /// C_ξB,0 must each match no cast and no spoiled ballot
+    /// (<see cref="BallotNonceDecryptionRefusedException"/> with <see cref="BallotNonceDecryptionRefusal.CastBallot"/>
+    /// or <see cref="BallotNonceDecryptionRefusal.SpoiledBallot"/> otherwise).</item>
     /// <item>The ballot must be recorded as challenged, not be a pre-encrypted ballot's record (always
     /// a cast ballot's, §4.3.1), and be well formed and keyed with H_I = H(H_E; 0x20, id_B)
     /// (<see cref="ArgumentException"/> otherwise).</item>
@@ -260,10 +263,11 @@ public class TallyGuardian
     /// included, is the requester's claim. A copy of a cast ballot marked challenged, under its own
     /// or a new string <see cref="EncryptedBallot.Id"/>, passes steps 2 and 3 (the eq. (38) proof binds
     /// H_I, not the string id), and k shares of it give ξ_B and every vote of the cast ballot. The
-    /// status check is kept as a sanity check; what refuses such a copy is step 1, against
-    /// <paramref name="castBallots"/>, which a distributed guardian builds from its own copy of the
-    /// published record (see <see cref="IPublishedCastBallots"/>), never from the request. It protects
-    /// the cast ballots it holds, so decrypt challenged ballots once the record's cast ballots are final.
+    /// status check is kept as a sanity check; what refuses such a copy, or a spoiled ballot relabelled
+    /// challenged, is step 1, against <paramref name="publishedBallots"/>, which a distributed guardian
+    /// builds from its own copy of the published record (see <see cref="IPublishedCastAndSpoiledBallots"/>),
+    /// never from the request. It protects the cast and spoiled ballots it holds, so decrypt
+    /// challenged ballots once the record's ballots are final.
     /// It also refuses, by design (Q31), the other use §3.3.4 p.30 names for ballot nonce decryption:
     /// opening cast "ballots that are selected in the context of a risk limiting audit". An audit flow
     /// (deferred, user decision Q22) needs an authorization path of its own, such as an
@@ -280,13 +284,13 @@ public class TallyGuardian
     public BallotNoncePartialDecryption DecryptBallotNonce(
         EncryptedBallot ballot,
         EncryptionRecord encryptionRecord,
-        IPublishedCastBallots castBallots)
+        IPublishedCastAndSpoiledBallots publishedBallots)
     {
         ArgumentNullException.ThrowIfNull(ballot);
         ArgumentNullException.ThrowIfNull(encryptionRecord);
-        ArgumentNullException.ThrowIfNull(castBallots);
+        ArgumentNullException.ThrowIfNull(publishedBallots);
 
-        RequireNotCast(castBallots, encryptionRecord, ballot);
+        RequireNotCastOrSpoiled(publishedBallots, encryptionRecord, ballot);
 
         var statement = ChallengedBallotStatement.For(encryptionRecord, ballot);
         statement.RequireDecryptable($"guardian {_index.Index}");
@@ -306,37 +310,46 @@ public class TallyGuardian
         };
     }
 
-    /// <summary>Q31: the request's id_B, H_I and C_ξB,0 must each match no cast ballot of the record.</summary>
-    private void RequireNotCast(IPublishedCastBallots castBallots, EncryptionRecord encryptionRecord, EncryptedBallot ballot)
+    /// <summary>
+    /// Q31 and "Refuse spoiled too" (2026-10-09): the request's id_B, H_I and C_ξB,0 must each match
+    /// no cast and no spoiled ballot of the record.
+    /// </summary>
+    private void RequireNotCastOrSpoiled(IPublishedCastAndSpoiledBallots publishedBallots, EncryptionRecord encryptionRecord, EncryptedBallot ballot)
     {
-        if (castBallots.ExtendedBaseHash is null || !((byte[])castBallots.ExtendedBaseHash).AsSpan().SequenceEqual((byte[])encryptionRecord.ExtendedBaseHash))
+        if (publishedBallots.ExtendedBaseHash is null || !((byte[])publishedBallots.ExtendedBaseHash).AsSpan().SequenceEqual((byte[])encryptionRecord.ExtendedBaseHash))
         {
             throw new BallotNonceDecryptionRefusedException(_index, ballot.Id, BallotNonceDecryptionRefusal.ForeignElection,
-                $"Guardian {_index.Index} refuses to decrypt ballot {ballot.Id}'s nonce: its view of the cast ballots is for another election (H_E differs).");
+                $"Guardian {_index.Index} refuses to decrypt ballot {ballot.Id}'s nonce: its view of the published cast and spoiled ballots is for another election (H_E differs).");
         }
 
-        var match = castBallots.Match(ballot.SelectionEncryptionIdentifier, ballot.SelectionEncryptionIdentifierHash, ballot.EncryptedBallotNonce?.C0);
-        if (match != CastBallotMatch.None)
+        var match = publishedBallots.Match(ballot.SelectionEncryptionIdentifier, ballot.SelectionEncryptionIdentifierHash, ballot.EncryptedBallotNonce?.C0);
+        if (match.Cast != BallotValueMatch.None)
         {
             throw new BallotNonceDecryptionRefusedException(_index, ballot.Id, BallotNonceDecryptionRefusal.CastBallot,
-                $"Guardian {_index.Index} refuses to decrypt ballot {ballot.Id}'s nonce: its {Describe(match)} matches a cast ballot in the published record, whose votes the nonce would reveal.");
+                $"Guardian {_index.Index} refuses to decrypt ballot {ballot.Id}'s nonce: its {Describe(match.Cast)} matches a cast ballot in the published record, whose votes the nonce would reveal.");
+        }
+
+        if (match.Spoiled != BallotValueMatch.None)
+        {
+            throw new BallotNonceDecryptionRefusedException(_index, ballot.Id, BallotNonceDecryptionRefusal.SpoiledBallot,
+                $"Guardian {_index.Index} refuses to decrypt ballot {ballot.Id}'s nonce: its {Describe(match.Spoiled)} matches a spoiled ballot in the published record, which was neither cast nor challenged and is never opened.");
         }
     }
 
-    private static string Describe(CastBallotMatch match)
+    private static string Describe(BallotValueMatch match)
     {
         var fields = new List<string>(3);
-        if (match.HasFlag(CastBallotMatch.SelectionEncryptionIdentifier))
+        if (match.HasFlag(BallotValueMatch.SelectionEncryptionIdentifier))
         {
             fields.Add("id_B");
         }
 
-        if (match.HasFlag(CastBallotMatch.SelectionEncryptionIdentifierHash))
+        if (match.HasFlag(BallotValueMatch.SelectionEncryptionIdentifierHash))
         {
             fields.Add("H_I");
         }
 
-        if (match.HasFlag(CastBallotMatch.EncryptedBallotNonce))
+        if (match.HasFlag(BallotValueMatch.EncryptedBallotNonce))
         {
             fields.Add("C_ξB,0");
         }
@@ -760,19 +773,19 @@ public class TallyAdmin
     /// Has each of <paramref name="guardians"/> (U, at least k of them) partially decrypt the
     /// encrypted nonce of the challenged <paramref name="ballot"/> (§3.6.7, eq. 107) and combines the
     /// results with <see cref="CombineChallengedBallot"/>. Each guardian is given
-    /// <paramref name="castBallots"/>, the published record's cast ballots, and refuses
-    /// (<see cref="BallotNonceDecryptionRefusedException"/>) if the ballot's id_B, H_I or C_ξB,0
-    /// matches a cast ballot (user decision Q31). In-process, the caller stands in for each
-    /// guardian's own copy of the record; a distributed guardian uses its own (see
-    /// <see cref="IPublishedCastBallots"/>).
+    /// <paramref name="publishedBallots"/>, the published record's cast and spoiled ballots, and
+    /// refuses (<see cref="BallotNonceDecryptionRefusedException"/>) if the ballot's id_B, H_I or
+    /// C_ξB,0 matches one (user decision Q31; spoiled ballots too, 2026-10-09). In-process, the caller
+    /// stands in for each guardian's own copy of the record; a distributed guardian uses its own (see
+    /// <see cref="IPublishedCastAndSpoiledBallots"/>).
     /// </summary>
     public DecryptedChallengedBallot DecryptChallengedBallot(
         IReadOnlyList<TallyGuardian> guardians,
         EncryptedBallot ballot,
         EncryptionRecord encryptionRecord,
-        IPublishedCastBallots castBallots)
+        IPublishedCastAndSpoiledBallots publishedBallots)
     {
-        var partialDecryptions = guardians.Select(x => x.DecryptBallotNonce(ballot, encryptionRecord, castBallots)).ToList();
+        var partialDecryptions = guardians.Select(x => x.DecryptBallotNonce(ballot, encryptionRecord, publishedBallots)).ToList();
         return CombineChallengedBallot(ballot, encryptionRecord, partialDecryptions);
     }
 
@@ -902,6 +915,7 @@ public class TallyAdmin
 
             contests.Add(new DecryptedChallengedContest
             {
+                Index = manifestContest.Index,
                 ContestId = contest.Id,
                 Choices = choices,
                 SupplementalFields = fields,
@@ -923,7 +937,7 @@ public class TallyAdmin
                 {
                     if (candidate == encrypted.Beta)
                     {
-                        return new DecryptedChallengedField { Id = field.Id, Value = sigma, EncryptionNonce = xi };
+                        return new DecryptedChallengedField { Index = field.Index, Id = field.Id, Value = sigma, EncryptionNonce = xi };
                     }
 
                     candidate *= voteEncryptionKey;

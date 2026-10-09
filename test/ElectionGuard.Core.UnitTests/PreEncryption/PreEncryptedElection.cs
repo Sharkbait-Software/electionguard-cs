@@ -52,7 +52,7 @@ public sealed class PreEncryptedElection
         .ToList();
 
     /// <summary>A view of the published record with no cast ballot (user decision Q31).</summary>
-    public PublishedCastBallots NoCastBallots => new(Record.ExtendedBaseHash);
+    public PublishedCastAndSpoiledBallots NoCastBallots => new(Record.ExtendedBaseHash);
 
     /// <summary>H_DI of <see cref="DeviceId"/> for pre-encrypted ballots (eq. 119).</summary>
     public VotingDeviceInformationHash DeviceHash { get; }

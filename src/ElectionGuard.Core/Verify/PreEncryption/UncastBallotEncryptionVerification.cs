@@ -1,6 +1,7 @@
 using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.Models;
 using ElectionGuard.Core.PreEncryption;
+using ElectionGuard.Core.RecordFormat;
 
 namespace ElectionGuard.Core.Verify.PreEncryption;
 
@@ -39,6 +40,16 @@ namespace ElectionGuard.Core.Verify.PreEncryption;
 /// </summary>
 public class UncastBallotEncryptionVerification
 {
+    /// <summary>
+    /// Verification 18 on an uncast ballot joined from its printed item and its release on an item decoded from the election record (design §4.8): a released nonce ≥ q, or a release that does not match its item (form, H_I, contests), fails 18.structure, then
+    /// <see cref="RecordItemNotEvaluableException"/> if another verification's range finding left no
+    /// domain object, then <see cref="Verify(PreEncryptedUncastBallot, EncryptionRecord)"/>. See <see cref="RecordItemGate"/>.
+    /// </summary>
+    internal void Verify(RecordDecoded<PreEncryptedUncastBallot> uncast, EncryptionRecord encryptionRecord)
+    {
+        Verify(RecordItemGate.Require(uncast, 18), encryptionRecord);
+    }
+
     public void Verify(PreEncryptedUncastBallot uncast, EncryptionRecord encryptionRecord)
     {
         ArgumentNullException.ThrowIfNull(uncast);

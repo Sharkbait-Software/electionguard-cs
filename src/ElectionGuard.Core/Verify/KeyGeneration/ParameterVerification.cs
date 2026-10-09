@@ -3,6 +3,7 @@ using ElectionGuard.Core.Extensions;
 using ElectionGuard.Core.KeyGeneration;
 using ElectionGuard.Core.Models;
 using Version = ElectionGuard.Core.Models.Version;
+using ElectionGuard.Core.RecordFormat;
 
 namespace ElectionGuard.Core.Verify.KeyGeneration;
 
@@ -11,6 +12,17 @@ namespace ElectionGuard.Core.Verify.KeyGeneration;
 /// </summary>
 public class ParameterVerification
 {
+    /// <summary>
+    /// Verification 1 on an item decoded from the election record (design §4.8): a version that is no version string fails 1.A and guardian parameters no threshold scheme can hold 1.structure, then
+    /// <see cref="RecordItemNotEvaluableException"/> if another verification's range finding is on an
+    /// item it reads, then <see cref="Verify(CryptographicParameters, GuardianParameters, byte[], byte[], byte[])"/>. See <see cref="RecordItemGate"/>.
+    /// </summary>
+    internal void Verify(RecordDecoded<RecordSetup> setup)
+    {
+        var value = RecordItemGate.Require(setup, 1, ElectionGuard.Core.RecordFormat.Mappers.SetupMapper.ReadByVerification1);
+        Verify(value.Parameters, value.GuardianParameters, value.ParameterBaseHash, value.ManifestFile.Bytes, value.ElectionBaseHash);
+    }
+
     /// <summary>
     /// The full Verification 1 (1.A-1.F) for an election record: the parameters it claims, its H_P,
     /// and its H_B against its manifest file. This is the entry point verifiers use.

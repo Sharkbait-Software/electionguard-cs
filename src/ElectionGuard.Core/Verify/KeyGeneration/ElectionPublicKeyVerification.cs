@@ -1,6 +1,7 @@
 ﻿using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.KeyGeneration;
 using ElectionGuard.Core.Models;
+using ElectionGuard.Core.RecordFormat;
 
 namespace ElectionGuard.Core.Verify.KeyGeneration;
 
@@ -9,6 +10,17 @@ namespace ElectionGuard.Core.Verify.KeyGeneration;
 /// </summary>
 public class ElectionPublicKeyVerification
 {
+    /// <summary>
+    /// Verification 3 on an item decoded from the election record (design §4.8): K ≥ p fails 3.A and K-hat ≥ p 3.B (each is an equality with a product reduced mod p, so it can never hold), then
+    /// <see cref="RecordItemNotEvaluableException"/> if another verification's range finding is on an
+    /// item it reads, then <see cref="Verify(List{GuardianPublicView}, ElectionPublicKeys)"/>. See <see cref="RecordItemGate"/>.
+    /// </summary>
+    internal void Verify(RecordDecoded<RecordSetup> setup)
+    {
+        var value = RecordItemGate.Require(setup, 3, ElectionGuard.Core.RecordFormat.Mappers.SetupMapper.ReadByVerification3);
+        Verify([.. value.Guardians], value.Keys);
+    }
+
     public void Verify(List<GuardianPublicView> guardians, ElectionPublicKeys electionPublicKeys)
     {
         // K and K-hat are products over i = 1..n (eqs. 25, 26). Over a short, padded or duplicated

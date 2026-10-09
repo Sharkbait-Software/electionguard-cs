@@ -178,10 +178,12 @@ public enum BallotStatus
     /// checked by Verifications 5 to 8 like any ballot. It is never tallied, and it is not decrypted
     /// by this library's paths: the nonce path and Verifications 13 and 14 accept only a challenged
     /// ballot. That status test reads the status the requester states, so it is a sanity check, not
-    /// a protection: the guardian's view (<see cref="ElectionGuard.Core.Tally.IPublishedCastBallots"/>, user decision
-    /// Q31) protects cast ballots only, and a spoiled ballot relabelled as challenged would get its
-    /// nonce decrypted. The recorded status is protected by the election record's section seal and
-    /// signatures (S10b-6 onward).
+    /// a protection. The protection is the guardian's own view of the published record
+    /// (<see cref="ElectionGuard.Core.Tally.IPublishedCastAndSpoiledBallots"/>; user decision "Refuse
+    /// spoiled too", 2026-10-09): a request whose id_B, H_I or C_ξB,0 matches a spoiled ballot, as
+    /// one relabelled challenged does, is refused (<see cref="ElectionGuard.Core.Tally.BallotNonceDecryptionRefusal.SpoiledBallot"/>).
+    /// The recorded status itself is protected by the election record's section seal and signatures
+    /// (S10b-6 onward).
     /// </summary>
     Spoiled = 3,
 }

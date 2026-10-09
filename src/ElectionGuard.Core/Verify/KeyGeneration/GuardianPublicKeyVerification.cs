@@ -2,6 +2,7 @@
 using ElectionGuard.Core.KeyGeneration;
 using ElectionGuard.Core.Models;
 using System.Numerics;
+using ElectionGuard.Core.RecordFormat;
 
 namespace ElectionGuard.Core.Verify.KeyGeneration;
 
@@ -10,6 +11,16 @@ namespace ElectionGuard.Core.Verify.KeyGeneration;
 /// </summary>
 public class GuardianPublicKeyVerification
 {
+    /// <summary>
+    /// Verification 2 on an item decoded from the election record (design §4.8): a commitment or κ_i ≥ p fails 2.A, a response ≥ q 2.B and a challenge ≥ q 2.C, then
+    /// <see cref="RecordItemNotEvaluableException"/> if another verification's range finding is on an
+    /// item it reads, then <see cref="Verify(IEnumerable{GuardianPublicView})"/>. See <see cref="RecordItemGate"/>.
+    /// </summary>
+    internal void Verify(RecordDecoded<RecordSetup> setup)
+    {
+        Verify(RecordItemGate.Require(setup, 2, ElectionGuard.Core.RecordFormat.Mappers.SetupMapper.ReadByVerification2).Guardians);
+    }
+
     /// <summary>
     /// Verification 2 over the whole guardian set: "for each guardian G_i, 1 &lt;= i &lt;= n". The set
     /// must be exactly G_1..G_n, so a missing, extra or duplicated guardian fails rather than being

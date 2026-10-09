@@ -1,7 +1,6 @@
 using ElectionGuard.Core.Models;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using System.Text.Json.Serialization.Metadata;
 
 namespace ElectionGuard.Core.Serialization;
 
@@ -28,11 +27,12 @@ namespace ElectionGuard.Core.Serialization;
 /// case-sensitively. A property named twice in an object is refused, known or not.</item>
 /// <item>A property the model does not have is ignored, at any level and whatever its value (user
 /// decision NQ-1, 2026-10-09: the manifest is the one place a vendor may add data). It stays in
-/// the file's bytes, so H_B (eq. 5), which hashes the file as it is, still binds it. Ignored
-/// except for one case: a name that matches a member's name once case, <c>_</c> and <c>-</c> are
-/// disregarded (<c>ChainingMode</c>, <c>chaining_mode</c>) is refused. A reader that matched
-/// names loosely would read such a property as that member, and this one would not, so the two
-/// would compute with different manifests under the same H_B.</item>
+/// the file's bytes, so H_B (eq. 5), which hashes the file as it is, still binds it. That
+/// includes a name that differs from a member's only in case, <c>_</c> or <c>-</c>
+/// (<c>ChainingMode</c>, <c>chaining_mode</c>): member names are matched exactly, so it is an
+/// unknown property and is ignored like any other (user decision R-3, 2026-10-09: "Ignore them
+/// too"). A conformant reader in any language matches names exactly as well; one that matched
+/// them loosely would read another manifest from the same bytes.</item>
 /// <item>Required members (<c>electionId</c>, <c>contests</c>, <c>ballotStyles</c>; a contest's
 /// <c>id</c>, <c>name</c>, <c>selectionLimit</c>, <c>optionSelectionLimit</c>, <c>index</c>,
 /// <c>choices</c>; an option's <c>id</c>, <c>name</c>, <c>index</c>; a supplemental field's as an
@@ -110,7 +110,6 @@ public static class ManifestSerializer
         try
         {
             StrictJson.RejectAmbiguity(utf8Json);
-            RejectNearMisses(utf8Json);
             manifest = JsonSerializer.Deserialize<Manifest>(utf8Json, Options);
         }
         catch (JsonException ex)
@@ -133,60 +132,4 @@ public static class ManifestSerializer
         ArgumentNullException.ThrowIfNull(manifestFile);
         return Deserialize(manifestFile.Bytes);
     }
-
-    /// <summary>
-    /// Throws <see cref="JsonException"/> if an object of the manifest holds a property the model
-    /// does not have whose name equals one of that object's member names once case, <c>_</c> and
-    /// <c>-</c> are disregarded (see the class remarks). Walks the document along the model's own
-    /// shape: the manifest, its contests, their options and supplemental fields, and its ballot
-    /// styles. Anything that does not have the expected JSON kind is left for the deserializer to
-    /// report.
-    /// </summary>
-    private static void RejectNearMisses(ReadOnlySpan<byte> utf8Json)
-    {
-        using var document = JsonDocument.Parse(utf8Json.ToArray());
-        Walk(document.RootElement, Options.GetTypeInfo(typeof(Manifest)));
-    }
-
-    private static void Walk(JsonElement element, JsonTypeInfo typeInfo)
-    {
-        if (element.ValueKind != JsonValueKind.Object || typeInfo.Kind != JsonTypeInfoKind.Object)
-        {
-            return;
-        }
-
-        foreach (var property in element.EnumerateObject())
-        {
-            var member = typeInfo.Properties.FirstOrDefault(x => string.Equals(x.Name, property.Name, StringComparison.Ordinal));
-            if (member is null)
-            {
-                var nearMiss = typeInfo.Properties.FirstOrDefault(x => Loose(x.Name) == Loose(property.Name));
-                if (nearMiss is not null)
-                {
-                    throw new JsonException($"Property \"{property.Name}\" is not a member of {typeInfo.Type.Name}, but reads as its member \"{nearMiss.Name}\" if case, '_' and '-' are disregarded. Unknown properties are ignored, so a reader matching names loosely would see another manifest under the same H_B; member names are matched exactly.");
-                }
-
-                continue;
-            }
-
-            var memberInfo = Options.GetTypeInfo(member.PropertyType);
-            if (memberInfo.Kind == JsonTypeInfoKind.Enumerable && memberInfo.ElementType is { } elementType)
-            {
-                if (property.Value.ValueKind == JsonValueKind.Array)
-                {
-                    var elementInfo = Options.GetTypeInfo(elementType);
-                    foreach (var item in property.Value.EnumerateArray())
-                    {
-                        Walk(item, elementInfo);
-                    }
-                }
-            }
-            else
-            {
-                Walk(property.Value, memberInfo);
-            }
-        }
-    }
-
-    private static string Loose(string name) => name.Replace("_", "", StringComparison.Ordinal).Replace("-", "", StringComparison.Ordinal).ToLowerInvariant();
 }

@@ -128,7 +128,10 @@ public class ManifestSerializerTests
         // Unknown properties are ignored (NQ-1; Deserialize_IgnoresUnknownProperties_WhichH_BStillBinds),
         // but not when named twice: duplicate keys are refused whether the model knows the name or not.
         { "unknown property named twice", json => json.Replace("{\"electionId\":\"e\",", "{\"electionId\":\"e\",\"x-vendor\":1,\"x-vendor\":2,") },
-        // Member names in another case or spelling: see NearMisses_AreRefused_ReadingR3.
+        // A member name in another case is an unknown property (user decision R-3: ignored like any
+        // other), so the required electionId is then missing. Optional members named that way read
+        // as absent: see NearMisses_AreIgnoredLikeAnyUnknownProperty_R3.
+        { "required property in another case", json => json.Replace("\"electionId\"", "\"ElectionId\"") },
         { "null election id", json => json.Replace("\"electionId\":\"e\"", "\"electionId\":null") },
         // "contestz" is an unknown property, ignored; the required "contests" is then missing.
         { "missing contests", json => json.Replace("\"contests\":", "\"contestz\":") },
@@ -339,34 +342,43 @@ public class ManifestSerializerTests
         Assert.False(string.IsNullOrEmpty(exception.Message), description);
     }
 
-    // --- Reading R-3 (design §12; awaiting the user's confirmation) -------------------------------
-    // These rows pin reading R-3(a): an unknown property whose name equals a member's once case, '_'
-    // and '-' are disregarded is refused as a near miss (a reader in another language matching names
-    // loosely would read it as that member), not ignored like other unknown properties (NQ-1). If the
-    // user chooses R-3(b), delete this block together with ManifestSerializer.RejectNearMisses.
+    // --- User decision R-3 (2026-10-09): near-miss names are ignored too --------------------------
+    // S10b-A refused an unknown property whose name equals a member's once case, '_' and '-' are
+    // disregarded (reading R-3(a)). The user answered "Ignore them too": member names are matched
+    // exactly, so such a property is an unknown one and is ignored like any other (NQ-1), while H_B,
+    // computed over the bytes, still binds it. These rows were NearMisses_AreRefused_ReadingR3; they
+    // now pin the opposite outcome. A near miss of a required member is in Malformations (the member
+    // is then missing).
 
-    public static TheoryData<string, Func<string, string>> NearMisses() => new()
+    public static TheoryData<string, Func<string, string>, Func<Manifest, object?>, object?> NearMisses() => new()
     {
-        // Without the near-miss check this would still fail, as the required electionId would then be
-        // missing; the message assertion shows the near-miss check is what refuses it.
-        { "property in another case", json => json.Replace("\"electionId\"", "\"ElectionId\"") },
-        { "optional property in another case", json => json.Replace("\"chainingMode\":0", "\"ChainingMode\":1") },
-        { "optional property in snake case", json => json.Replace("\"chainingMode\":0", "\"chaining_mode\":1") },
-        { "nested property in kebab case", json => json.Replace("\"selectionLimit\":1", "\"selectionLimit\":1,\"Selection-Limit\":2") },
+        { "optional property in another case", json => json.Replace("\"chainingMode\":0", "\"ChainingMode\":1"), m => m.ChainingMode, ChainingMode.None },
+        { "optional property in snake case", json => json.Replace("\"chainingMode\":0", "\"chaining_mode\":1"), m => m.ChainingMode, ChainingMode.None },
+        { "nested property in kebab case beside the member", json => json.Replace("\"selectionLimit\":1", "\"selectionLimit\":1,\"Selection-Limit\":2"), m => m.Contests[0].SelectionLimit, 1 },
+        { "election fact in another case", json => json.Replace("{\"electionId\":\"e\",", "{\"electionId\":\"e\",\"ElectionName\":\"n\","), m => m.ElectionName, null },
     };
 
     [Theory]
     [MemberData(nameof(NearMisses))]
-    public void NearMisses_AreRefused_ReadingR3(string description, Func<string, string> malform)
+    public void NearMisses_AreIgnoredLikeAnyUnknownProperty_R3(string description, Func<string, string> malform, Func<Manifest, object?> member, object? expected)
     {
         string json = MinimalJson();
-        string malformed = malform(json);
-        Assert.NotEqual(json, malformed);
+        string nearMiss = malform(json);
+        Assert.NotEqual(json, nearMiss);
+        byte[] bytes = Encoding.UTF8.GetBytes(nearMiss);
 
-        var exception = Assert.Throws<InvalidManifestException>(() => ManifestSerializer.Deserialize(Encoding.UTF8.GetBytes(malformed)));
+        var read = ManifestSerializer.Deserialize(bytes);
 
-        Assert.IsType<System.Text.Json.JsonException>(exception.InnerException);
-        Assert.True(exception.InnerException.Message.Contains("reads as its member", StringComparison.Ordinal), $"{description}: {exception.Message}");
+        // The member keeps the value of the exactly named property (or its default), and the
+        // manifest is the one without the near miss.
+        Assert.True(Equals(expected, member(read)), $"{description}: read {member(read)}, expected {expected}");
+        Assert.Equal(Encoding.UTF8.GetBytes(json), ManifestSerializer.Serialize(read));
+
+        // H_B binds the bytes as entered, near miss included.
+        var parameterBaseHash = EGParameters.ParameterBaseHash;
+        Assert.NotEqual(
+            (byte[])new ElectionBaseHash(parameterBaseHash, new ManifestFile { Bytes = Encoding.UTF8.GetBytes(json) }),
+            (byte[])new ElectionBaseHash(parameterBaseHash, new ManifestFile { Bytes = bytes }));
     }
 
     // --- The record's manifest is its manifest file's (S2 review R1) ------------------------------

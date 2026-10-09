@@ -61,7 +61,7 @@ public class ChallengedBallotDecryptionTests
         }
 
         /// <summary>A view of the published record with no cast ballot: nothing to refuse on (user decision Q31).</summary>
-        public PublishedCastBallots NoCastBallots => new(Record.ExtendedBaseHash);
+        public PublishedCastAndSpoiledBallots NoCastBallots => new(Record.ExtendedBaseHash);
 
         public List<TallyGuardian> Guardians(params int[] positions) =>
             positions.Select(i => new TallyGuardian(GuardianSet.Guardians[i].Index, GuardianSet.SecretShares[GuardianSet.Guardians[i].Index])).ToList();
@@ -126,16 +126,18 @@ public class ChallengedBallotDecryptionTests
         Contests = contests ?? decrypted.Contests.Select(x => contest is null ? x : contest(x)).ToList(),
     };
 
-    private static DecryptedChallengedContest With(DecryptedChallengedContest contest, string? contestId = null, List<DecryptedChallengedField>? choices = null, List<DecryptedChallengedField>? fields = null, DecryptedChallengedContestData? data = null, bool dropData = false) => new()
+    private static DecryptedChallengedContest With(DecryptedChallengedContest contest, string? contestId = null, List<DecryptedChallengedField>? choices = null, List<DecryptedChallengedField>? fields = null, DecryptedChallengedContestData? data = null, bool dropData = false, int? index = null) => new()
     {
+        Index = index ?? contest.Index,
         ContestId = contestId ?? contest.ContestId,
         Choices = choices ?? contest.Choices,
         SupplementalFields = fields ?? contest.SupplementalFields,
         ContestData = dropData ? null : data ?? contest.ContestData,
     };
 
-    private static DecryptedChallengedField With(DecryptedChallengedField field, string? id = null, int? value = null, IntegerModQ? nonce = null) => new()
+    private static DecryptedChallengedField With(DecryptedChallengedField field, string? id = null, int? value = null, IntegerModQ? nonce = null, int? index = null) => new()
     {
+        Index = index ?? field.Index,
         Id = id ?? field.Id,
         Value = value ?? field.Value,
         EncryptionNonce = nonce ?? field.EncryptionNonce,
@@ -304,8 +306,8 @@ public class ChallengedBallotDecryptionTests
     {
         var election = Shared.Value;
         var cast = election.Encrypt(ballotId: "cast-1", status: BallotStatus.Cast);
-        var published = PublishedCastBallots.FromRecord(election.Record.ExtendedBaseHash, [cast, election.Encrypt(ballotId: "challenged-1")]);
-        Assert.Equal(1, published.Count);
+        var published = PublishedCastAndSpoiledBallots.FromRecord(election.Record.ExtendedBaseHash, [cast, election.Encrypt(ballotId: "challenged-1")]);
+        Assert.Equal(1, published.CastCount);
         var relabelled = Copy(cast, status: BallotStatus.Challenged, id: copy == "new id" ? "challenged-copy" : null);
         var guardians = election.Guardians(0, 1);
         bool exponentiated = false;
@@ -332,14 +334,14 @@ public class ChallengedBallotDecryptionTests
     /// comes first.)
     /// </summary>
     [Theory]
-    [InlineData("id_B and H_I", CastBallotMatch.SelectionEncryptionIdentifier | CastBallotMatch.SelectionEncryptionIdentifierHash)]
-    [InlineData("H_I", CastBallotMatch.SelectionEncryptionIdentifierHash)]
-    [InlineData("C_ξB,0", CastBallotMatch.EncryptedBallotNonce)]
-    public void DecryptBallotNonce_ChallengedBallotSharingAValueWithACastBallot_IsRefused(string shared, CastBallotMatch expected)
+    [InlineData("id_B and H_I", BallotValueMatch.SelectionEncryptionIdentifier | BallotValueMatch.SelectionEncryptionIdentifierHash)]
+    [InlineData("H_I", BallotValueMatch.SelectionEncryptionIdentifierHash)]
+    [InlineData("C_ξB,0", BallotValueMatch.EncryptedBallotNonce)]
+    public void DecryptBallotNonce_ChallengedBallotSharingAValueWithACastBallot_IsRefused(string shared, BallotValueMatch expected)
     {
         var election = Shared.Value;
         var cast = election.Encrypt(ballotId: "cast-1", status: BallotStatus.Cast);
-        var published = PublishedCastBallots.FromRecord(election.Record.ExtendedBaseHash, [cast]);
+        var published = PublishedCastAndSpoiledBallots.FromRecord(election.Record.ExtendedBaseHash, [cast]);
         var challenged = election.Encrypt(ballotId: "challenged-1");
         var request = shared switch
         {
@@ -348,10 +350,84 @@ public class ChallengedBallotDecryptionTests
             _ => Copy(challenged, nonce: cast.EncryptedBallotNonce),
         };
 
-        Assert.Equal(expected, published.Match(request.SelectionEncryptionIdentifier, request.SelectionEncryptionIdentifierHash, request.EncryptedBallotNonce.C0));
+        Assert.Equal(new PublishedBallotMatch(expected, BallotValueMatch.None), published.Match(request.SelectionEncryptionIdentifier, request.SelectionEncryptionIdentifierHash, request.EncryptedBallotNonce.C0));
         var refused = Assert.Throws<BallotNonceDecryptionRefusedException>(() => election.Guardians(0)[0].DecryptBallotNonce(request, election.Record, published));
         Assert.Equal(BallotNonceDecryptionRefusal.CastBallot, refused.Reason);
-        Assert.Contains($"its {shared.Replace(" and ", ", ")} matches", refused.Message);
+        Assert.Contains($"its {shared.Replace(" and ", ", ")} matches a cast ballot", refused.Message);
+    }
+
+    /// <summary>
+    /// User decision "Refuse spoiled too" (2026-10-09; S10b-A review round 1 asked it): a spoiled
+    /// ballot, relabelled challenged under its own or a new string id, passes the status, structure,
+    /// H_I and eq. (38) checks exactly as a relabelled cast ballot does. The guardians refuse it from
+    /// their own view of the published record, which holds spoiled ballots beside cast ones, before
+    /// any exponentiation with ẑ_i; so does the administrator's wrapper, through them.
+    /// </summary>
+    [Theory]
+    [InlineData("same id")]
+    [InlineData("new id")]
+    public void DecryptBallotNonce_SpoiledBallotRelabelledChallenged_IsRefusedByTheRecordCheck(string copy)
+    {
+        var election = Shared.Value;
+        var spoiled = election.Encrypt(ballotId: "spoiled-1", status: BallotStatus.Spoiled);
+        var published = PublishedCastAndSpoiledBallots.FromRecord(election.Record.ExtendedBaseHash, [spoiled, election.Encrypt(ballotId: "challenged-1")]);
+        Assert.Equal((0, 1), (published.CastCount, published.SpoiledCount));
+        var relabelled = Copy(spoiled, status: BallotStatus.Challenged, id: copy == "new id" ? "challenged-copy" : null);
+        var guardians = election.Guardians(0, 1);
+        bool exponentiated = false;
+        guardians.ForEach(x => x.PartialDecryptionTamperForTesting = (_, _, m) => { exponentiated = true; return m; });
+
+        // Without the record check nothing about the copy would be refused.
+        Assert.Null(BallotStructure.FindViolation(relabelled, election.Record.Manifest));
+        Assert.True(BallotNonceEncryption.ProofHolds(relabelled.SelectionEncryptionIdentifierHash, relabelled.EncryptedBallotNonce));
+        Assert.Null(Record.Exception(() => guardians[0].DecryptBallotNonce(relabelled, election.Record, election.NoCastBallots)));
+        exponentiated = false;
+
+        var refused = Assert.Throws<BallotNonceDecryptionRefusedException>(() => guardians[0].DecryptBallotNonce(relabelled, election.Record, published));
+        Assert.Equal(BallotNonceDecryptionRefusal.SpoiledBallot, refused.Reason);
+        Assert.Equal(guardians[0].Index, refused.GuardianIndex);
+        Assert.Equal(relabelled.Id, refused.BallotId);
+        Assert.Contains("id_B, H_I, C_ξB,0 matches a spoiled ballot", refused.Message);
+        Assert.Equal(BallotNonceDecryptionRefusal.SpoiledBallot, Assert.Throws<BallotNonceDecryptionRefusedException>(
+            () => new TallyAdmin().DecryptChallengedBallot(guardians, relabelled, election.Record, published)).Reason);
+        Assert.False(exponentiated);
+    }
+
+    /// <summary>
+    /// Each of id_B, H_I and C_ξB,0 is matched against the spoiled ballots on its own, as against the
+    /// cast ones: a challenged ballot sharing any one of them with a spoiled ballot is refused as
+    /// <see cref="BallotNonceDecryptionRefusal.SpoiledBallot"/>, naming what matched. A request that
+    /// matches both a cast and a spoiled ballot is refused as <see cref="BallotNonceDecryptionRefusal.CastBallot"/>.
+    /// </summary>
+    [Theory]
+    [InlineData("id_B and H_I", BallotValueMatch.SelectionEncryptionIdentifier | BallotValueMatch.SelectionEncryptionIdentifierHash)]
+    [InlineData("H_I", BallotValueMatch.SelectionEncryptionIdentifierHash)]
+    [InlineData("C_ξB,0", BallotValueMatch.EncryptedBallotNonce)]
+    public void DecryptBallotNonce_ChallengedBallotSharingAValueWithASpoiledBallot_IsRefused(string shared, BallotValueMatch expected)
+    {
+        var election = Shared.Value;
+        var spoiled = election.Encrypt(ballotId: "spoiled-1", status: BallotStatus.Spoiled);
+        var cast = election.Encrypt(ballotId: "cast-1", status: BallotStatus.Cast);
+        var published = PublishedCastAndSpoiledBallots.FromRecord(election.Record.ExtendedBaseHash, [cast, spoiled]);
+        var challenged = election.Encrypt(ballotId: "challenged-1");
+        var request = shared switch
+        {
+            "id_B and H_I" => Copy(challenged, identifier: spoiled.SelectionEncryptionIdentifier, selectionHash: spoiled.SelectionEncryptionIdentifierHash),
+            "H_I" => Copy(challenged, selectionHash: spoiled.SelectionEncryptionIdentifierHash),
+            _ => Copy(challenged, nonce: spoiled.EncryptedBallotNonce),
+        };
+
+        Assert.Equal(new PublishedBallotMatch(BallotValueMatch.None, expected), published.Match(request.SelectionEncryptionIdentifier, request.SelectionEncryptionIdentifierHash, request.EncryptedBallotNonce.C0));
+        var refused = Assert.Throws<BallotNonceDecryptionRefusedException>(() => election.Guardians(0)[0].DecryptBallotNonce(request, election.Record, published));
+        Assert.Equal(BallotNonceDecryptionRefusal.SpoiledBallot, refused.Reason);
+        Assert.Contains($"its {shared.Replace(" and ", ", ")} matches a spoiled ballot", refused.Message);
+
+        // Sharing id_B with the spoiled ballot and C_ξB,0 with the cast one: the cast match is reported.
+        var both = Copy(challenged, identifier: spoiled.SelectionEncryptionIdentifier, nonce: cast.EncryptedBallotNonce);
+        var match = published.Match(both.SelectionEncryptionIdentifier, both.SelectionEncryptionIdentifierHash, both.EncryptedBallotNonce.C0);
+        Assert.Equal(new PublishedBallotMatch(BallotValueMatch.EncryptedBallotNonce, BallotValueMatch.SelectionEncryptionIdentifier), match);
+        Assert.Equal(BallotNonceDecryptionRefusal.CastBallot, Assert.Throws<BallotNonceDecryptionRefusedException>(
+            () => election.Guardians(0)[0].DecryptBallotNonce(both, election.Record, published)).Reason);
     }
 
     /// <summary>
@@ -364,8 +440,8 @@ public class ChallengedBallotDecryptionTests
         var election = Shared.Value;
         var castBallots = Enumerable.Range(1, 3).Select(i => election.Encrypt(ballotId: $"cast-{i}", status: BallotStatus.Cast)).ToList();
         var challenged = election.Encrypt(choice1: 0, choice2: 1, ballotId: "challenged-1");
-        var published = PublishedCastBallots.FromRecord(election.Record.ExtendedBaseHash, [.. castBallots, challenged]);
-        Assert.Equal(3, published.Count);
+        var published = PublishedCastAndSpoiledBallots.FromRecord(election.Record.ExtendedBaseHash, [.. castBallots, challenged]);
+        Assert.Equal(3, published.CastCount);
 
         var decrypted = new TallyAdmin().DecryptChallengedBallot(election.Guardians(0, 2), challenged, election.Record, published);
 
@@ -610,7 +686,9 @@ public class ChallengedBallotDecryptionTests
         { "no option list", "13.structure" },
         { "no supplemental field list", "13.structure" },
         { "null option entry", "13.structure" },
-        { "unknown option label", "13.structure" },
+        { "unknown option index", "13.structure" },
+        { "contest index not on the ballot", "13.structure" },
+        { "two options' indices swapped, labels kept", "13.B" },
         { "contest data D null", "13.A" },
     };
 
@@ -628,7 +706,7 @@ public class ChallengedBallotDecryptionTests
             "D one block short" => With(d, c => With(c, data: new DecryptedChallengedContestData { EncryptionNonce = c.ContestData!.EncryptionNonce, Data = c.ContestData.Data[32..] })),
             "tampered D and wrong σ" => Tamper13(Tamper13(d, "tampered D"), "wrong σ of an option"),
             "decryption for another ballot" => With(d, ballotId: "ballot-2"),
-            "contest not on the ballot" => With(d, c => With(c, contestId: "contest-2")),
+            "contest not on the ballot" => With(d, c => With(c, contestId: "contest-2", index: c.Index + 1)),
             "contest listed twice" => With(d, contests: [d.Contests[0], d.Contests[0]]),
             "option missing" => With(d, c => With(c, choices: [c.Choices[0]])),
             "option listed twice" => With(d, c => With(c, choices: [c.Choices[0], c.Choices[0]])),
@@ -636,10 +714,12 @@ public class ChallengedBallotDecryptionTests
             "contest data missing" => With(d, c => With(c, dropData: true)),
             "no contest list" => new DecryptedChallengedBallot { BallotId = d.BallotId, Contests = null! },
             "null contest entry" => With(d, contests: [null!]),
-            "no option list" => With(d, c => new DecryptedChallengedContest { ContestId = c.ContestId, Choices = null!, SupplementalFields = c.SupplementalFields, ContestData = c.ContestData }),
-            "no supplemental field list" => With(d, c => new DecryptedChallengedContest { ContestId = c.ContestId, Choices = c.Choices, SupplementalFields = null!, ContestData = c.ContestData }),
+            "no option list" => With(d, c => new DecryptedChallengedContest { Index = c.Index, ContestId = c.ContestId, Choices = null!, SupplementalFields = c.SupplementalFields, ContestData = c.ContestData }),
+            "no supplemental field list" => With(d, c => new DecryptedChallengedContest { Index = c.Index, ContestId = c.ContestId, Choices = c.Choices, SupplementalFields = null!, ContestData = c.ContestData }),
             "null option entry" => With(d, c => With(c, choices: [c.Choices[0], null!])),
-            "unknown option label" => With(d, c => With(c, choices: [c.Choices[0], With(c.Choices[1], id: "choice-x")])),
+            "unknown option index" => With(d, c => With(c, choices: [c.Choices[0], With(c.Choices[1], index: 99)])),
+            "contest index not on the ballot" => With(d, c => With(c, index: c.Index + 1)),
+            "two options' indices swapped, labels kept" => With(d, c => With(c, choices: [With(c.Choices[0], index: c.Choices[1].Index), With(c.Choices[1], index: c.Choices[0].Index)])),
             "contest data D null" => With(d, c => With(c, data: new DecryptedChallengedContestData { EncryptionNonce = c.ContestData!.EncryptionNonce, Data = null! })),
             _ => throw new ArgumentOutOfRangeException(nameof(tamper)),
         };
@@ -666,6 +746,36 @@ public class ChallengedBallotDecryptionTests
         {
             Assert.Contains("C_1 is not D XOR", exception.Message);
         }
+    }
+
+    /// <summary>
+    /// Design §4.6: "the index drives V13's ciphertext lookup, and the label is compared in V14, so a
+    /// mislabelled field fails 14.D rather than surfacing as a 13.x crypto failure". A label changed
+    /// to another option's (two labels swapped) or to no option's, every index kept, opens the right
+    /// ciphertexts, so Verification 13 passes; Verification 14 fails 14.D and 14.C. Swapping the
+    /// indices instead (labels kept) opens each nonce against the other ciphertext: 13.B and 14.D.
+    /// </summary>
+    [Fact]
+    public void MislabelledFields_PassVerification13_AndFailVerification14()
+    {
+        var election = Shared.Value;
+        var (ballot, decrypted) = Opened.Value;
+
+        var swapped = With(decrypted, c => With(c, choices: [With(c.Choices[0], id: c.Choices[1].Id), With(c.Choices[1], id: c.Choices[0].Id)]));
+        election.Verify13(ballot, swapped);
+        Assert.Equal("14.D", Assert.Throws<VerificationFailedException>(() => election.Verify14(ballot, swapped)).SubSection);
+
+        var unknown = With(decrypted, c => With(c, choices: [c.Choices[0], With(c.Choices[1], id: "choice-x")]));
+        election.Verify13(ballot, unknown);
+        Assert.Equal("14.C", Assert.Throws<VerificationFailedException>(() => election.Verify14(ballot, unknown)).SubSection);
+
+        var relabelledContest = With(decrypted, c => With(c, contestId: "contest-x"));
+        election.Verify13(ballot, relabelledContest);
+        Assert.Equal("14.A", Assert.Throws<VerificationFailedException>(() => election.Verify14(ballot, relabelledContest)).SubSection);
+
+        var reindexed = Tamper13(decrypted, "two options' indices swapped, labels kept");
+        Assert.Equal("13.B", Assert.Throws<VerificationFailedException>(() => election.Verify13(ballot, reindexed)).SubSection);
+        Assert.Equal("14.D", Assert.Throws<VerificationFailedException>(() => election.Verify14(ballot, reindexed)).SubSection);
     }
 
     /// <summary>
@@ -912,6 +1022,10 @@ public class ChallengedBallotDecryptionTests
         { "unknown supplemental field label", "14.C" },
         { "manifest option missing", "14.D" },
         { "declared supplemental field missing", "14.D" },
+        { "two options' labels swapped, indices kept", "14.D" },
+        { "two options' indices swapped, labels kept", "14.D" },
+        { "contest at another index, label kept", "14.B" },
+        { "option index listed twice under two labels", "14.structure" },
         { "option value 2 (R = 1)", "14.E" },
         { "option value -1", "14.E" },
         { "indicator value 2", "14.E" },
@@ -942,6 +1056,10 @@ public class ChallengedBallotDecryptionTests
             "unknown supplemental field label" => With(d, c => With(c, fields: Replace(c.SupplementalFields, overvote, f => With(f, id: "field-x")))),
             "manifest option missing" => With(d, c => With(c, choices: [c.Choices[0]])),
             "declared supplemental field missing" => With(d, c => With(c, fields: c.SupplementalFields.Where(f => f.Id != overvote).ToList())),
+            "two options' labels swapped, indices kept" => With(d, c => With(c, choices: [With(c.Choices[0], id: c.Choices[1].Id), With(c.Choices[1], id: c.Choices[0].Id)])),
+            "two options' indices swapped, labels kept" => With(d, c => With(c, choices: [With(c.Choices[0], index: c.Choices[1].Index), With(c.Choices[1], index: c.Choices[0].Index)])),
+            "contest at another index, label kept" => With(d, c => With(c, index: c.Index + 1)),
+            "option index listed twice under two labels" => With(d, c => With(c, choices: [c.Choices[0], With(c.Choices[1], index: c.Choices[0].Index)])),
             "option value 2 (R = 1)" => With(d, c => With(c, choices: Replace(c.Choices, "choice-1", f => With(f, value: 2)))),
             "option value -1" => With(d, c => With(c, choices: Replace(c.Choices, "choice-2", f => With(f, value: -1)))),
             "indicator value 2" => With(d, c => With(c, fields: Replace(c.SupplementalFields, overvote, f => With(f, value: 2)))),
@@ -954,8 +1072,8 @@ public class ChallengedBallotDecryptionTests
             "undervote difference L + 1" => With(d, c => With(c, fields: Replace(c.SupplementalFields, FieldId(SupplementalFieldKind.UndervoteDifferenceCount), f => With(f, value: 2)))),
             "no contest list" => new DecryptedChallengedBallot { BallotId = d.BallotId, Contests = null! },
             "null contest entry" => With(d, contests: [null!]),
-            "no option list" => With(d, c => new DecryptedChallengedContest { ContestId = c.ContestId, Choices = null!, SupplementalFields = c.SupplementalFields, ContestData = c.ContestData }),
-            "no supplemental field list" => With(d, c => new DecryptedChallengedContest { ContestId = c.ContestId, Choices = c.Choices, SupplementalFields = null!, ContestData = c.ContestData }),
+            "no option list" => With(d, c => new DecryptedChallengedContest { Index = c.Index, ContestId = c.ContestId, Choices = null!, SupplementalFields = c.SupplementalFields, ContestData = c.ContestData }),
+            "no supplemental field list" => With(d, c => new DecryptedChallengedContest { Index = c.Index, ContestId = c.ContestId, Choices = c.Choices, SupplementalFields = null!, ContestData = c.ContestData }),
             "null option entry" => With(d, c => With(c, choices: [c.Choices[0], null!])),
             "null supplemental field entry" => With(d, c => With(c, fields: [.. c.SupplementalFields.Skip(1), null!])),
             _ => throw new ArgumentOutOfRangeException(nameof(tamper)),

@@ -1,6 +1,7 @@
 using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.Extensions;
 using ElectionGuard.Core.Models;
+using ElectionGuard.Core.RecordFormat;
 
 namespace ElectionGuard.Core.Verify.Ballot;
 
@@ -29,6 +30,16 @@ namespace ElectionGuard.Core.Verify.Ballot;
 /// </summary>
 public class ConfirmationCodeVerification
 {
+    /// <summary>
+    /// Verification 8 for one ballot on an item decoded from the election record (design §4.8): a contest data C_0 ≥ p or C_2 value ≥ q, which χ hashes, fails 8.structure, then
+    /// <see cref="RecordItemNotEvaluableException"/> if another verification's range finding left no
+    /// domain object, then <see cref="Verify(EncryptedBallot, EncryptionRecord)"/>. See <see cref="RecordItemGate"/>.
+    /// </summary>
+    internal void Verify(RecordDecoded<EncryptedBallot> ballot, EncryptionRecord encryptionRecord)
+    {
+        Verify(RecordItemGate.Require(ballot, 8), encryptionRecord);
+    }
+
     /// <summary>
     /// The per-ballot part of Verification 8: <see cref="BallotStructure"/> ("8.structure"), 8.A,
     /// 8.B over the ballot's own B_C, then 8.D under no chaining (H_DI computed from the ballot's

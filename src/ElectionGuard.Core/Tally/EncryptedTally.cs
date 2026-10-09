@@ -122,9 +122,22 @@ public class EncryptedTally
     /// an option more than 1, adds more than 1 to a count; see
     /// <see cref="EncryptedAggregateChoice.MaximumCount"/>. Published with the tally for
     /// information; Verification 9 does not compare it (it bounds nothing; the per-contest
-    /// <see cref="EncryptedAggregateContest.CastWeight"/> does, and is compared).
+    /// <see cref="EncryptedAggregateContest.CastWeight"/> does, and is compared). The election
+    /// record's header claim of it is checked against the recount as "R.summary"
+    /// (<see cref="Verify.Tally.BallotAggregationVerifier.VerifySummary"/>, design §6.1 step E).
     /// </summary>
     public int BallotsCast { get; internal set; } = 0;
+
+    /// <summary>
+    /// The sum of the weights W (eq. 80) of the cast ballots added, whatever contests they list:
+    /// the election record's <c>EncryptedTallyHeader.total_cast_weight</c> (design §4.5, #17),
+    /// informational like <see cref="BallotsCast"/> (decoding adds no finding; the record verifier
+    /// checks the header against the recount as "R.summary"). A tally restored from the JSON record format,
+    /// which does not publish it, has 0 here, and the record writer refuses it
+    /// (<c>TallyMapper.ToItems</c>: a total below <see cref="BallotsCast"/> is unknown, since every
+    /// weight is at least 1).
+    /// </summary>
+    public long TotalCastWeight { get; internal set; }
 
     /// <summary>
     /// Multiplies a cast <paramref name="encryptedBallot"/>'s ciphertexts into the aggregate, each
@@ -185,6 +198,7 @@ public class EncryptedTally
             }
         }
         BallotsCast++;
+        TotalCastWeight += encryptedBallot.Weight;
     }
 
     private static void Add(EncryptedAggregateChoice aggregateChoice, EncryptedValueWithProofs value, int weight)
@@ -329,6 +343,7 @@ public class EncryptedTally
         }
 
         BallotsCast += partials.Sum(partial => partial.BallotsCast);
+        TotalCastWeight += partials.Sum(partial => partial.TotalCastWeight);
     }
 
     /// <summary>

@@ -2,7 +2,9 @@ using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.Extensions;
 using ElectionGuard.Core.Models;
+using ElectionGuard.Core.PreEncryption;
 using System.Numerics;
+using ElectionGuard.Core.RecordFormat;
 
 namespace ElectionGuard.Core.Verify.Ballot;
 
@@ -11,10 +13,71 @@ namespace ElectionGuard.Core.Verify.Ballot;
 /// contest: each selectable option, with its range 0..R, and each supplemental field the manifest
 /// declares (§3.1.3 p.19: they are "treated like and listed with the option selection fields"), with
 /// its own range (<see cref="Contest.RangeBound(Choice)"/>: 1 for an indicator, L for the undervote
-/// difference count, the number of write-in fields for the write-in count).
+/// difference count, the number of write-in fields for the write-in count). On a cast pre-encrypted
+/// ballot it also checks 6.A for every entry of every selected pre-encryption vector, and on an
+/// uncast one for every entry of every vector (§4.5 p.64: "including all individual selection
+/// encryptions within the selection vectors on pre-encrypted ballots"); those carry no proofs.
 /// </summary>
 public class SelectionEncryptionsWellFormedVerification
 {
+    /// <summary>
+    /// Verification 6 on an item decoded from the election record (design §4.8): α or β ≥ p fails 6.A, a range-proof challenge ≥ q 6.B and a response ≥ q 6.C, then
+    /// <see cref="RecordItemNotEvaluableException"/> if another verification's range finding left no
+    /// domain object, then <see cref="Verify(EncryptedBallot, EncryptionRecord)"/>. See <see cref="RecordItemGate"/>.
+    /// </summary>
+    internal void Verify(RecordDecoded<EncryptedBallot> encryptedBallot, EncryptionRecord encryptionRecord)
+    {
+        Verify(RecordItemGate.Require(encryptedBallot, 6), encryptionRecord);
+    }
+
+    /// <summary>
+    /// Verification 6 on an uncast pre-encrypted ballot decoded from the election record (its printed
+    /// item joined with its release; design §4.8): an α or β ≥ p of any pre-encryption vector fails
+    /// 6.A; then <see cref="RecordItemNotEvaluableException"/> if another verification's range finding
+    /// is on it (16.structure, 18.structure); then <see cref="Verify(PreEncryptedUncastBallot)"/>.
+    /// See <see cref="RecordItemGate"/>.
+    /// </summary>
+    internal void Verify(RecordDecoded<PreEncryptedUncastBallot> uncast)
+    {
+        Verify(RecordItemGate.Require(uncast, 6));
+    }
+
+    /// <summary>
+    /// Verification 6 on an uncast pre-encrypted ballot: "Verification 6 must be validated for all
+    /// selection encryptions on all ballots, including all individual selection encryptions within
+    /// the selection vectors on pre-encrypted ballots" (§4.5 p.64). An uncast ballot carries no range
+    /// proofs (it is opened by its nonces instead, Verification 18), so what applies is 6.A: every α
+    /// and β of every pre-encryption vector is in Z_p^r. Verification 18's recomputation implies it
+    /// for a ballot that passes 18; this reports a non-member under 6.A whatever 18 says. Throws
+    /// <see cref="VerificationFailedException"/> "6.A" for the first non-member, in ballot order.
+    /// </summary>
+    public void Verify(PreEncryptedUncastBallot uncast)
+    {
+        ArgumentNullException.ThrowIfNull(uncast);
+        ArgumentNullException.ThrowIfNull(uncast.Ballot);
+        var values = new List<IntegerModP>();
+        var names = new List<string>();
+        foreach (var contest in uncast.Ballot.Contests ?? [])
+        {
+            foreach (var selection in contest?.Selections ?? [])
+            {
+                for (int k = 0; k < (selection?.Vector?.Count ?? 0); k++)
+                {
+                    values.Add(selection!.Vector[k].Alpha);
+                    names.Add($"contest {contest!.ContestId}, vector {selection.SelectionIndex}: α_{k + 1}");
+                    values.Add(selection.Vector[k].Beta);
+                    names.Add($"contest {contest.ContestId}, vector {selection.SelectionIndex}: β_{k + 1}");
+                }
+            }
+        }
+
+        int first = SubgroupMembership.IndexOfFirstNonMember(values);
+        if (first >= 0)
+        {
+            throw new VerificationFailedException("6.A", $"Selection encryption well-formedness verification failed for uncast pre-encrypted ballot {uncast.Ballot.Id}, {names[first]}: not in Z_p^r.");
+        }
+    }
+
     public void Verify(EncryptedBallot encryptedBallot, EncryptionRecord encryptionRecord)
     {
         // The proof challenges recomputed below hash the manifest's contest and option indices. They
@@ -25,6 +88,16 @@ public class SelectionEncryptionsWellFormedVerification
         // manifest's options and the declared supplemental fields, each once, before anything else
         // (see BallotStructure).
         BallotStructure.Require(encryptedBallot, encryptionRecord.Manifest, 6);
+
+        // A cast pre-encrypted ballot also publishes the selected pre-encryption vectors the combined
+        // vector was made from: "including all individual selection encryptions within the selection
+        // vectors on pre-encrypted ballots" (§4.5 p.64). They carry no proofs, so 6.A is what applies,
+        // and it comes before any other failure. The combined vector's 6.A does not imply it: two
+        // non-members can multiply to a member (-α_1 · -α_2 = α_1 · α_2).
+        if (encryptedBallot.IsPreEncrypted)
+        {
+            VerifySelectedVectorsAreMembers(encryptedBallot);
+        }
 
         // 6.A is read off the squaring chains the proof checks walk anyway, when the active q allows
         // it (see RangeProofChallenge). That reorders the work but must not reorder the failures:
@@ -37,6 +110,40 @@ public class SelectionEncryptionsWellFormedVerification
         else
         {
             VerifyInOrder(encryptedBallot, encryptionRecord);
+        }
+    }
+
+    /// <summary>
+    /// 6.A over every α and β of every selected vector of a cast pre-encrypted ballot
+    /// (<see cref="EncryptedBallot.PreEncryptedContests"/>), as one batch. A missing list or vector is
+    /// skipped: their shape is Verifications 15-17's structure check
+    /// (<see cref="BallotStructure.RequirePreEncryptedCast"/>), which this verification does not run.
+    /// </summary>
+    private static void VerifySelectedVectorsAreMembers(EncryptedBallot encryptedBallot)
+    {
+        var values = new List<IntegerModP>();
+        var names = new List<string>();
+        foreach (var contest in encryptedBallot.PreEncryptedContests ?? [])
+        {
+            var selected = contest?.SelectedVectors ?? [];
+            for (int v = 0; v < selected.Count; v++)
+            {
+                var vector = selected[v]?.Vector ?? [];
+                for (int k = 0; k < vector.Count; k++)
+                {
+                    var encryption = vector[k];
+                    values.Add(encryption.Alpha);
+                    names.Add($"contest {contest!.ContestId}, selected vector {v + 1}: α_{k + 1}");
+                    values.Add(encryption.Beta);
+                    names.Add($"contest {contest.ContestId}, selected vector {v + 1}: β_{k + 1}");
+                }
+            }
+        }
+
+        int first = SubgroupMembership.IndexOfFirstNonMember(values);
+        if (first >= 0)
+        {
+            throw new VerificationFailedException("6.A", $"Selection encryption well-formedness verification failed for pre-encrypted ballot {encryptedBallot.Id}, {names[first]}: not in Z_p^r.");
         }
     }
 
