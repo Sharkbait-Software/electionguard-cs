@@ -8,7 +8,14 @@ namespace ElectionGuard.Core.BallotEncryption;
 
 public class BallotEncryptor
 {
-    public BallotEncryptor(EncryptionRecord encryptionRecord, string deviceId, VotingDeviceInformationHash deviceHash)
+    /// <param name="encryptionRecord">The election's encryption record.</param>
+    /// <param name="deviceId">S_device, the device the ballots are encrypted on (§3.4.3).</param>
+    /// <param name="deviceHash">H_DI of that device (eq. 72).</param>
+    /// <param name="clock">
+    /// The clock each ballot's <see cref="EncryptedBallot.EncryptionTimestamp"/> is read from (§3.7
+    /// "the date and time of the ballot encryption"); <see cref="TimeProvider.System"/> when null.
+    /// </param>
+    public BallotEncryptor(EncryptionRecord encryptionRecord, string deviceId, VotingDeviceInformationHash deviceHash, TimeProvider? clock = null)
     {
         ArgumentNullException.ThrowIfNull(encryptionRecord);
 
@@ -18,11 +25,13 @@ public class BallotEncryptor
         _encryptionRecord = encryptionRecord;
         _deviceId = deviceId;
         _deviceHash = deviceHash;
+        _clock = clock ?? TimeProvider.System;
     }
 
     private readonly EncryptionRecord _encryptionRecord;
     private readonly string _deviceId;
     private readonly VotingDeviceInformationHash _deviceHash;
+    private readonly TimeProvider _clock;
 
     /// <summary>
     /// Test seam: supplies the Schnorr proof nonce u of a contest's data encryption (eq. 69), given
@@ -149,8 +158,13 @@ public class BallotEncryptor
         var chainingField = new ChainingField(_encryptionRecord.Manifest.ChainingMode, _deviceHash, _encryptionRecord.ExtendedBaseHash, previousConfirmationCode);
         var confirmationCode = new ConfirmationCode(selectionEncryptionIdentifierHash, contestHashes, chainingField);
 
+        // §3.7: the record holds "the date and time of the ballot encryption". It is not hashed: eq.
+        // (71) takes only the contest hashes and B_C, and §3.4 leaves the date and time to optional
+        // inputs this library does not use (it could enter S_device, eq. 72, which the manifest
+        // would then have to specify).
         return new EncryptedBallot
         {
+            EncryptionTimestamp = EncryptedBallot.TruncateTimestamp(_clock.GetUtcNow()),
             Id = ballot.Id,
             BallotStyleId = ballot.BallotStyleId,
             DeviceId = _deviceId,

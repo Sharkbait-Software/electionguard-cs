@@ -503,6 +503,12 @@ public class TallyAdmin
     /// run one after another, each round's per-option work on up to
     /// <paramref name="maxDegreeOfParallelism"/> threads (-1, the default, for no limit), so 1
     /// keeps the whole decryption on one thread.
+    /// <para>A tally read back from a record
+    /// (<see cref="ElectionGuard.Core.Serialization.JsonElectionRecordSerializer.DeserializeEncryptedTally"/>) must pass
+    /// Verification 9 (<see cref="ElectionGuard.Core.Verify.Tally.BallotAggregationVerification"/>) against the cast
+    /// ballots before it is decrypted: its decryption bounds come from the published cast weights,
+    /// which only Verification 9 checks, and a forged weight widens the discrete-log search (up to
+    /// the <see cref="int.MaxValue"/> limit, beyond which decryption refuses).</para>
     /// </summary>
     public DecryptedTally Decrypt(IReadOnlyList<TallyGuardian> guardians, EncryptedTally encryptedTally, EncryptionRecord encryptionRecord, int maxDegreeOfParallelism = -1)
     {
@@ -531,7 +537,8 @@ public class TallyAdmin
     /// [0, the largest <see cref="EncryptedTally.EncryptedAggregateChoice.MaximumCount"/>].</item>
     /// </list>
     /// Any failure throws <see cref="TallyDecryptionException"/>, naming the guardian at fault when
-    /// it can be identified.
+    /// it can be identified. A tally read back from a record must pass Verification 9 first; see
+    /// <see cref="Decrypt"/>.
     /// </summary>
     public DecryptedTally Combine(
         EncryptedTally encryptedTally,
@@ -597,6 +604,14 @@ public class TallyAdmin
         // [0, the largest choice's MaximumCount]: the sum over cast ballots of W·min(R, L) (G16).
         // The count is published once decrypted, so the variable-time search gives nothing away.
         long bound = options.Length == 0 ? 0 : options.Max(x => x.MaximumCount);
+        if (bound < 0)
+        {
+            // Unreachable through EncryptedTally (cast weights are not negative and MaximumCount
+            // saturates), but a negative bound must not reach BoundedDiscreteLog as an untyped
+            // ArgumentOutOfRangeException.
+            throw new TallyDecryptionException(null, $"Tally did not decrypt successfully: the count bound {bound} is negative.");
+        }
+
         if (bound > int.MaxValue)
         {
             throw new TallyDecryptionException(null, $"Tally did not decrypt successfully: a count may be as large as {bound}, beyond the discrete-log search this library performs.");

@@ -1,6 +1,7 @@
 ﻿using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.KeyGeneration;
 using ElectionGuard.Core.Models;
+using ElectionGuard.Core.Serialization;
 using ElectionGuard.Core.Tally;
 using System.Numerics;
 using System.Text;
@@ -545,12 +546,14 @@ public partial class KnownAnswerTests
                 CryptographicParameters = new CryptographicParameters(),
                 GuardianParameters = new GuardianParameters(Int(chain, "n"), Int(chain, "k")),
                 ParameterBaseHash = parameterBaseHash,
-                ManifestFile = manifestFile,
+                // H_B and H_E are the oracle's, over its own manifest bytes; the record's manifest
+                // file is the shaping manifest in the library's format. Nothing here runs
+                // Verification 1.F, which would report the difference.
+                ManifestFile = ManifestSerializer.ToManifestFile(manifest),
                 ElectionBaseHash = electionBaseHash,
                 Guardians = [],
                 ElectionPublicKeys = keys,
                 ExtendedBaseHash = extendedBaseHash,
-                Manifest = manifest,
             };
             int[][] votes = [[1, 0], [0, 0, 1]];
             var ballot = new Core.BallotEncryption.Ballot
@@ -725,12 +728,14 @@ public partial class KnownAnswerTests
             CryptographicParameters = new CryptographicParameters(),
             GuardianParameters = new GuardianParameters(3, 2),
             ParameterBaseHash = parameterBaseHash,
-            ManifestFile = manifestFile,
+            // H_B and H_E are the oracle's, over its own manifest bytes; the record's manifest file is
+            // the shaping manifest in the library's format. Nothing here runs Verification 1.F,
+            // which would report the difference.
+            ManifestFile = ManifestSerializer.ToManifestFile(manifest),
             ElectionBaseHash = electionBaseHash,
             Guardians = [],
             ElectionPublicKeys = keys,
             ExtendedBaseHash = extendedBaseHash,
-            Manifest = manifest,
         };
 
         string contestId = $"contest-{contestIndex}";
@@ -743,7 +748,10 @@ public partial class KnownAnswerTests
 
         // The search bound: the oracle's three ballots, of which t select this option.
         Assert.Equal(3, inputs.GetProperty("ballots").GetArrayLength());
-        aggregate.MaximumCount = 3;
+        // Three weight-1 ballots list the contest; R = L = 1, so the bound is 3 (S10a: the bound is
+        // the contest's cast weight times the option's maximum).
+        tally.Contests[contestId].CastWeight = 3;
+        Assert.Equal(3, aggregate.MaximumCount);
 
         // The guardians of U hold the oracle's z_i and use its u_i for this option.
         var guardianVectors = proof.GetProperty("guardians").EnumerateArray().ToList();

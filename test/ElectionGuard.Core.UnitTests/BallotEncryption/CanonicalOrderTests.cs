@@ -1,5 +1,6 @@
 using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.Models;
+using ElectionGuard.Core.Serialization;
 using ElectionGuard.Core.Verify;
 using ElectionGuard.Core.Verify.Ballot;
 using ElectionGuard.Testing.Common;
@@ -86,7 +87,7 @@ public class CanonicalOrderTests
             BallotStyles = [new BallotStyle { Id = "style-1", Name = "Style 1", ContestIds = styleContestIds }],
             ChainingMode = ChainingMode.None,
         };
-        var manifestFile = new ManifestFile { Bytes = JsonSerializer.SerializeToUtf8Bytes(manifest) };
+        var manifestFile = ManifestSerializer.ToManifestFile(manifest);
 
         var guardianSet = ElectionFixtureBuilder.CreateGuardianSet();
         var records = ElectionFixtureBuilder.CreateEncryptionRecord(guardianSet, manifest, manifestFile);

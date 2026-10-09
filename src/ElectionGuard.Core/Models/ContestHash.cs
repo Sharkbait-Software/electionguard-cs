@@ -13,6 +13,21 @@ public struct ContestHash : IEquatable<ContestHash>
     }
 
     /// <summary>
+    /// Strict decoding for a value read from a record: exactly 32 bytes. Throws
+    /// <see cref="Serialization.NonCanonicalEncodingException"/> otherwise; a field missing from a
+    /// document arrives here as null.
+    /// </summary>
+    public static ContestHash FromCanonicalBytes(byte[]? bytes)
+    {
+        if (bytes is not { Length: EGHash.HashBytes })
+        {
+            throw new Serialization.NonCanonicalEncodingException($"A contest hash is {EGHash.HashBytes} bytes; got {bytes?.Length ?? 0}.");
+        }
+
+        return new ContestHash(bytes.ToArray());
+    }
+
+    /// <summary>
     /// §3.4.1 eq. (70): chi_l = H(H_I; 0x28, l, alpha_1, beta_1, ..., alpha_ml, beta_ml, C_0, C_1, C_2)
     /// over the encryptions E_1..E_ml of every verifiable field of the contest "in order specified by
     /// the election manifest": the selectable options, then the supplemental fields the manifest

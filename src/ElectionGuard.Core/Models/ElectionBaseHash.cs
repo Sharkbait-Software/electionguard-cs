@@ -23,5 +23,27 @@ public class ElectionBaseHash : HashValue
             manifestBytes);
     }
 
+
+    /// <summary>
+    /// Strict decoding of an election base hash H_B read from a record: exactly 32 bytes, kept as read (never
+    /// recomputed, so the verification that checks it still has something to check). Throws
+    /// <see cref="Serialization.NonCanonicalEncodingException"/> otherwise; a field missing from a
+    /// document arrives here as null.
+    /// </summary>
+    public static ElectionBaseHash FromCanonicalBytes(byte[]? bytes)
+    {
+        if (bytes is not { Length: EGHash.HashBytes })
+        {
+            throw new Serialization.NonCanonicalEncodingException($"An election base hash H_B is {EGHash.HashBytes} bytes; got {bytes?.Length ?? 0}.");
+        }
+
+        return new ElectionBaseHash(bytes.ToArray(), fromBytes: true);
+    }
+
+    private ElectionBaseHash(byte[] bytes, bool fromBytes)
+    {
+        Bytes = bytes;
+    }
+
     protected override byte[] Bytes { get; }
 }

@@ -1,6 +1,7 @@
 using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.Models;
+using ElectionGuard.Core.Serialization;
 using ElectionGuard.Core.Serialization.Converters;
 using ElectionGuard.Core.Tally;
 using ElectionGuard.Core.Verify;
@@ -812,7 +813,7 @@ public class ChallengedBallotDecryptionTests
             BallotStyles = [new BallotStyle { Id = "style-1-3", Name = "Contests 1 and 3", ContestIds = ["contest-1", "contest-3"] }],
             ChainingMode = ChainingMode.None,
         };
-        var manifestFile = new ManifestFile { Bytes = JsonSerializer.SerializeToUtf8Bytes(manifest) };
+        var manifestFile = ManifestSerializer.ToManifestFile(manifest);
         var guardianSet = ElectionFixtureBuilder.CreateGuardianSet(manifestFile: manifestFile);
         var record = ElectionFixtureBuilder.CreateEncryptionRecord(guardianSet, manifest, manifestFile);
         var election = new Election

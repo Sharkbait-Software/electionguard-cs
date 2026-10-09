@@ -228,6 +228,13 @@ User answers (2026-10-04):
   - `KnownExposure_S9b_1` documents accepted behavior under that assumption.
   - Instant verification (a voter challenges, and the ballot is opened with the in-memory nonce) is encryption-side
     and never involves guardians.
+- **Q37, S10 scope, answered 2026-10-08:** "A and B". The user also wrote: "The ElectionRecord bundle needs to be
+  canonically defined as well because of the fact that a verifier needs to be capable of operating on it. It will
+  eventually receive a formal spec as well. That said, we need to take care to be able to handle it since it will often
+  be large (GBs), and we could have multiple representations and such."
+  - Plan: S10a fixes the Core correctness gaps (part A) and adds the G40 encryption timestamp.
+  - S10b designs the canonical, streaming, multi-representation ElectionRecord. The design goes to the user for
+    approval, then gets implemented together with a verify-everything entry point.
 - **Cadence:** "Keep going". After each stage: commit, update this tracker, push, start the next stage. Stop only
   for a new spec contradiction or question.
 - **S7 design and API choices** (2026-10-06; implementer choices, none changes bytes the spec fixes; the first two are
@@ -385,6 +392,95 @@ User answers (2026-10-04):
     `Manifest.Validate`). The contest index cannot be checked without the manifest; the class remarks say the
     contest must be the manifest's own. No byte moves for a conformant contest (the positions were already 1..m).
 
+- **S10a design and API choices** (2026-10-08; low-stakes implementer choices under Q37 part A; none changes a hash
+  input, `test/kat/vectors.json` is unchanged and every KAT family passes; the first is also open question S10a-1):
+  - **Manifest format = strict parse, not byte-canonical input.** `ManifestSerializer` is the one manifest format.
+    Reading is strict (UTF-8 without BOM, case-sensitive camelCase members, no unknown or repeated member, comment,
+    trailing comma, null value or null list entry, integers as JSON numbers, `kind` by exact
+    `SupplementalFieldKind` name, then `Manifest.Validate`; any failure is `InvalidManifestException`). Writing is
+    deterministic (compact, declaration order; a supplemental field writes `kind` first, as System.Text.Json orders
+    a derived record's members; every optional member except a null `hashTrimmingFunction`; STJ's default string
+    escaping). A file need not be in the written form to be read: H_B hashes the file as it is (§3.1.4) and §3.1.3
+    leaves the representation "implementation specific". Requiring the written form byte for byte is S10a-1.
+  - **The record's manifest is derived.** `EncryptionRecord.ManifestFile`'s init accessor parses the file and
+    `EncryptionRecord.Manifest` is get-only; no constructor or member takes a parsed manifest. `GuardianRecord`
+    carries only the file (it has no parsed manifest, so nothing to bind; the guardians check H_B over it).
+  - **KAT records** keep the oracle's H_B and H_E (over `{"election":"kat"}`, not a manifest) as claims and carry the
+    shaping manifest as their file; they never run 1.F. This was preferred to an internal factory that would accept
+    a file and a parsed manifest side by side: no API, internal or public, lets the two disagree.
+  - **Record JSON** (`JsonElectionRecordSerializer`): one class with typed `Serialize`/`Deserialize*` methods for the
+    `EncryptionRecord`, `GuardianRecord`, `EncryptedTally`, `DecryptedTally`, `List<DecryptedContestData>` and
+    `List<DecryptedChallengedBallot>`; camelCase, indented. Z_p/Z_q/hash values are base64 of their fixed-width
+    big-endian bytes, as on ballots. p, q, g, r are b(p,512), b(q,32), b(g,512) and b(r,512) (r is 481 bytes for the
+    spec's parameters, padded to the width of Z_p), never through `IntegerModP`/`IntegerModQ`. Hash claims (H_P,
+    H_B, H_E) are kept as read (`FromCanonicalBytes`, exactly 32 bytes), so 1.E/1.F/4.A still check them.
+    Structural errors are `JsonException`, value encodings `NonCanonicalEncodingException`, a manifest file that is
+    not a manifest `InvalidManifestException`. The derived `Manifest` is removed from the serializer's contract, so it
+    is not written and a document carrying a `manifest` member is refused. Bundling is S10b's.
+  - **Tally decryption bound: publish the per-contest cast weight.** `EncryptedAggregateContest.CastWeight` (Σ W of
+    the cast ballots that list the contest; `BallotStructure` makes every such ballot list every option and field)
+    replaces the per-option `MaximumCount` accumulator; `MaximumCount` is now `CastWeight × MaximumValue`, computed.
+    The encrypted tally record carries `castWeight` per contest (and `ballotsCast`, informational). Reading a tally
+    takes the manifest (for `MaximumValue`) and keeps the document's keys, so V9 still sees an extra or missing
+    option. V9 compares each contest's cast weight with the recomputed one, after 9.A/9.B, as `"9.structure"`; it
+    does not compare the ballot count (one ballot of weight 3 aggregates exactly as three of weight 1, which
+    `BallotAggregationVerifierTests.AddBallot_WeightedBallot_MatchesThatManyUnweightedCopies` pins). Chosen over
+    recomputing from the cast ballots at load time, which needs the whole ballot set again for an administrator that
+    only decrypts.
+  - **Typed errors, split by kind.** A missing or null *scalar* of a decoded ballot (ballot id, ballot style, H_I, a
+    contest's, option's or field's label, a contest data C_1) is a `NonCanonicalEncodingException` at decode time
+    (`EncryptedBallotShape`, run by both ballot decoders), as were a missing ballot nonce and short code before. A
+    missing or null *list* or list entry decodes (protobuf reads a missing repeated field as empty, since it cannot
+    tell the two apart) and `BallotStructure` reports it as `"N.structure"`, as it already did for a null
+    supplemental field list (S5 review). A missing proof list fails the proof count, as a null JSON proof list
+    already did. A null device id or ballot nonce stays `BallotStructure`'s (pinned since S7/S9).
+  - **Hash widths.** `ContestHash`, `ConfirmationCode`, `SelectionEncryptionIdentifierHash` and
+    `VotingDeviceInformationHash` gained strict `FromCanonicalBytes` (exactly 32 bytes); every JSON converter and the
+    protobuf decoder use them (a 31-byte confirmation code used to round-trip).
+  - **G40 timestamp:** `EncryptedBallot.EncryptionTimestamp` (`DateTimeOffset?`, UTC, whole milliseconds; the init
+    accessor refuses another offset or precision). `BallotEncryptor` takes an optional `TimeProvider` (default
+    `TimeProvider.System`) and truncates its reading to the millisecond. JSON `encryptionTimestamp`, exactly
+    `yyyy-MM-ddTHH:mm:ss.fffZ` (anything else `NonCanonicalEncodingException`), omitted when null; protobuf field 14,
+    `int64` Unix milliseconds with presence, absent when null, years 0001-9999. Not a hash input: eq. (71) takes the
+    contest hashes and B_C; §3.4 p.41 makes date and time an optional input the implementation chooses, and this
+    library does not choose it. `BallotStructure` does not require it.
+  - **Other readers tightened:** `JsonDeviceChainRecordSerializer` refuses unknown and repeated members, a null
+    device id or list entry; `JsonPreEncryptedBallotSerializer` refuses unknown and repeated members (a name the model
+    marks `[JsonIgnore]`, e.g. a computed property, is skipped by System.Text.Json, not refused; it keeps
+    reading a null device id, which V16 reports, as pinned in S9c review round 1).
+  - **Console:** writes and reads back the guardian record, encryption record, every encrypted ballot, the device
+    chain record, the encrypted tally (`encrypted-tally.json`, new), the decrypted tally (`tally.json`, now camelCase),
+    contest data and challenged ballots, and verifies (and decrypts the tally) from the copies read back; it prints the
+    tally.
+  - **S10a review round 1 additions** (2026-10-08):
+    - **Base64 is canonical-only.** Every JSON decoder of a published value (the eight ballot converters, the
+      selection hash and ballot nonce converters, the record converters) reads base64 through `StrictBase64.Read`:
+      RFC 4648 §4 alphabet, padded to a multiple of 4, unused bits zero, no whitespace, checked by re-encoding the
+      decoded bytes and comparing. Anything else is a `NonCanonicalEncodingException` (a value-encoding error, like
+      a wrong width); a non-string token is a `JsonException`. `Convert.FromBase64String` and
+      `Utf8JsonReader.GetBytesFromBase64` were both measured to accept `"AA AA"` and `"AA\nAA"` (whitespace
+      skipped), and accept nonzero unused bits, so the reviewer's suggested switch to `GetBytesFromBase64` alone
+      would not have given one encoding per value. This also tightens the ballot JSON reader (no writer produced
+      whitespace or nonzero unused bits).
+    - **Property names that are not text** (an escaped lone surrogate, invalid UTF-8) are a `JsonException` from
+      `StrictJson.RejectAmbiguity` (it wraps the reader's `InvalidOperationException`), so the manifest reader
+      reports `InvalidManifestException` and the record, device chain and pre-encrypted readers `JsonException`.
+    - **Cast weight bounds.** The encrypted tally reader refuses a cast weight above `ballotsCast × int.MaxValue`
+      (a sum of at most `ballotsCast` int weights; a consistency check only, since `ballotsCast` is published too).
+      `MaximumCount` saturates at `long.MaxValue` rather than wrapping (saturation, not `checked`: an
+      `OverflowException` from a property getter would be another untyped failure), and `Combine` refuses a bound
+      that is negative (unreachable through `EncryptedTally` now) or above `int.MaxValue` with
+      `TallyDecryptionException`. The real defense is ordering: `DeserializeEncryptedTally`, `TallyAdmin.Decrypt`
+      and `Combine` now document that a tally read back must pass Verification 9 before it is decrypted (the
+      console already does). Enforcing it in the API (e.g. a verified-tally type) is left to S10b's verify-everything
+      entry point.
+    - **The record copies its manifest file's bytes** when `ManifestFile` is set, so the caller's array cannot split
+      1.F from the parse. `record.ManifestFile.Bytes` (the copy) and `record.Manifest` stay mutable objects that
+      in-process code must treat as read-only; making them immutable (`ReadOnlyMemory<byte>`, read-only collections)
+      is a wider API change not taken here. The "or change `record.Manifest`" advice was removed from CLAUDE.md and
+      the fixture builder; `ManifestValidationTests.Encryptors_ManifestReorderedAfterRecordCreation_Throw` is kept,
+      commented as a deliberate misuse probe.
+
 ## Stages
 
 | Stage | G-IDs | Blocked on | Status | Commit |
@@ -400,8 +496,9 @@ User answers (2026-10-04):
 | S8 Chain closing | G19, G37 | — | done | d60a56b |
 | S9 Pre-encrypted recording tool | G31 (now primitives + verifications; the tools are out of scope, user decision Q35) | after S5, S7 | done (nonce-decryption gate: S9b); partly superseded by S9c (encrypting and recording tools removed per Q35) | 97aac86 |
 | S9b Nonce-decryption authorization gate (Q31) | Q31 / S9-6; the security review finding on S7's `TallyGuardian.DecryptBallotNonce` (caller-controlled Status) | S9 | done; partly superseded by S9c (pre-encrypted half, issued list and once-only state removed per Q35; the cast-ballot record check stays) | 5d5e43c |
-| S9c Pre-encryption scope: primitives only (Q35) | remove encrypting/recording tools and guardian pre-encrypted nonce path | after S9b | done | see next commit |
-| S10 Record metadata | G40 (G39 won't fix, per Q9); S2 carry-overs: bind the parsed `Manifest` to `ManifestFile` (S2 review R1), record JSON round trip; S4 carry-overs: a `DecryptedTally` record serializer, and a tally loaded from a record must carry or recompute each option's `MaximumCount` (S4 review R1) | — | todo | |
+| S9c Pre-encryption scope: primitives only (Q35) | remove encrypting/recording tools and guardian pre-encrypted nonce path | after S9b | done | 99296bd |
+| S10a Record correctness gaps (Q37 part A) | G40 (G39 won't fix, per Q9); S2 carry-overs: bind the parsed `Manifest` to `ManifestFile` (S2 review R1), record JSON round trip; S3/S5 carry-over: typed errors for malformed ballot documents; S4 carry-overs: a `DecryptedTally` record serializer, and a tally loaded from a record must carry or recompute each option's `MaximumCount` (S4 review R1/F2); S6/S7 carry-overs: `DecryptedContestData` and `DecryptedChallengedBallot` serializers | — | done | see next commit |
+| S10b Canonical ElectionRecord bundle (Q37 part B) | streaming, multi-representation election record; verify-everything entry point; device-close signing/timestamp (S8b) | S10a; user approval of the design | todo (design first) | |
 
 ## Pinned-value inventory
 
@@ -578,7 +675,262 @@ through `PreEncryptionPrimitives` and the test-only `PreEncryptedBallotFixtures`
 no longer writes a `pre-encrypted/` subdirectory (a stale one from earlier runs may remain under `C:/temp/eg/data/1`;
 it is output, not gate input). S9c review round 1: no pinned value moved either (three tests added, none re-pinned).
 
+S10a: no hash, nonce, ciphertext, contest hash, confirmation code or KAT value moved; `git diff test/kat/` is empty and
+every KAT family passes. No test expectation was re-pinned. What moved, by design:
+- Fixture manifests are written in `ManifestSerializer`'s form (`CreateMinimalManifest` used default
+  System.Text.Json, PascalCase), so every fixture election's H_B, and with it H_E and everything downstream, differs
+  from S9c. No test holds a literal for them.
+- The KAT tests that build records (`Encryption_ReproducesTheContestHashAndConfirmationCodeVectors`,
+  `TallyDecryptionProof_Eq86To93_AndVerification10`, `Encryption_WithContestData_...`,
+  `ContestDataDecryptionProof_Eq96To106_AndVerification12`, every user of `MainChainRecord`) now pass the shaping
+  manifest as the record's file and keep the oracle's H_B/H_E as claims; `TallyDecryptionProof_...` sets the
+  contest's `CastWeight` to 3 where it set `MaximumCount` to 3 (same bound, asserted). Inputs and expected values are
+  unchanged.
+- The committed manifests' written bytes equal the `PerfJson.LineOptions` bytes the harness hashed before, so
+  `manifestHash` is unchanged (`sha256:a2ec0152...` for `smoke`) and S9c perf records stay comparable.
+- Every encrypted ballot the encryptor makes carries an encryption timestamp: smoke protobuf 12,482 -> 12,489 bytes,
+  JSON about +50 bytes. Contest hashes and confirmation codes are unchanged (the timestamp is not hashed).
+- The console's `tally.json` is now the record serializer's (camelCase, with `contestIndex`, `choiceIndex`, `t`,
+  `challenge`, `response`); `contest-data.json` and `challenged-ballots.json` likewise; `encrypted-tally.json` is
+  new. Counts unchanged (0-0: 3, 0-1: 0). No input under `C:/temp/eg/data` changed, so no .bak.
+
 ## Log
+
+### 2026-10-08 — S10a review round 1 (cast-weight bound, canonical base64, property-name errors, manifest copy, test gaps)
+Worktree changes only; nothing committed. Ten minor findings covering seven distinct issues: the cast-weight finding
+was raised twice and the pre-encrypted test gap three times. Six issues were fixed. The seventh, the ballot JSON
+reader, is recorded as an explicit S10b carry-over, which is the first fix the reviewer offered. Two suggested fixes were changed after evidence, as described below. No hash input, KAT vector
+(`git diff test/kat/` empty) or pinned value moved, and no existing test expectation was re-pinned. One existing test
+helper was tightened (`PreEncryptedSerializationTests.AssertRefused` no longer accepts a bare `FormatException`).
+Decisions: "S10a review round 1 additions" under "S10a design and API choices".
+
+Findings and dispositions:
+- **Cast weight trusted on load, `MaximumCount` wraps (spec F1 and code F5, the same defect): fixed.**
+  - `MaximumCount` now saturates at `long.MaxValue`. Before, a probe gave -2 for weight `long.MaxValue` with
+    MaximumValue 2, and `long.MinValue` for 2^62.
+  - `Combine` refuses a negative bound, as well as one above `int.MaxValue`, with `TallyDecryptionException`.
+  - `DeserializeEncryptedTally` refuses a weight above `ballotsCast × int.MaxValue` with `JsonException`.
+  - `DeserializeEncryptedTally`, `TallyAdmin.Decrypt` and `Combine` now document that Verification 9 must pass
+    before a tally read back is decrypted. The console already ran V9 first.
+  - Saturation was chosen over the suggested `checked`, because an `OverflowException` from a getter would be one
+    more untyped failure.
+  - A weight just under the `int.MaxValue` search cap is still accepted at load. Only V9 can tell it is forged, so
+    the documented ordering is the defense. A verified-tally API is left to S10b's verify-everything entry point.
+- **Ballot JSON reader accepts unknown and repeated members (spec F3): carried over to S10b, not fixed here.**
+  - The S10b design (`2026-10-08-election-record-design.md`) replaces this reader. S10b-6 lists "duplicate member"
+    among the JSON negatives its codecs must refuse. S10b-9's legacy importer reads today's JSON ballots, and it
+    must refuse a document that names a member twice: under last-wins, a second `alpha` changes what eqs. (70)
+    and (71) bind.
+  - The duplicate scan was not added to the hot reader in this round, which already changes the reader's base64
+    path. Unknown members stay accepted because older documents carry retired members.
+- **Property names that are not valid text threw a raw `InvalidOperationException` (code F4): fixed.**
+  - `StrictJson.RejectAmbiguity` wraps the reader loop and rethrows as `JsonException`. The manifest reader
+    therefore reports `InvalidManifestException`, and the record, device-chain and pre-encrypted readers report
+    `JsonException`.
+  - A dictionary key fails the same way. A probe showed that even `JsonSerializer.Deserialize` lets the raw
+    exception out for a lone-surrogate dictionary key. A tally contest id and option id are now covered.
+- **Record base64: invalid text threw a bare `FormatException`, and whitespace was accepted (code F7): fixed.**
+  - The suggested `reader.GetBytesFromBase64()` fixes only the first half. A probe showed it, and
+    `Convert.FromBase64String`, accept `"AA AA"` and `"AA\nAA"`.
+  - New `StrictBase64` requires the canonical form, checked by re-encoding the bytes. It throws
+    `NonCanonicalEncodingException`, which is a `FormatException`, so existing `FormatException` catches still work.
+  - The eight ballot converters, the two pre-encryption converters and `RecordJson.ReadBase64` (behind the record
+    converters) all use it.
+- **Manifest binding could be split in process, and the docs endorsed it (code F6): fixed.**
+  - The `ManifestFile` init accessor parses and keeps its own copy of the bytes.
+  - The "or change `record.Manifest`" advice was removed from CLAUDE.md and from `CreateEncryptionRecord`'s remarks.
+  - The reorder test is kept and is now commented as a deliberate misuse probe.
+  - Read-only collections were not added; the reviewer agreed they are not needed here.
+- **V10/V12/V13 value tamperings asserted only the exception type (code F8): fixed**, with each sub-section read
+  from the verifier rather than taken from the finding:
+  - A changed count fails 10.C (T = K^t).
+  - A changed D fails 12.C.
+  - A changed σ fails **13.B**, not 13.A as the finding guessed. The released value recomputes another (α, β), so
+    another contest hash and H_C. 13.A covers only contest data.
+- **Pre-encrypted reader strictness was untested (spec F2, code F9, tests F1): fixed.**
+  - New theory `PreEncryptedSerializationTests.Json_AmbiguousOrNonCanonicalDocument_IsRefused` runs over both
+    `DeserializeBallot` and `DeserializeUncastBallot`.
+  - It covers an unknown member (a name the model does not have, so not a skipped `[JsonIgnore]` member), a member
+    named twice, a leading BOM, a lone-surrogate name, and base64 with whitespace.
+  - It first checks that the untampered bytes read back.
+
+Tests: Core 2001 -> 2047 (+46); Perf 231 unchanged. New cases:
+- **`ElectionRecordSerializationTests`:**
+  - Not-base64, whitespace, unused-bit, lone-surrogate and invalid-UTF-8 cases in the encryption-record,
+    guardian-record, encrypted-tally, decrypted-tally, contest-data, challenged-ballot and device-chain theories,
+    plus a BOM case for the device chain.
+  - `EncryptedTally_CastWeightAboveWhatTheBallotsCastCanGive_IsRefused`.
+  - `EncryptedTally_ForgedCastWeightDecryptedWithoutVerification9_IsRefusedWithTallyDecryptionException`.
+  - `MaximumCount_Saturates_InsteadOfWrapping` (5 cases).
+  - `EncryptedTally_SaturatedBound_DecryptionRefusesWithTallyDecryptionException`.
+- **`ManifestSerializerTests`:** high and low lone-surrogate names, an invalid-UTF-8 name, and
+  `EncryptionRecord_CopiesTheManifestFile_SoTheCallersArrayCannotSplitTheBinding`.
+- **`PreEncryptedSerializationTests`:** the theory above (10 cases).
+
+Gate (all source changes in, before any expectation would have been touched; nothing needed re-pinning):
+- Build: `0 Warning(s)`, `0 Error(s)`.
+- Smoke: `correctness passed`.
+  - EncryptBallots 246 ms wall, 0.246 ms/ballot, 165.8 MB.
+  - VerifyBallots 1,019 ms wall, 1.019 ms/ballot, 12.2 MB.
+  - Tally 8 ms, DecryptTally 35 ms.
+  - json 8,836 ser/s, 5,374 deser/s, 21,217 bytes; protobuf 12,489 bytes.
+- Console: `Writing out guardian record.`, `Writing out encryption record.`, `Device Device 1: 4 ballots, chaining mode
+  None.`, `Ballot 0, contest 0: contest data "Write-in: Ada Lovelace".`, `Challenged ballot 0-challenged, contest 0:
+  0-0=1, 0-1=0, contest data "Write-in: Ada Lovelace".`, `Tally, contest 0: 0-0=3, 0-1=0, overvotes=0, null-votes=0,
+  undervotes=0, undervote-difference=0, write-ins=0.`, `Done.`, then the expected ReadKey `InvalidOperationException`.
+  `tally.json` has 0-0: 3, 0-1: 0.
+- Tests: Perf `Passed: 231, Total: 231`; Core `Passed: 2047, Total: 2047`. There were no failures, so the gate after
+  is the same run.
+
+Perf:
+- The ballot JSON decode path changed; Encrypt, Verify, Tally and Decrypt did not.
+- Two more smoke runs gave Encrypt 0.245 / 0.246 and Verify 1.002 / 1.001 ms/ballot at 165.8 MB and 12.2-12.3 MB.
+  S10a gave 0.242-0.249 and 0.999-1.014, so the difference is noise.
+- The harness's JSON deser/s fell from 10,048 / 7,877 (S10a) to 5,374 / 5,778 / 6,017. That figure times 100 cold
+  iterations without warm-up, and it has swung from 1,073 to 10,048 across earlier runs.
+- A warmed-up micro-benchmark (1,000,000 decodes of one escaped 512-byte value) measured the changed step directly:
+  - old `Convert.FromBase64String(reader.GetString())`: 1.07-1.11 µs, 1,928 B per value;
+  - new `StrictBase64.Read`: 0.49-0.52 µs, 536 B per value;
+  - `GetBytesFromBase64`: 0.64 µs, 536 B per value.
+- In steady state the new path is about 2x faster and allocates 3.6x less.
+- A smoke run with `DOTNET_TieredCompilation=0` (fully optimized JIT from the first call) gave json 17,898 deser/s,
+  above S10a's range. The lower default-run figure therefore reflects cold tier-0 JIT of the new methods in the
+  harness's 100 iterations, not slower decoding. That run also gave Encrypt 0.243 and Verify 0.997 ms/ballot,
+  `correctness passed`.
+- The only committed JSON with ballot ciphertexts is `test/kat/vectors.json`, which the KAT tests read and which
+  passed.
+
+Carry-overs:
+- To S10b: the ballot JSON reader's duplicate-member refusal, and how its legacy importer (S10b-9) handles unknown
+  members.
+- To S10b: a verified-tally API, so that a tally read back cannot be decrypted before Verification 9.
+
+### 2026-10-08 — S10a (record correctness gaps: manifest binding, strict record round trips, typed errors, tally bound, G40 timestamp)
+Worktree changes only; nothing committed. Implements Q37 part A ("A and B"; S10b, the canonical election record bundle,
+is designed separately). No hash input, KAT vector (`git diff test/kat/` empty) or pinned value moved; no test
+expectation was re-pinned (see the gate below for the setup-only test edits). Decisions taken: "S10a design and API
+choices" in Decisions.
+
+**Manifest binding (S2 review R1, security-relevant): closed.**
+- New `Serialization/ManifestSerializer` (+ `StrictJson`: BOM and duplicate-member rejection, which .NET 9's
+  System.Text.Json does not do, and `StrictEnumNameConverter`): the library's one manifest format, documented in its
+  class remarks. `ManifestSerializer.Deserialize` validates (`Manifest.Validate`, which now also refuses null entries
+  in the contest, option, supplemental field and ballot style lists and null contest ids in a style, instead of a
+  `NullReferenceException`). `InvalidManifestException` gained an inner-exception constructor.
+- `EncryptionRecord.Manifest` is derived: setting `ManifestFile` parses it; there is no other way in. H_B (eq. 5)
+  stays over the exact file bytes. A forged parsed manifest now needs a forged file, which fails 1.F
+  (`ManifestSerializerTests.EncryptionRecord_ManifestWithOtherLimits_ComesWithItsOwnFile_AndFails1F`).
+- Consumers: `ElectionFixtureBuilder.CreateMinimalManifest` writes the manifest with `ManifestSerializer`;
+  `CreateEncryptionRecord(set, manifest, file)` keeps its signature (86 callers) and throws unless `manifest` is what
+  `file` holds. Perf: `ManifestLoader` reads through `ManifestSerializer` (an `InvalidManifestException` becomes the
+  tool's `ScenarioConfigurationException`), `ManifestHasher` and `corpus` write its form (same bytes as before for
+  every committed manifest; `manifestHash` unchanged). `Testing.Cli` writes its form. The console parses through the
+  record. Every committed `test/data/*/manifest.json` and `C:/temp/eg/data/1/manifest.json` parse unchanged (no
+  rewrite, no .bak).
+
+**Strict JSON round trips for every record item Core produces: closed** (the S2, S3, S4, S6, S7 serializer
+carry-overs). New `JsonElectionRecordSerializer` and `Converters/RecordJsonConverters` (strict hash claims, manifest
+file, guardian index, parameters, n/k, K/K-hat); `ParameterBaseHash`/`ElectionBaseHash`/`ExtendedBaseHash` gained
+`FromCanonicalBytes` (bytes kept as read); `ElectionPublicKeys.FromKeys` (K, K-hat as stated); `DecryptedChoice.VoteCount`
+is now `required`. Before, `EncryptionRecord`/`GuardianRecord` JSON wrote every `HashValue` and `IntegerModP` as `{}`.
+`JsonDeviceChainRecordSerializer` and `JsonPreEncryptedBallotSerializer` were checked: both now refuse unknown and
+repeated members (the device chain reader also null device ids and null entries), and their hash converters are
+width-strict. Every ballot hash type decodes strictly (`ContestHash`, `ConfirmationCode`, H_I, H_DI: exactly 32 bytes).
+
+**Tally decryption bound on load (S4 review R1/F2, S5): closed.** Per-contest `CastWeight` replaces the per-option
+accumulator; `MaximumCount` = `CastWeight × MaximumValue`. The tally record carries the cast weight; reading it back
+restores every bound, and V9 checks it (`"9.structure"`, after 9.A/9.B). `EncryptedTally.Restore` (internal) rebuilds a
+tally from a document; `BallotsCast` became `internal set`. Hot path: `AddBallot` now adds the weight once per contest
+instead of once per option.
+
+**Typed errors for malformed ballot documents (S3/S5 carry-overs): closed.** `EncryptedBallotShape` (both decoders) for
+scalars, `BallotStructure` (null contest list or entry, null option list or entry) for lists, protobuf missing lists
+read as empty. Both ballot readers now share one options instance.
+
+**G40 (§3.7 p.55-56 "the date and time of the ballot encryption"): closed.** `EncryptedBallot.EncryptionTimestamp`,
+`BallotEncryptor(..., TimeProvider? clock = null)`, JSON `encryptionTimestamp`, protobuf field 14. Eq. (71) (p.42) and
+§3.4 p.41 checked: date and time are only an optional hash input, so none is added and no confirmation code changes
+(`EncryptionTimestampTests.EncryptionTimestamp_IsNotAHashInput`).
+
+**Console:** writes and reads back every record item, verifies V1-V14 from the copies, decrypts the tally read back
+(which needs the restored bound), and prints the tally.
+
+**Docs:** CLAUDE.md (the manifest-binding bullet replaces the "known gap" text; the tally-bound bullet; the
+Serialization bullet: hash widths, decode-time shape check, timestamp, record serializer), `perf/README.md` (corpus
+manifest form, `manifestHash` unchanged), XML docs on the touched types (`EncryptionRecord.ManifestFile`/`Manifest`,
+`EncryptedAggregateChoice.MaximumCount`, `EncryptedAggregateContest.CastWeight`, `BallotAggregationVerifier.Verify`,
+`NonCanonicalEncodingException`, the ballot and record serializers).
+
+**Tests: Core 1843 -> 2001 (+158; Perf 231 unchanged).** New: `Serialization/ManifestSerializerTests` (determinism and
+round trip, the documented written form, every committed manifest parses, indentation and member order accepted, 22
+malformations -> `InvalidManifestException`, the record's manifest is the file's and has no setter, a non-manifest file
+throws, other limits need another file and fail 1.F, the fixture refuses a mismatched pair);
+`Serialization/ElectionRecordSerializationTests` (byte-for-byte round trip of each item; V1-V4, the guardians' own
+verification, V9 + decryption, V10/V11, V12, V13/V14 on the copies read back; tampered claims decode and fail 1.F/4.A/3;
+16 encryption record, 8 encrypted tally, 6 decrypted tally, 5 contest data, 6 challenged ballot and 6 device chain
+tamperings; wrong cast weight fails V9 `"9.structure"`; too small a cast weight makes decryption fail closed; an extra
+option decodes and fails V9); `Serialization/MalformedBallotDocumentTests` (JSON null lists/entries -> `"N.structure"`
+for V6-V9; JSON null or short scalars and protobuf missing scalars -> `NonCanonicalEncodingException`; protobuf missing
+lists -> `"N.structure"`; protobuf missing proof lists -> the proof count); `Serialization/EncryptionTimestampTests`
+(clock reading in UTC ms, system clock default, not a hash input, both encodings round-trip and omit null, the exact
+JSON form, malformed JSON and out-of-range protobuf values refused).
+
+Gate before re-pinning (every source change in; the run that decided whether anything needed re-pinning):
+- Build (`--no-incremental`): `0 Warning(s)`, `0 Error(s)`.
+- Smoke: `correctness passed`; EncryptBallots 242 ms wall, 0.242 ms/ballot, 165.8 MB; VerifyBallots 999 ms wall,
+  0.999 ms/ballot, 12.2 MB; Tally 8 ms; DecryptTally 34 ms; json 21,247 bytes; protobuf 12,489 bytes.
+- Console: `Writing out guardian record.`, `Writing out encryption record.`, `Device Device 1: 4 ballots, chaining mode
+  None.`, `Ballot 0, contest 0: contest data "Write-in: Ada Lovelace".`, `Challenged ballot 0-challenged, contest 0:
+  0-0=1, 0-1=0, contest data "Write-in: Ada Lovelace".`, `Tally, contest 0: 0-0=3, 0-1=0, overvotes=0, null-votes=0,
+  undervotes=0, undervote-difference=0, write-ins=0.`, `Done.`, then the expected ReadKey `InvalidOperationException`.
+  `tally.json`: 0-0: 3, 0-1: 0.
+- Tests: Perf `Passed: 231, Total: 231`; Core `Failed: 1, Passed: 1842, Total: 1843`. The one failure,
+  `BallotAggregationVerifierTests.AddBallot_WeightedBallot_MatchesThatManyUnweightedCopies`, came from a V9
+  ballot-count comparison this stage had added; the source was changed (V9 compares cast weights only), not the test.
+- Before that gate, test *setup* (not expectations) was adapted where the API change forced it, as interim runs showed:
+  with only the manifest binding in, Core failed 233 of 1843 (227 were fixtures that wrote manifests with default
+  PascalCase System.Text.Json: `CanonicalOrderTests`, `PreEncryptedElection`, `ChallengedBallotDecryptionTests`,
+  `BallotStructureTests`, now `ManifestSerializer.ToManifestFile`), then 6 (tests that handed the record a manifest the
+  file did not hold, the gap itself: `TallyAdminSearchRangeTests.Decrypt_ManyChoices_RecoversEveryCount` and
+  `Decrypt_ZeroPartialDecryption_ThrowsNamingTheGuardian` (helper builds the file after adding options),
+  `ManifestValidationTests.EncryptionRecord_WithInvalidManifest_Throws` and `Validate_UndefinedChainingMode_Throws`
+  x2 (the invalid manifest goes in as a file; same `InvalidManifestException`),
+  `Encryptors_ManifestReorderedAfterRecordCreation_Throw` (reorders `record.Manifest`, the record's own parse; same
+  assertions)). Compile-forced (the `Manifest` init accessor is gone): the record-building helpers of
+  `PreEncryptionPrimitivesTests`, `PreEncryptedBallotVerificationTests`, `PreEncryptedRecordVerificationTests`,
+  `ContestDataDecryptionTests`, `VerificationTests` and the KAT (see the pinned-value inventory) now pass the other
+  manifest as a file; the KAT's `MaximumCount = 3` became `CastWeight = 3`. No expected value changed anywhere.
+
+Gate after (all changes, docs included): build (`--no-incremental`) `0 Warning(s)`, `0 Error(s)`; smoke `correctness
+passed`, EncryptBallots 0.249 ms/ballot 165.6 MB, VerifyBallots 1.014 ms/ballot 12.2 MB, json 21,162 bytes, protobuf
+12,489 bytes; console as above, `Done.`, `tally.json` 0-0: 3, 0-1: 0, every supplemental count 0; Perf `Passed: 231,
+Total: 231`; Core `Passed: 2001, Total: 2001`.
+
+Perf: hot paths touched: `AddBallot` (one add per contest instead of per option), the encryptor (one clock read per
+ballot), the ballot decoders (a scalar null walk). Smoke Encrypt 0.242 / 0.249 and Verify 0.999 / 1.014 ms/ballot in the
+two runs vs S9c's 0.249 / 1.004 (round 1: 0.243 / 0.993): noise. Allocation unchanged (Encrypt 165.6-165.8 MB vs 165.7,
+Verify 12.2 MB). Protobuf +7 bytes per ballot (field 14).
+
+Open question for the user:
+- **S10a-1 (manifest file canonicality; interoperable bytes):** the reader accepts any document that meets the strict
+  rules, whatever its whitespace and member order, and H_B hashes the file as it is. Options: (a) keep that (the spec
+  leaves the representation "implementation specific", and a file written by any tool in the schema works); (b) also
+  require the file to be byte-identical to `ManifestSerializer.Serialize` of its parse, so one manifest has exactly one
+  file and one H_B. (b) would make every committed manifest except the ones written compact fail to load until
+  rewritten (the test/data fixtures are indented; the console's too), and a manifest tool in another language would
+  have to reproduce System.Text.Json's escaping. Recommendation: (a) now; revisit with the S10b record format.
+
+Carry-overs (to S10b unless noted):
+- The record bundle, its streaming reader and the verify-everything entry point (Q37 part B); device closing hashes are
+  still unsigned and untimestamped (S8b).
+- Verifications 9, 11 and 14 take a bare `Manifest` parameter; callers pass `record.Manifest` (the console does). A
+  record-taking overload belongs with the verify-everything entry point.
+- The encryption timestamp is unauthenticated (not hashed); only the record's signature (§3.7) can protect it.
+- The ballot JSON reader still accepts unknown and repeated members (left as is: it is on the deserialization hot path
+  and older documents carry retired members); the record, manifest, device chain and pre-encrypted readers refuse them.
+  Made an explicit S10b carry-over in S10a review round 1 (S10b-6/S10b-9 of the record design).
+- Base64 in every JSON document is written with System.Text.Json's default escaping (`+` as `\u002B`), as ballots
+  always were; readers unescape. Cosmetic.
 
 ### 2026-10-08 — S9c review round 1 (per-contest index precondition, Q32 sign-off, S9b-1 exposure pin, null deviceId reader test)
 Worktree changes only; nothing committed. Four minor findings, all accepted (one needs no code). No hash input, KAT
@@ -3298,6 +3650,7 @@ recorded for S10 (as suggested), F3 has its test. No pinned value moved, so noth
   fails closed with "not in [0, 0]". No API is added in a review round. The S10 row now lists it: a tally loaded from
   a record must carry `MaximumCount` or recompute it as `AddBallot` does (sum over cast ballots of W·min(R, L)), or
   `TallyAdmin.Combine` needs an overload taking an explicit bound. The `MaximumCount` doc comment says the same.
+  *Closed in S10a: the tally record carries each contest's cast weight, which restores the bound; V9 checks it.*
 - **F3, nothing tested that u_i is fresh per option within one Commit (tests): fixed.**
   `TallyDecryptionProtocolTests.Commit_DrawsAFreshSecretForEveryOptionAndGuardian` runs the three rounds for all
   three guardians with no nonce source, and asserts that the 6 a_i, the 6 b_i and the 6 v_i (3 guardians x 2 options)
@@ -3646,7 +3999,8 @@ changes apart from F1, and no pinned value moved.
 - Carry-over: a protobuf document that leaves out a nested message (`OvervoteCount`, a `Proofs` array,
   `Contests`) still fails with `NullReferenceException`. That is a truncated document, not a non-canonical value
   encoding, so it is outside G23. Record it for S10's deserializer work, or for S5, which redesigns the
-  supplemental fields.
+  supplemental fields. *Closed in S10a (missing lists read as empty and fail `"N.structure"`; missing scalars are
+  `NonCanonicalEncodingException`).*
 - Gate (no pinned value moved, so nothing was re-pinned; the before and after gates are the same run):
   - Build: `0 Warning(s)`, `0 Error(s)`.
   - Smoke: `correctness passed`, twice.
@@ -3925,6 +4279,7 @@ for S10 rather than fixed here.
     reported under 1.F.
   - Done now: the S10 row in Stages lists it. The `EncryptionRecord.ManifestFile` doc comment and CLAUDE.md state
     the gap and say to build both from the same source; Program.cs and the perf harness already do.
+  - *Closed in S10a: `EncryptionRecord.Manifest` is parsed from `ManifestFile` by `ManifestSerializer`.*
 - Also fixed: the `KeyCeremonyException` doc comment said "Steps 2 and 3, which are Verifications 1-3". It now
   says Verification 1 runs inside step 1, and steps 2 and 3 are Verifications 2 and 3.
 - Gate (no pinned value moved; no test failed at any point, so there was nothing to re-pin):

@@ -313,7 +313,12 @@ exactly this shape, so a consumer sees one schema regardless of which tool produ
 
 Writes the manifest, the plaintext ballots and the expected tally. Encryptors in other languages
 consume these files; because the corpus and an in-memory run share a generator and a seed, they are
-provably the same workload. `corpus` clears stale ballot files left over from a previous, larger run
+provably the same workload. The manifest is written in Core's manifest format
+(`ManifestSerializer`, compact; S10a), the bytes the harness hashes into H_B, so an encryptor that
+hashes the file computes the same H_B. Manifests are read through the same strict reader (members
+are case-sensitive camelCase; an unknown or repeated member is refused). For every committed
+manifest the written bytes are the ones the harness hashed before S10a, so `manifestHash` did not
+change and S9c records stay comparable. `corpus` clears stale ballot files left over from a previous, larger run
 at the same output directory before writing, so a non-.NET consumer globbing the ballots directory
 never picks up orphaned files from an earlier ballot count. Do not commit a corpus — regenerate it
 from the seed.

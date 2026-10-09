@@ -1,5 +1,6 @@
 using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.Models;
+using ElectionGuard.Core.Serialization;
 using ElectionGuard.Core.PreEncryption;
 using ElectionGuard.Core.Tally;
 using ElectionGuard.Testing.Common;
@@ -31,7 +32,7 @@ public sealed class PreEncryptedElection
     private PreEncryptedElection(ChainingMode chainingMode)
     {
         Manifest = CreateManifest(chainingMode);
-        var manifestFile = new ManifestFile { Bytes = JsonSerializer.SerializeToUtf8Bytes(Manifest) };
+        var manifestFile = ManifestSerializer.ToManifestFile(Manifest);
         var guardianSet = ElectionFixtureBuilder.CreateGuardianSet(manifestFile: manifestFile);
         Record = ElectionFixtureBuilder.CreateEncryptionRecord(guardianSet, Manifest, manifestFile).EncryptionRecord;
         _guardianSet = guardianSet;

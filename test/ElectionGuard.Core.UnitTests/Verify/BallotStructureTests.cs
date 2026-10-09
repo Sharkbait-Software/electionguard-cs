@@ -1,6 +1,7 @@
 using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.Models;
+using ElectionGuard.Core.Serialization;
 using ElectionGuard.Core.Tally;
 using ElectionGuard.Core.Verify;
 using ElectionGuard.Core.Verify.Ballot;
@@ -82,7 +83,7 @@ public class BallotStructureTests
             ],
             ChainingMode = ChainingMode.None,
         };
-        var manifestFile = new ManifestFile { Bytes = JsonSerializer.SerializeToUtf8Bytes(manifest) };
+        var manifestFile = ManifestSerializer.ToManifestFile(manifest);
         var guardianSet = ElectionFixtureBuilder.CreateGuardianSet(manifestFile: manifestFile);
         var records = ElectionFixtureBuilder.CreateEncryptionRecord(guardianSet, manifest, manifestFile);
         var deviceHash = new VotingDeviceInformationHash(records.ExtendedBaseHash, DeviceId);

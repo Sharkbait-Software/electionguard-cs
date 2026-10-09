@@ -10,6 +10,21 @@ public struct ConfirmationCode : IEquatable<ConfirmationCode>
         _value = bytes;
     }
 
+    /// <summary>
+    /// Strict decoding for a value read from a record: exactly 32 bytes. Throws
+    /// <see cref="Serialization.NonCanonicalEncodingException"/> otherwise; a field missing from a
+    /// document arrives here as null.
+    /// </summary>
+    public static ConfirmationCode FromCanonicalBytes(byte[]? bytes)
+    {
+        if (bytes is not { Length: EGHash.HashBytes })
+        {
+            throw new Serialization.NonCanonicalEncodingException($"A confirmation code is {EGHash.HashBytes} bytes; got {bytes?.Length ?? 0}.");
+        }
+
+        return new ConfirmationCode(bytes.ToArray());
+    }
+
     public ConfirmationCode(SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, IEnumerable<ContestHash> contestHashes, ChainingField? chainingField)
         // §3.4.2 formula (71): HC = H(HI; 0x29, chi_1, ..., chi_mB, BC).
         : this(0x29, selectionEncryptionIdentifierHash, contestHashes, chainingField)

@@ -3,12 +3,10 @@ using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.KeyGeneration;
 using ElectionGuard.Core.Models;
 using ElectionGuard.Core.Serialization;
-using ElectionGuard.Core.Serialization.Converters;
 using ElectionGuard.Core.Tally;
 using ElectionGuard.Core.Verify.Ballot;
 using ElectionGuard.Core.Verify.KeyGeneration;
 using ElectionGuard.Core.Verify.Tally;
-using System.Collections.Concurrent;
 using System.Text.Json;
 
 var jsonOptions = new JsonSerializerOptions
@@ -26,17 +24,37 @@ string inputDirectory = @"c:\temp\eg\data\1";
 string outputDirectory = @"c:\temp\eg\data\1";
 //string outputDirectory = @"c:\temp\eg\";
 
+// Every record item is written out and read back before anything is checked against it, and the
+// checks run on the copies read back: the pipeline below verifies the published record, not the
+// objects that produced it (S10a).
+var recordSerializer = new JsonElectionRecordSerializer();
+var jsonBallotSerializer = new JsonEncryptedBallotSerializer();
+
+T Publish<T>(string fileName, Action<Stream> write, Func<Stream, T> read)
+{
+    string path = Path.Combine(outputDirectory, fileName);
+    using (var stream = File.Create(path))
+    {
+        write(stream);
+    }
+
+    using (var stream = File.OpenRead(path))
+    {
+        return read(stream);
+    }
+}
+
 try
 {
     // The manifest file. H_B = H(H_P; 0x01, manifest) (eq. 5) is part of the guardian record: each
     // guardian checks it by performing Verification 1 and keys its comparison hash H_G with it
-    // (§3.2.2 step 1). The same bytes go into the encryption record (§3.7).
+    // (§3.2.2 step 1). The same bytes go into the encryption record (§3.7), which parses its
+    // manifest from them (ManifestSerializer, the library's one manifest format).
     var manifestBytes = File.ReadAllBytes(Path.Combine(inputDirectory, "manifest.json"));
     var manifestFile = new ManifestFile
     {
         Bytes = manifestBytes
     };
-    var manifest = JsonSerializer.Deserialize<Manifest>(manifestBytes, jsonOptions)!;
     var electionBaseHash = new ElectionBaseHash(EGParameters.ParameterBaseHash, manifestFile);
 
     List<Guardian> guardians = new List<Guardian>();
@@ -70,53 +88,50 @@ try
         guardianKeys.Select(x => x.VoteEncryptionCommitments[0]),
         guardianKeys.Select(x => x.OtherBallotDataEncryptionCommitments[0]));
 
-    var guardianRecord = new GuardianRecord()
-    {
-        CryptographicParameters = cryptographicParameters,
-        GuardianParameters = guardianParameters,
-        ParameterBaseHash = EGParameters.ParameterBaseHash,
-        ManifestFile = manifestFile,
-        ElectionBaseHash = electionBaseHash,
-        Guardians = guardianKeys,
-        ElectionPublicKeys = electionPublicKeys,
-    };
+    // The guardian record, written out and read back; every guardian checks the copy read back.
+    Console.WriteLine("Writing out guardian record.");
+    var guardianRecord = Publish("guardian-record.json",
+        stream => recordSerializer.Serialize(stream, new GuardianRecord
+        {
+            CryptographicParameters = cryptographicParameters,
+            GuardianParameters = guardianParameters,
+            ParameterBaseHash = EGParameters.ParameterBaseHash,
+            ManifestFile = manifestFile,
+            ElectionBaseHash = electionBaseHash,
+            Guardians = guardianKeys,
+            ElectionPublicKeys = electionPublicKeys,
+        }),
+        recordSerializer.DeserializeGuardianRecord);
 
     foreach (var guardian in guardians)
     {
         guardian.Verify(guardianRecord, manifestFile);
     }
 
-    // Write out guardian record
-    Console.WriteLine("Writing out guardian record.");
-    var serializedGuardianRecord = JsonSerializer.Serialize(guardianRecord, jsonOptions);
-    File.WriteAllBytes(Path.Combine(outputDirectory, "guardian-record.json"), System.Text.Encoding.UTF8.GetBytes(serializedGuardianRecord));
-
     // Combine with manifest
     var extendedBaseHash = new ExtendedBaseHash(electionBaseHash, electionPublicKeys);
 
-    // Write out encryption record
+    // The encryption record, written out and read back. Everything after this point, the device
+    // included, uses the copy read back.
     Console.WriteLine("Writing out encryption record.");
-    var encryptionRecord = new EncryptionRecord
-    {
-        CryptographicParameters = cryptographicParameters,
-        GuardianParameters = guardianParameters,
-        ParameterBaseHash = EGParameters.ParameterBaseHash,
-        ManifestFile = manifestFile,
-        ElectionBaseHash = electionBaseHash,
-        Guardians = guardianKeys,
-        ElectionPublicKeys = electionPublicKeys,
-        ExtendedBaseHash = extendedBaseHash,
-        Manifest = manifest,
-    };
-    var serializedEncryptionRecord = JsonSerializer.Serialize(encryptionRecord, jsonOptions);
-    File.WriteAllBytes(Path.Combine(outputDirectory, "encryption-record.json"), System.Text.Encoding.UTF8.GetBytes(serializedEncryptionRecord));
+    var encryptionRecord = Publish("encryption-record.json",
+        stream => recordSerializer.Serialize(stream, new EncryptionRecord
+        {
+            CryptographicParameters = cryptographicParameters,
+            GuardianParameters = guardianParameters,
+            ParameterBaseHash = EGParameters.ParameterBaseHash,
+            ManifestFile = manifestFile,
+            ElectionBaseHash = electionBaseHash,
+            Guardians = guardianKeys,
+            ElectionPublicKeys = electionPublicKeys,
+            ExtendedBaseHash = extendedBaseHash,
+        }),
+        recordSerializer.DeserializeEncryptionRecord);
+    var manifest = encryptionRecord.Manifest;
 
-
-    var jsonBallotSerializer = new JsonEncryptedBallotSerializer();
-    var protobufBallotSerializer = new ProtobufEncryptedBallotSerializer();
     // Encrypt a ballot
     string deviceId = "Device 1";
-    var deviceHash = new VotingDeviceInformationHash(extendedBaseHash, deviceId);
+    var deviceHash = new VotingDeviceInformationHash(encryptionRecord.ExtendedBaseHash, deviceId);
 
     // In file name order, which is the order the device processes them in (§3.7: "Ordered lists of
     // the ballots encrypted by each device").
@@ -128,8 +143,6 @@ try
     // encrypt a directory full of ballots is exactly the case where it pays for itself.
     BallotEncryptor.PrecomputePowerTables(encryptionRecord);
 
-    ConcurrentBag<EncryptedBallot> encryptedBallots = new ConcurrentBag<EncryptedBallot>();
-
     // The device's confirmation code chain (§3.4.4). Every ballot it encrypts, cast or challenged, is
     // appended in the order processed; the chain is closed when voting ends and published as the
     // device's ordered ballot list. Under simple chaining each ballot chains from the previous one's
@@ -137,6 +150,7 @@ try
     // independent and are encrypted in parallel, then appended in file order.
     var deviceChain = new DeviceChain(encryptionRecord, deviceId);
     var encryptedInOrder = new EncryptedBallot[ballots.Length];
+    var publishedBallotFiles = new List<string>();
 
     void EncryptBallotFile(int i, ConfirmationCode? previousConfirmationCode)
     {
@@ -153,10 +167,6 @@ try
         {
             jsonBallotSerializer.Serialize(jsonFileStream, encryptedBallot);
         }
-        //using (var protobufFileStream = File.OpenWrite(Path.Combine(outputDirectory, "encrypted-protobuf-ballots", Path.GetFileNameWithoutExtension(ballotFile) + ".protobuf")))
-        //{
-        //    protobufBallotSerializer.Serialize(protobufFileStream, encryptedBallot);
-        //}
     }
 
     if (manifest.ChainingMode == ChainingMode.None)
@@ -176,10 +186,7 @@ try
         }
     }
 
-    foreach (var encryptedBallot in encryptedInOrder)
-    {
-        encryptedBallots.Add(encryptedBallot);
-    }
+    publishedBallotFiles.AddRange(ballots.Select(x => Path.Combine(outputDirectory, "encrypted-json-ballots", Path.GetFileName(x))));
 
     // Cast or challenge (§3.6.7, §3.7): a voter who challenges a ballot has it opened to check that the
     // device encrypted what they chose, and then votes again. The first ballot is encrypted a second
@@ -190,46 +197,31 @@ try
     challengedPlaintext = challengedPlaintext with { Id = $"{challengedPlaintext.Id}-challenged" };
     var challengedBallot = new BallotEncryptor(encryptionRecord, deviceId, deviceHash).EncryptNext(challengedPlaintext, deviceChain);
     challengedBallot.RecordStatus(BallotStatus.Challenged);
-    encryptedBallots.Add(challengedBallot);
-    using (var jsonFileStream = File.Create(Path.Combine(outputDirectory, "encrypted-json-ballots", $"{challengedPlaintext.Id}.json")))
+    var challengedFile = Path.Combine(outputDirectory, "encrypted-json-ballots", $"{challengedPlaintext.Id}.json");
+    using (var jsonFileStream = File.Create(challengedFile))
     {
         jsonBallotSerializer.Serialize(jsonFileStream, challengedBallot);
     }
 
-    //BallotEncryptor ballotEncryptor = new BallotEncryptor(encryptionRecord, deviceId, deviceHash);
-    //var ballot = JsonSerializer.Deserialize<Ballot>(File.ReadAllBytes("../../../../../test/data/famous-names/ballots/1.json"), jsonOptions)!;
-    //var encryptedBallot = ballotEncryptor.Encrypt(ballot, null);
-
-    //using (var jsonFileStream = File.OpenWrite(Path.Combine(outputDirectory, "encrypted-ballots", "1.json")))
-    //{
-    //    jsonBallotSerializer.Serialize(jsonFileStream, encryptedBallot);
-    //}
-    //using (var protobufFileStream = File.OpenWrite(Path.Combine(outputDirectory, "encrypted-ballots", "1.protobuf")))
-    //{
-    //    protobufBallotSerializer.Serialize(protobufFileStream, encryptedBallot);
-    //}
-
-    //var ballot2 = JsonSerializer.Deserialize<Ballot>(File.ReadAllBytes("../../../../../test/data/famous-names/ballots/2.json"), jsonOptions)!;
-    //var encryptedBallot2 = ballotEncryptor.Encrypt(ballot2, encryptedBallot.ConfirmationCode);
-
-    //using (var jsonFileStream = File.OpenWrite(Path.Combine(outputDirectory, "encrypted-ballots", "2.json")))
-    //{
-    //    jsonBallotSerializer.Serialize(jsonFileStream, encryptedBallot2);
-    //}
-    //using (var protobufFileStream = File.OpenWrite(Path.Combine(outputDirectory, "encrypted-ballots", "2.protobuf")))
-    //{
-    //    protobufBallotSerializer.Serialize(protobufFileStream, encryptedBallot2);
-    //}
+    publishedBallotFiles.Add(challengedFile);
 
     // End of voting: the device closes its confirmation code chain (§3.4.4 eqs. 77/78 under simple
-    // chaining) and publishes its ordered list of ballots with the closing hash (§3.7).
-    var deviceChainRecord = deviceChain.Close();
-    using (var deviceChainStream = File.Create(Path.Combine(outputDirectory, "device-chains.json")))
-    {
-        new JsonDeviceChainRecordSerializer().Serialize(deviceChainStream, [deviceChainRecord]);
-    }
+    // chaining) and publishes its ordered list of ballots with the closing hash (§3.7), read back
+    // like every other record item.
+    var deviceChainRecords = Publish("device-chains.json",
+        stream => new JsonDeviceChainRecordSerializer().Serialize(stream, [deviceChain.Close()]),
+        stream => new JsonDeviceChainRecordSerializer().Deserialize(stream)!);
+    var deviceChainRecord = deviceChainRecords.Single();
 
     Console.WriteLine($"Device {deviceChainRecord.DeviceId}: {deviceChainRecord.ConfirmationCodes.Count} ballots, chaining mode {deviceChainRecord.ChainingMode}{(deviceChainRecord.ClosingHash is { } closingHash ? $", closing hash {closingHash}" : "")}.");
+
+    // The published ballots, read back from the files the device wrote. Every check below, and the
+    // tally, uses these.
+    var encryptedBallots = publishedBallotFiles.Select(path =>
+    {
+        using var stream = File.OpenRead(path);
+        return jsonBallotSerializer.Deserialize(stream)!;
+    }).ToList();
 
     // Verification 1 (1.A-1.F, H_B included) on the encryption record
     var parameterVerification = new ParameterVerification();
@@ -272,29 +264,35 @@ try
 
     // Verification 8, per device: every ballot on exactly one device's list, 8.C, and in list order
     // 8.D/8.E, then 8.F and 8.G under simple chaining.
-    new ConfirmationCodeVerification().VerifyDevices([deviceChainRecord], encryptedBallots, encryptionRecord);
+    new ConfirmationCodeVerification().VerifyDevices(deviceChainRecords, encryptedBallots, encryptionRecord);
 
     // Only cast ballots are aggregated; a challenged one would be skipped here and in Verification 9.
-    var encryptedTally = new EncryptedTally(manifest);
-    foreach (var encryptedBallot in encryptedBallots)
-    {
-        encryptedTally.AddBallot(encryptedBallot);
-    }
+    // The encrypted tally is published and read back; the copy read back restores each option's
+    // decryption bound from its contest's published cast weight.
+    var aggregated = new EncryptedTally(manifest);
+    aggregated.AddBallots(encryptedBallots);
+    var encryptedTally = Publish("encrypted-tally.json",
+        stream => recordSerializer.Serialize(stream, aggregated),
+        stream => recordSerializer.DeserializeEncryptedTally(stream, manifest));
 
-    // Verification 9
+    // Verification 9, which also checks the published cast weights and ballot count.
     var ballotAggregationVerification = new BallotAggregationVerification();
-    ballotAggregationVerification.Verify(encryptedBallots.ToList(), manifest, encryptedTally);
+    ballotAggregationVerification.Verify(encryptedBallots, manifest, encryptedTally);
 
-    // Verifiable decryption (§3.6.5) by every guardian. TallyAdmin.Decrypt mediates the three rounds:
-    // each guardian sends M_i with its commitment hash d_i, then reveals (a_i, b_i) once it holds
-    // every d_j, then checks every d_j, computes the challenge itself and responds with v_i. The
-    // administrator combines them into T and the proof (c, v), and checks the proof before
-    // publishing it.
+    // Verifiable decryption (§3.6.5) by every guardian, of the tally as read back. TallyAdmin.Decrypt
+    // mediates the three rounds: each guardian sends M_i with its commitment hash d_i, then reveals
+    // (a_i, b_i) once it holds every d_j, then checks every d_j, computes the challenge itself and
+    // responds with v_i. The administrator combines them into T and the proof (c, v), and checks the
+    // proof before publishing it.
     var tallyGuardians = guardians
         .Select(guardian => new TallyGuardian(guardian.Index, guardianSecretShares[guardian.Index]))
         .ToList();
     var tallyAdmin = new TallyAdmin();
-    var decryptedTally = tallyAdmin.Decrypt(tallyGuardians, encryptedTally, encryptionRecord);
+
+    // T, c and v are published with each count (§3.7), with the contest and option indices.
+    var decryptedTally = Publish("tally.json",
+        stream => recordSerializer.Serialize(stream, tallyAdmin.Decrypt(tallyGuardians, encryptedTally, encryptionRecord)),
+        recordSerializer.DeserializeDecryptedTally);
 
     // Verification 10
     var tallyDecryptionVerification = new TallyDecryptionVerification();
@@ -304,18 +302,6 @@ try
     var tallyContentsVerification = new TallyContentsVerification();
     tallyContentsVerification.Verify(manifest, decryptedTally, encryptedBallots);
 
-    // T, c and v are published with each count, hex-encoded like the ballots' values.
-    var tallyJsonOptions = new JsonSerializerOptions
-    {
-        Converters =
-        {
-            new IntegerModPJsonConverter(),
-            new IntegerModQJsonConverter(),
-        },
-    };
-    var serializedDecryptedTally = JsonSerializer.Serialize(decryptedTally, tallyJsonOptions);
-    File.WriteAllBytes(Path.Combine(outputDirectory, "tally.json"), System.Text.Encoding.UTF8.GetBytes(serializedDecryptedTally));
-
     // Contest data (§3.6.6): every ballot carries an encrypted contest data field in each contest
     // whose manifest entry declares one (b_Λ >= 1), empty or not, so its write-in text can only be
     // found by decrypting it. The guardians decrypt each field with the same three rounds as the
@@ -323,38 +309,28 @@ try
     // proof (eq. 69). The administrator publishes β, the proof (c, v) and the data D, which
     // Verification 12 checks. A real election would decrypt only the fields it needs, through a
     // mixnet when the ballots are cast (§3.6.6 p.49); here every field of every ballot is decrypted.
+    var castInOrder = encryptedBallots.Where(x => x.Status == BallotStatus.Cast).OrderBy(x => x.Id, StringComparer.Ordinal).ToList();
+    var decryptedContestData = Publish("contest-data.json",
+        stream => recordSerializer.Serialize(stream, castInOrder
+            .SelectMany(ballot => ballot.Contests
+                .Where(x => x.ContestData is not null)
+                .Select(contest => tallyAdmin.DecryptContestData(tallyGuardians, ballot, contest.Id, encryptionRecord)))
+            .ToList()),
+        recordSerializer.DeserializeDecryptedContestData);
+
     var contestDataDecryptionVerification = new ContestDataDecryptionVerification();
-    var decryptedContestData = new List<object>();
-    foreach (var encryptedBallot in encryptedBallots.Where(x => x.Status == BallotStatus.Cast).OrderBy(x => x.Id, StringComparer.Ordinal))
+    var ballotsById = encryptedBallots.ToDictionary(x => x.Id, StringComparer.Ordinal);
+    foreach (var decrypted in decryptedContestData)
     {
-        foreach (var contest in encryptedBallot.Contests.Where(x => x.ContestData is not null))
+        // Verification 12
+        contestDataDecryptionVerification.Verify(encryptionRecord, ballotsById[decrypted.BallotId], decrypted);
+
+        var text = decrypted.DecodeText();
+        if (text.Length > 0)
         {
-            var decrypted = tallyAdmin.DecryptContestData(tallyGuardians, encryptedBallot, contest.Id, encryptionRecord);
-
-            // Verification 12
-            contestDataDecryptionVerification.Verify(encryptionRecord, encryptedBallot, decrypted);
-
-            var text = decrypted.DecodeText();
-            if (text.Length > 0)
-            {
-                Console.WriteLine($"Ballot {decrypted.BallotId}, contest {decrypted.ContestId}: contest data \"{text}\".");
-            }
-
-            decryptedContestData.Add(new
-            {
-                decrypted.BallotId,
-                decrypted.ContestId,
-                decrypted.ContestIndex,
-                decrypted.Beta,
-                decrypted.Challenge,
-                decrypted.Response,
-                Data = Convert.ToHexString(decrypted.Data),
-                Text = text,
-            });
+            Console.WriteLine($"Ballot {decrypted.BallotId}, contest {decrypted.ContestId}: contest data \"{text}\".");
         }
     }
-
-    File.WriteAllBytes(Path.Combine(outputDirectory, "contest-data.json"), JsonSerializer.SerializeToUtf8Bytes(decryptedContestData, tallyJsonOptions));
 
     // Challenged ballots (§3.6.7). Each guardian checks the ballot's encrypted nonce C_ξB (C_ξB,0 in
     // Z_p^r and the eq. (38) Schnorr proof) and sends m_i = C_ξB,0^ẑ_i; the administrator combines them
@@ -362,18 +338,24 @@ try
     // publishes those with the plaintext selections and contest data, never ξ_B itself. Verification
     // 13 recomputes the ballot's ciphertexts and confirmation code from them, and Verification 14
     // checks the labels and selection ranges against the manifest.
-    var challengedBallotDecryptionVerification = new ChallengedBallotDecryptionVerification();
-    var challengedBallotWellFormednessVerification = new ChallengedBallotWellFormednessVerification();
-    var decryptedChallengedBallots = new List<DecryptedChallengedBallot>();
-
+    //
     // The guardians refuse any nonce whose id_B, H_I or C_ξB,0 matches a cast ballot of the
     // published record (user decision Q31): a ballot's status is only the requester's claim. Here
     // every guardian is in-process, so one view of the record's cast ballots stands in for each
     // guardian's own copy.
     var castBallots = PublishedCastBallots.FromRecord(encryptionRecord.ExtendedBaseHash, encryptedBallots);
-    foreach (var encryptedBallot in encryptedBallots.Where(x => x.Status == BallotStatus.Challenged).OrderBy(x => x.Id, StringComparer.Ordinal))
+    var challengedInOrder = encryptedBallots.Where(x => x.Status == BallotStatus.Challenged).OrderBy(x => x.Id, StringComparer.Ordinal).ToList();
+    var decryptedChallengedBallots = Publish("challenged-ballots.json",
+        stream => recordSerializer.Serialize(stream, challengedInOrder
+            .Select(ballot => tallyAdmin.DecryptChallengedBallot(tallyGuardians, ballot, encryptionRecord, castBallots))
+            .ToList()),
+        recordSerializer.DeserializeDecryptedChallengedBallots);
+
+    var challengedBallotDecryptionVerification = new ChallengedBallotDecryptionVerification();
+    var challengedBallotWellFormednessVerification = new ChallengedBallotWellFormednessVerification();
+    foreach (var decrypted in decryptedChallengedBallots)
     {
-        var decrypted = tallyAdmin.DecryptChallengedBallot(tallyGuardians, encryptedBallot, encryptionRecord, castBallots);
+        var encryptedBallot = ballotsById[decrypted.BallotId];
 
         // Verification 13
         challengedBallotDecryptionVerification.Verify(encryptionRecord, encryptedBallot, decrypted);
@@ -387,11 +369,12 @@ try
             var text = contest.ContestData?.DecodeText();
             Console.WriteLine($"Challenged ballot {decrypted.BallotId}, contest {contest.ContestId}: {selections}{(string.IsNullOrEmpty(text) ? "" : $", contest data \"{text}\"")}.");
         }
-
-        decryptedChallengedBallots.Add(decrypted);
     }
 
-    File.WriteAllBytes(Path.Combine(outputDirectory, "challenged-ballots.json"), JsonSerializer.SerializeToUtf8Bytes(decryptedChallengedBallots, tallyJsonOptions));
+    foreach (var (contestId, contest) in decryptedTally.Contests)
+    {
+        Console.WriteLine($"Tally, contest {contestId}: {string.Join(", ", contest.Choices.Select(x => $"{x.Key}={x.Value.VoteCount}"))}.");
+    }
 
     Console.WriteLine("Done.");
 }

@@ -41,6 +41,43 @@ public class EncryptedBallot
     public required string DeviceId { get; init; }
 
     /// <summary>
+    /// When the ballot was encrypted (§3.7: the election record holds "the date and time of the
+    /// ballot encryption"), in UTC, to the millisecond, as the encryptor's clock read it (see
+    /// <see cref="BallotEncryptor"/>). Optional: null when not recorded, and then left out of both
+    /// encodings. It is not an input to any hash: eq. (71) takes the contest hashes and B_C only,
+    /// and §3.4 p.41 leaves the date and time to optional inputs an implementation may choose
+    /// (S_device of eq. 72 could carry it, as the manifest specifies). So nothing in the ballot
+    /// binds it: whoever can rewrite the record can change it, and only the record's signature
+    /// (§3.7) protects it. No verification checks it. JSON: <c>encryptionTimestamp</c>, exactly
+    /// <c>yyyy-MM-ddTHH:mm:ss.fffZ</c>; protobuf: field 14, Unix milliseconds.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public DateTimeOffset? EncryptionTimestamp
+    {
+        get => _encryptionTimestamp;
+        init => _encryptionTimestamp = value is { } timestamp ? RequireTimestamp(timestamp) : null;
+    }
+
+    private readonly DateTimeOffset? _encryptionTimestamp;
+
+    /// <summary>A UTC time truncated to whole milliseconds, the precision both encodings carry.</summary>
+    internal static DateTimeOffset TruncateTimestamp(DateTimeOffset time)
+    {
+        var utc = time.ToUniversalTime();
+        return new DateTimeOffset(utc.Ticks - (utc.Ticks % TimeSpan.TicksPerMillisecond), TimeSpan.Zero);
+    }
+
+    private static DateTimeOffset RequireTimestamp(DateTimeOffset timestamp)
+    {
+        if (timestamp.Offset != TimeSpan.Zero || timestamp.Ticks % TimeSpan.TicksPerMillisecond != 0)
+        {
+            throw new ArgumentException($"An encryption timestamp is a UTC time in whole milliseconds; got {timestamp:O}.", nameof(EncryptionTimestamp));
+        }
+
+        return timestamp;
+    }
+
+    /// <summary>
     /// Present exactly on a cast pre-encrypted ballot (§4.3, §4.4), as a pre-encrypted ballot
     /// recording tool publishes it (the tool is out of this library's scope, user decision Q35; its
     /// primitives are <see cref="PreEncryption.PreEncryptionPrimitives"/>): one entry per contest, in the order of <see cref="Contests"/>, with the contest's sorted selection

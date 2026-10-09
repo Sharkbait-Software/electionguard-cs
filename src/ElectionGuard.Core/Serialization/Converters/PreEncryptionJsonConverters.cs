@@ -11,8 +11,7 @@ public class SelectionHashJsonConverter : JsonConverter<SelectionHash>
 {
     public override SelectionHash Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
-        string text = reader.GetString() ?? throw new JsonException("A selection hash is a base64 string, not null.");
-        return SelectionHash.FromCanonicalBytes(Convert.FromBase64String(text));
+        return SelectionHash.FromCanonicalBytes(StrictBase64.Read(ref reader, "selection hash"));
     }
 
     public override void Write(Utf8JsonWriter writer, SelectionHash value, JsonSerializerOptions options)
@@ -43,8 +42,7 @@ public class BallotNonceJsonConverter : JsonConverter<BallotNonce>
 {
     public override BallotNonce Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
-        string text = reader.GetString() ?? throw new JsonException("A ballot nonce is a base64 string, not null.");
-        byte[] bytes = Convert.FromBase64String(text);
+        byte[] bytes = StrictBase64.Read(ref reader, "ballot nonce");
         if (bytes.Length != BallotNonceEncryption.NonceBytes)
         {
             throw new NonCanonicalEncodingException($"A ballot nonce ξ_B is {BallotNonceEncryption.NonceBytes} bytes; got {bytes.Length}.");

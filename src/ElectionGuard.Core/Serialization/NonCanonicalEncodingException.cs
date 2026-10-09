@@ -3,8 +3,10 @@ namespace ElectionGuard.Core.Serialization;
 /// <summary>
 /// A published value whose byte encoding is not the canonical fixed-width one: an element of Z_p
 /// that is not exactly 512 bytes holding a value below p, an element of Z_q that is not exactly 32
-/// bytes holding a value below q, or a selection encryption identifier that is not exactly 32 bytes
-/// (§5.1.1, §5.1.2, eq. 32).
+/// bytes holding a value below q, a selection encryption identifier or hash value that is not
+/// exactly 32 bytes (§5.1.1, §5.1.2, eq. 32), an encryption timestamp not in its one written form,
+/// or a required scalar part of a ballot (an id, a label, H_I, a contest data C_1) that the document
+/// leaves out or nulls (S10a).
 ///
 /// The reducing constructors of <see cref="Crypto.IntegerModP"/> and <see cref="Crypto.IntegerModQ"/>
 /// would silently turn alpha + p into alpha, or c + q into c, which makes the 0 &lt;= x &lt; p and

@@ -27,9 +27,12 @@ Bogus.Randomizer.Seed = new Random(options.Seed);
 Directory.CreateDirectory(options.OutputDirectory);
 
 var manifest = GenerateManifest(options);
+
+// The manifest file in Core's format (ManifestSerializer), which an encryption record parses its
+// manifest from and whose bytes H_B hashes.
 File.WriteAllBytes(
     Path.Combine(options.OutputDirectory, "manifest.json"),
-    JsonSerializer.SerializeToUtf8Bytes(manifest, jsonSerializerOptions));
+    ElectionGuard.Core.Serialization.ManifestSerializer.Serialize(manifest));
 
 GenerateBallotsAndTally(manifest, options);
 

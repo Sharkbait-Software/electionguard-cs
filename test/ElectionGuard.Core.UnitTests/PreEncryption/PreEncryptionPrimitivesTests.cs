@@ -1,6 +1,7 @@
 using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.Models;
+using ElectionGuard.Core.Serialization;
 using ElectionGuard.Core.PreEncryption;
 using ElectionGuard.Core.Verify.Ballot;
 using ElectionGuard.Core.Verify.PreEncryption;
@@ -46,12 +47,13 @@ public class PreEncryptionPrimitivesTests
             CryptographicParameters = record.CryptographicParameters,
             GuardianParameters = record.GuardianParameters,
             ParameterBaseHash = record.ParameterBaseHash,
-            ManifestFile = record.ManifestFile,
+            // The record's manifest is parsed from its file (S10a), so the other manifest goes in as
+            // a file; H_B and H_E stay the original record's claims.
+            ManifestFile = ManifestSerializer.ToManifestFile(manifest),
             ElectionBaseHash = record.ElectionBaseHash,
             Guardians = record.Guardians,
             ElectionPublicKeys = record.ElectionPublicKeys,
             ExtendedBaseHash = record.ExtendedBaseHash,
-            Manifest = manifest,
         };
     }
 

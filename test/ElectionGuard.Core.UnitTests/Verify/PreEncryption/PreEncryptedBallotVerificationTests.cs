@@ -1,6 +1,7 @@
 using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.Models;
+using ElectionGuard.Core.Serialization;
 using ElectionGuard.Core.PreEncryption;
 using ElectionGuard.Core.Verify;
 using ElectionGuard.Core.Verify.PreEncryption;
@@ -366,12 +367,11 @@ public class PreEncryptedBallotVerificationTests
             CryptographicParameters = record.CryptographicParameters,
             GuardianParameters = record.GuardianParameters,
             ParameterBaseHash = record.ParameterBaseHash,
-            ManifestFile = record.ManifestFile,
+            ManifestFile = ManifestSerializer.ToManifestFile(record.Manifest with { HashTrimmingFunction = null }),
             ElectionBaseHash = record.ElectionBaseHash,
             Guardians = record.Guardians,
             ElectionPublicKeys = record.ElectionPublicKeys,
             ExtendedBaseHash = record.ExtendedBaseHash,
-            Manifest = record.Manifest with { HashTrimmingFunction = null },
         };
 
         var exception = Assert.Throws<VerificationFailedException>(() => new ShortCodeVerification().Verify(ballot, withoutOmega));

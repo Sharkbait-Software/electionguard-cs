@@ -2,6 +2,7 @@ using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.KeyGeneration;
 using ElectionGuard.Core.Models;
+using ElectionGuard.Core.Serialization;
 using ElectionGuard.Core.Tally;
 using ElectionGuard.Core.Verify;
 using ElectionGuard.Core.Verify.Tally;
@@ -232,12 +233,14 @@ public partial class KnownAnswerTests
             CryptographicParameters = new CryptographicParameters(),
             GuardianParameters = new GuardianParameters(Int(chain, "n"), Int(chain, "k")),
             ParameterBaseHash = parameterBaseHash,
-            ManifestFile = manifestFile,
+            // H_B and H_E are the oracle's, over its own manifest bytes; the record's manifest file is
+            // the shaping manifest in the library's format. Nothing here runs Verification 1.F,
+            // which would report the difference.
+            ManifestFile = ManifestSerializer.ToManifestFile(manifest),
             ElectionBaseHash = electionBaseHash,
             Guardians = [],
             ElectionPublicKeys = keys,
             ExtendedBaseHash = extendedBaseHash,
-            Manifest = manifest,
         };
 
         var ballot = new Core.BallotEncryption.Ballot
@@ -420,12 +423,14 @@ public partial class KnownAnswerTests
             CryptographicParameters = new CryptographicParameters(),
             GuardianParameters = new GuardianParameters(3, 2),
             ParameterBaseHash = parameterBaseHash,
-            ManifestFile = manifestFile,
+            // H_B and H_E are the oracle's, over its own manifest bytes; the record's manifest file is
+            // the shaping manifest in the library's format. Nothing here runs Verification 1.F,
+            // which would report the difference.
+            ManifestFile = ManifestSerializer.ToManifestFile(manifest),
             ElectionBaseHash = electionBaseHash,
             Guardians = [],
             ElectionPublicKeys = keys,
             ExtendedBaseHash = extendedBaseHash,
-            Manifest = manifest,
         };
 
         var identifier = new SelectionEncryptionIdentifier(Hex(chain, "id_B_hex"));

@@ -1,5 +1,6 @@
 ﻿using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.Models;
+using ElectionGuard.Core.Serialization;
 using ElectionGuard.Core.PreEncryption;
 using ElectionGuard.Testing.Common;
 
@@ -213,7 +214,19 @@ public class ManifestValidationTests
         var (manifest, manifestFile) = ElectionFixtureBuilder.CreateMinimalManifest();
         var zeroBased = manifest with { Contests = [manifest.Contests[0] with { Index = 0 }] };
 
-        Assert.Throws<InvalidManifestException>(() => ElectionFixtureBuilder.CreateEncryptionRecord(guardianSet, zeroBased, manifestFile));
+        // The record's manifest is parsed from its file (S10a): the invalid manifest goes in as a file.
+        Assert.Throws<InvalidManifestException>(() => ElectionFixtureBuilder.CreateEncryptionRecord(guardianSet, zeroBased, ManifestSerializer.ToManifestFile(zeroBased)));
+        Assert.Throws<InvalidManifestException>(() => new EncryptionRecord
+        {
+            CryptographicParameters = EGParameters.CryptographicParameters,
+            GuardianParameters = EGParameters.GuardianParameters,
+            ParameterBaseHash = EGParameters.ParameterBaseHash,
+            ManifestFile = ManifestSerializer.ToManifestFile(zeroBased),
+            ElectionBaseHash = new ElectionBaseHash(EGParameters.ParameterBaseHash, manifestFile),
+            Guardians = guardianSet.GuardianPublicViews,
+            ElectionPublicKeys = guardianSet.ElectionPublicKeys,
+            ExtendedBaseHash = new ExtendedBaseHash(new ElectionBaseHash(EGParameters.ParameterBaseHash, manifestFile), guardianSet.ElectionPublicKeys),
+        });
     }
 
     /// <summary>
@@ -237,9 +250,11 @@ public class ManifestValidationTests
         var exception = Assert.Throws<InvalidManifestException>(read.Validate);
         Assert.Contains("chaining mode", exception.Message);
 
+        // A manifest file carrying that mode is refused when a record parses it (S10a: the record's
+        // manifest is its file's).
         var guardianSet = ElectionFixtureBuilder.CreateGuardianSet();
-        var (_, manifestFile) = ElectionFixtureBuilder.CreateMinimalManifest();
-        Assert.Throws<InvalidManifestException>(() => ElectionFixtureBuilder.CreateEncryptionRecord(guardianSet, read, manifestFile));
+        Assert.Throws<InvalidManifestException>(() => ManifestSerializer.Deserialize(ManifestSerializer.Serialize(read)));
+        Assert.Throws<InvalidManifestException>(() => ElectionFixtureBuilder.CreateEncryptionRecord(guardianSet, read, ManifestSerializer.ToManifestFile(read)));
     }
 
     [Theory]
@@ -283,6 +298,10 @@ public class ManifestValidationTests
         var record = records.EncryptionRecord;
         var deviceHash = new VotingDeviceInformationHash(records.ExtendedBaseHash, "device-1");
 
+        // A deliberate in-process misuse probe, not an endorsed pattern: the record's manifest is its
+        // own parse of the file (S10a) and is meant to be read-only, but it is a mutable object
+        // graph, so the encryptors' own re-validation is what stops a reordered one.
+        manifest = record.Manifest;
         manifest.Contests[0].Choices.Reverse();
 
         Assert.Throws<InvalidManifestException>(() => new BallotEncryptor(record, "device-1", deviceHash));

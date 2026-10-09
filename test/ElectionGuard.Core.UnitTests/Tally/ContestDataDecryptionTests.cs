@@ -2,6 +2,7 @@ using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.KeyGeneration;
 using ElectionGuard.Core.Models;
+using ElectionGuard.Core.Serialization;
 using ElectionGuard.Core.Tally;
 using ElectionGuard.Core.Verify;
 using ElectionGuard.Core.Verify.Tally;
@@ -501,12 +502,11 @@ public class ContestDataDecryptionTests
         CryptographicParameters = record.CryptographicParameters,
         GuardianParameters = record.GuardianParameters,
         ParameterBaseHash = record.ParameterBaseHash,
-        ManifestFile = record.ManifestFile,
+        ManifestFile = ManifestSerializer.ToManifestFile(record.Manifest with { Contests = record.Manifest.Contests.Select(c => c with { ContestDataBlocks = 0 }).ToList() }),
         ElectionBaseHash = record.ElectionBaseHash,
         Guardians = record.Guardians,
         ElectionPublicKeys = record.ElectionPublicKeys,
         ExtendedBaseHash = record.ExtendedBaseHash,
-        Manifest = record.Manifest with { Contests = record.Manifest.Contests.Select(c => c with { ContestDataBlocks = 0 }).ToList() },
     };
 
     [Fact]

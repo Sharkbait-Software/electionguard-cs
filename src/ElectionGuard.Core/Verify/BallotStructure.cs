@@ -90,12 +90,30 @@ public static class BallotStructure
             return styleViolation;
         }
 
+        // A JSON document can null a list or one of its entries (S10a: the S3/S5 carry-over); a
+        // protobuf one reads a missing list as empty and is caught below as missing contests or
+        // options.
+        if (ballot.Contests is null)
+        {
+            return $"Ballot {ballot.Id} has a null contest list.";
+        }
+
         Span<bool> onBallot = Flags(manifestContests.Count, stackalloc bool[MaxStackAllocCount]);
         Span<bool> optionBuffer = stackalloc bool[MaxStackAllocCount];
         Span<bool> fieldBuffer = stackalloc bool[SupplementalField.KindCount];
         int contestHint = 0;
         foreach (var contest in ballot.Contests)
         {
+            if (contest is null)
+            {
+                return $"Ballot {ballot.Id} has a null entry in its contest list.";
+            }
+
+            if (contest.Choices is null)
+            {
+                return $"Contest {contest.Id} on ballot {ballot.Id} has a null option list.";
+            }
+
             if (MarkContest(ballot.Id, style, contest.Id, manifestContests, inStyle, onBallot, ref contestHint, out var manifestContest) is string contestViolation)
             {
                 return contestViolation;
@@ -107,6 +125,11 @@ public static class BallotStructure
             int optionHint = 0;
             for (int i = 0; i < selections.Count; i++)
             {
+                if (selections[i] is null)
+                {
+                    return $"Contest {contest.Id} on ballot {ballot.Id} has a null entry in its option list.";
+                }
+
                 string optionId = selections[i].ChoiceId;
                 int position = i < options.Count && string.Equals(options[i].Id, optionId, StringComparison.Ordinal)
                     ? i

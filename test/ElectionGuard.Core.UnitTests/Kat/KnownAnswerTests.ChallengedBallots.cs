@@ -2,6 +2,7 @@
 using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.KeyGeneration;
 using ElectionGuard.Core.Models;
+using ElectionGuard.Core.Serialization;
 using ElectionGuard.Core.Tally;
 using ElectionGuard.Core.Verify.Ballot;
 using ElectionGuard.Core.Verify.Tally;
@@ -550,24 +551,28 @@ public partial class KnownAnswerTests
         var extendedBaseHash = new ExtendedBaseHash(electionBaseHash, keys);
         Assert.Equal(chain.GetProperty("H_E_hex").GetString(), ToHex(extendedBaseHash));
 
+        var manifest = new Manifest
+        {
+            ElectionId = "kat",
+            Contests = contests,
+            BallotStyles = [new BallotStyle { Id = "style", Name = "Style", ContestIds = styleContests ?? contests.Select(x => x.Id).ToList() }],
+            ChainingMode = chainingMode,
+            HashTrimmingFunction = hashTrimmingFunction,
+        };
+
         return new EncryptionRecord
         {
             CryptographicParameters = new CryptographicParameters(),
             GuardianParameters = new GuardianParameters(3, 2),
             ParameterBaseHash = parameterBaseHash,
-            ManifestFile = manifestFile,
+            // H_B and H_E are the oracle's, over its own manifest bytes; the record's manifest file is
+            // the shaping manifest in the library's format. Nothing here runs Verification 1.F,
+            // which would report the difference.
+            ManifestFile = ManifestSerializer.ToManifestFile(manifest),
             ElectionBaseHash = electionBaseHash,
             Guardians = [],
             ElectionPublicKeys = keys,
             ExtendedBaseHash = extendedBaseHash,
-            Manifest = new Manifest
-            {
-                ElectionId = "kat",
-                Contests = contests,
-                BallotStyles = [new BallotStyle { Id = "style", Name = "Style", ContestIds = styleContests ?? contests.Select(x => x.Id).ToList() }],
-                ChainingMode = chainingMode,
-                HashTrimmingFunction = hashTrimmingFunction,
-            },
         };
     }
 

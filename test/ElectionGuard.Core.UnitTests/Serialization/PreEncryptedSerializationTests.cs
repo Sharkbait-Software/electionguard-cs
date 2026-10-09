@@ -324,14 +324,88 @@ public class PreEncryptedSerializationTests
         return root;
     }
 
-    /// <summary>A non-canonical group element or Z_q value is refused as such; any other malformation as invalid JSON.</summary>
+    /// <summary>
+    /// A non-canonical group element or Z_q value is refused as such; any other malformation as
+    /// invalid JSON or a non-canonical encoding (a wrong-width value). Since S10a review round 1 no
+    /// reader lets a bare <see cref="FormatException"/> out (<see cref="NonCanonicalEncodingException"/>
+    /// is one, and is still accepted here).
+    /// </summary>
     private static void AssertRefused(string description, Exception? exception)
     {
         Assert.True(
             description.Contains("= p") || description.Contains("not below q")
                 ? exception is NonCanonicalEncodingException
-                : exception is JsonException or FormatException,
+                : exception is JsonException or NonCanonicalEncodingException,
             $"{description}: {exception}");
+    }
+
+    /// <summary>
+    /// S10a review round 1: both pre-encrypted readers refuse what <see cref="StrictJson"/> refuses
+    /// (an unknown member, a member named twice, a leading byte order mark, a member name that is not
+    /// valid text) with <see cref="JsonException"/>, and base64 that is not in its canonical form with
+    /// <see cref="NonCanonicalEncodingException"/>. The unknown member is not a name the model has at
+    /// all: a member the model marks <c>[JsonIgnore]</c> would be skipped rather than refused.
+    /// </summary>
+    [Theory]
+    [InlineData("printed", "unknown property")]
+    [InlineData("printed", "property named twice")]
+    [InlineData("printed", "leading byte order mark")]
+    [InlineData("printed", "property name a lone surrogate")]
+    [InlineData("printed", "base64 with whitespace")]
+    [InlineData("uncast", "unknown property")]
+    [InlineData("uncast", "property named twice")]
+    [InlineData("uncast", "leading byte order mark")]
+    [InlineData("uncast", "property name a lone surrogate")]
+    [InlineData("uncast", "base64 with whitespace")]
+    public void Json_AmbiguousOrNonCanonicalDocument_IsRefused(string reader, string tampering)
+    {
+        var election = Election;
+        var serializer = new JsonPreEncryptedBallotSerializer();
+        using var written = new MemoryStream();
+        if (reader == "printed")
+        {
+            serializer.Serialize(written, election.PreEncrypt("printed-1"));
+        }
+        else
+        {
+            serializer.Serialize(written, election.Uncast("uncast-1", releaseBallotNonce: true));
+        }
+
+        byte[] bytes = written.ToArray();
+        string text = Encoding.UTF8.GetString(bytes);
+        // A top-level member each document has exactly once at the top level.
+        string member = reader == "printed" ? "chainingField" : "ballotNonce";
+        Assert.Contains($"\"{member}\":", text);
+        byte[] tampered = tampering switch
+        {
+            "unknown property" => Encoding.UTF8.GetBytes(Tamper(text, n => n["notAMemberOfTheModel"] = 1)),
+            "property named twice" => Encoding.UTF8.GetBytes(text.Replace($"\"{member}\":", $"\"{member}\": null, \"{member}\":")),
+            "leading byte order mark" => [0xEF, 0xBB, 0xBF, .. bytes],
+            "property name a lone surrogate" => Encoding.UTF8.GetBytes(text.Replace($"\"{member}\":", "\"\\uD800\":")),
+            "base64 with whitespace" => Encoding.UTF8.GetBytes(Tamper(text, n => n[member] = ((string)n[member]!).Insert(4, "    "))),
+            _ => throw new ArgumentOutOfRangeException(nameof(tampering)),
+        };
+
+        // The untampered bytes read back, so each refusal is the tampering's.
+        Assert.Null(Record.Exception(() => Deserialize(serializer, reader, bytes)));
+        var exception = Record.Exception(() => Deserialize(serializer, reader, tampered));
+
+        Assert.True(
+            tampering == "base64 with whitespace" ? exception is NonCanonicalEncodingException : exception is JsonException,
+            $"{reader}, {tampering}: {exception}");
+    }
+
+    private static string Tamper(string json, Action<JsonNode> edit)
+    {
+        var node = JsonNode.Parse(json)!;
+        edit(node);
+        return node.ToJsonString();
+    }
+
+    private static object? Deserialize(JsonPreEncryptedBallotSerializer serializer, string reader, byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes);
+        return reader == "printed" ? serializer.DeserializeBallot(stream) : serializer.DeserializeUncastBallot(stream);
     }
 
     [Theory]

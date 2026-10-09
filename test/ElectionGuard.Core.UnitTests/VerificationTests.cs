@@ -216,7 +216,6 @@ public class VerificationTests
         Guardians = record.Guardians,
         ElectionPublicKeys = record.ElectionPublicKeys,
         ExtendedBaseHash = record.ExtendedBaseHash,
-        Manifest = record.Manifest,
     };
 
     [Fact]

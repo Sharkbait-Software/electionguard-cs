@@ -14,54 +14,50 @@ public interface IEncryptedBallotSerializer
 }
 
 
+/// <summary>
+/// JSON for encrypted ballots: camelCase properties, written indented; group elements, Z_q values
+/// and hashes base64 of their fixed-width big-endian bytes, each decoded strictly (exact width, below
+/// p or q; <see cref="NonCanonicalEncodingException"/> otherwise); the optional encryption timestamp
+/// as <c>yyyy-MM-ddTHH:mm:ss.fffZ</c>. A decoded ballot whose id, ballot style, H_I, or a contest's,
+/// option's or field's label is null is refused (<see cref="NonCanonicalEncodingException"/>); a
+/// null list or list entry decodes and is reported by <see cref="Verify.BallotStructure"/>.
+/// </summary>
 public class JsonEncryptedBallotSerializer : IEncryptedBallotSerializer
 {
+    private static readonly JsonSerializerOptions Options = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        WriteIndented = true,
+        Converters =
+        {
+            new IntegerModQJsonConverter(),
+            new IntegerModPJsonConverter(),
+            new ConfirmationCodeJsonConverter(),
+            new ContestHashJsonConverter(),
+            new SelectionEncryptionIdentifierJsonConverter(),
+            new SelectionEncryptionIdentifierHashJsonConverter(),
+            new VotingDeviceInformationHashJsonConverter(),
+            new ChainingFieldJsonConverter(),
+            new SelectionHashJsonConverter(),
+            new ShortCodeJsonConverter(),
+            new EncryptionTimestampJsonConverter(),
+        }
+    };
+
     public void Serialize(Stream destination, EncryptedBallot encryptedBallot)
     {
-        var options = new JsonSerializerOptions
-        {
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            WriteIndented = true,
-            Converters =
-            {
-                new IntegerModQJsonConverter(),
-                new IntegerModPJsonConverter(),
-                new ConfirmationCodeJsonConverter(),
-                new ContestHashJsonConverter(),
-                new SelectionEncryptionIdentifierJsonConverter(),
-                new SelectionEncryptionIdentifierHashJsonConverter(),
-                new VotingDeviceInformationHashJsonConverter(),
-                new ChainingFieldJsonConverter(),
-                new SelectionHashJsonConverter(),
-                new ShortCodeJsonConverter(),
-            }
-        };
-
-        JsonSerializer.Serialize(destination, encryptedBallot, options);
+        JsonSerializer.Serialize(destination, encryptedBallot, Options);
     }
 
     public EncryptedBallot? Deserialize(Stream source)
     {
-        var options = new JsonSerializerOptions
+        var ballot = JsonSerializer.Deserialize<EncryptedBallot>(source, Options);
+        if (ballot is not null)
         {
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            WriteIndented = true,
-            Converters =
-            {
-                new IntegerModQJsonConverter(),
-                new IntegerModPJsonConverter(),
-                new ConfirmationCodeJsonConverter(),
-                new ContestHashJsonConverter(),
-                new SelectionEncryptionIdentifierJsonConverter(),
-                new SelectionEncryptionIdentifierHashJsonConverter(),
-                new VotingDeviceInformationHashJsonConverter(),
-                new ChainingFieldJsonConverter(),
-                new SelectionHashJsonConverter(),
-                new ShortCodeJsonConverter(),
-            }
-        };
+            EncryptedBallotShape.Require(ballot);
+        }
 
-        return JsonSerializer.Deserialize<EncryptedBallot>(source, options);
+        return ballot;
     }
 }
 
@@ -150,6 +146,7 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
                 }).ToList(),
             }).ToList(),
             IsPreEncrypted = encryptedBallot.IsPreEncrypted,
+            EncryptionTimestamp = encryptedBallot.EncryptionTimestamp?.ToUnixTimeMilliseconds(),
         };
 
         Serializer.Serialize(destination, protobufEncryptedBallot);
@@ -166,24 +163,26 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
         {
             Id = protobufBallot.Id,
             SelectionEncryptionIdentifier = SelectionEncryptionIdentifier.FromCanonicalBytes(protobufBallot.SelectionEncryptionIdentifier),
-            SelectionEncryptionIdentifierHash = new SelectionEncryptionIdentifierHash(protobufBallot.SelectionEncryptionIdentifierHash),
+            SelectionEncryptionIdentifierHash = SelectionEncryptionIdentifierHash.FromCanonicalBytes(protobufBallot.SelectionEncryptionIdentifierHash),
             BallotStyleId = protobufBallot.BallotStyleId,
             DeviceId = protobufBallot.DeviceId,
-            Contests = protobufBallot.Contests.Select(c => new EncryptedContest
+            // A repeated field with no entries is not on the wire, so a missing list reads as
+            // empty; BallotStructure then reports the contests or options the ballot lacks.
+            Contests = (protobufBallot.Contests ?? []).Select(c => new EncryptedContest
             {
                 Id = c.Id,
-                Choices = c.Choices.Select(s => new EncryptedSelection
+                Choices = (c.Choices ?? []).Select(s => new EncryptedSelection
                 {
                     ChoiceId = s.ChoiceId,
                     Alpha = IntegerModP.FromCanonicalBytes(s.Alpha),
                     Beta = IntegerModP.FromCanonicalBytes(s.Beta),
-                    Proofs = s.Proofs.Select(p => new ChallengeResponsePair
+                    Proofs = (s.Proofs ?? []).Select(p => new ChallengeResponsePair
                     {
                         Challenge = IntegerModQ.FromCanonicalBytes(p.Challenge),
                         Response = IntegerModQ.FromCanonicalBytes(p.Response)
                     }).ToArray()
                 }).ToList(),
-                Proofs = c.Proofs.Select(p => new ChallengeResponsePair
+                Proofs = (c.Proofs ?? []).Select(p => new ChallengeResponsePair
                 {
                     Challenge = IntegerModQ.FromCanonicalBytes(p.Challenge),
                     Response = IntegerModQ.FromCanonicalBytes(p.Response)
@@ -196,7 +195,7 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
                     FieldId = f.FieldId,
                     Alpha = IntegerModP.FromCanonicalBytes(f.Alpha),
                     Beta = IntegerModP.FromCanonicalBytes(f.Beta),
-                    Proofs = f.Proofs.Select(p => new ChallengeResponsePair
+                    Proofs = (f.Proofs ?? []).Select(p => new ChallengeResponsePair
                     {
                         Challenge = IntegerModQ.FromCanonicalBytes(p.Challenge),
                         Response = IntegerModQ.FromCanonicalBytes(p.Response)
@@ -226,18 +225,42 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
                     Challenge = IntegerModQ.FromCanonicalBytes(c.ContestData.Challenge),
                     Response = IntegerModQ.FromCanonicalBytes(c.ContestData.Response)
                 } : null,
-                ContestHash = new ContestHash(c.ContestHash),
+                ContestHash = ContestHash.FromCanonicalBytes(c.ContestHash),
             }).ToList(),
-            ConfirmationCode = new ConfirmationCode(protobufBallot.ConfirmationCode),
+            ConfirmationCode = ConfirmationCode.FromCanonicalBytes(protobufBallot.ConfirmationCode),
             ChainingField = ChainingField.FromCanonicalBytes(protobufBallot.ChainingField),
             EncryptedBallotNonce = ReadBallotNonce(protobufBallot.EncryptedBallotNonce),
             Weight = protobufBallot.Weight,
             Status = protobufBallot.Status,
             PreEncryptedContests = ReadPreEncryptedContests(protobufBallot),
+            EncryptionTimestamp = ReadEncryptionTimestamp(protobufBallot.EncryptionTimestamp),
         };
 
+        EncryptedBallotShape.Require(encryptedBallot);
         return encryptedBallot;
     }
+
+    /// <summary>
+    /// The optional encryption timestamp (field 14, Unix milliseconds, UTC). Absent reads as none;
+    /// a value outside the years 0001-9999 is refused.
+    /// </summary>
+    private static DateTimeOffset? ReadEncryptionTimestamp(long? unixMilliseconds)
+    {
+        if (unixMilliseconds is not { } milliseconds)
+        {
+            return null;
+        }
+
+        if (milliseconds < MinimumUnixMilliseconds || milliseconds > MaximumUnixMilliseconds)
+        {
+            throw new NonCanonicalEncodingException($"An encryption timestamp of {milliseconds} Unix milliseconds is outside the years 0001-9999.");
+        }
+
+        return DateTimeOffset.FromUnixTimeMilliseconds(milliseconds);
+    }
+
+    private static readonly long MinimumUnixMilliseconds = DateTimeOffset.MinValue.ToUnixTimeMilliseconds();
+    private static readonly long MaximumUnixMilliseconds = DateTimeOffset.MaxValue.ToUnixTimeMilliseconds();
 
     /// <summary>
     /// A cast pre-encrypted ballot's pre-encryption data (field 12, flagged by field 13, since
@@ -376,6 +399,13 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
         /// </summary>
         [ProtoMember(13)]
         public bool IsPreEncrypted { get; init; }
+
+        /// <summary>
+        /// <see cref="EncryptedBallot.EncryptionTimestamp"/> (§3.7), Unix milliseconds in UTC. Optional:
+        /// null, and so not written, when the ballot records none.
+        /// </summary>
+        [ProtoMember(14)]
+        public long? EncryptionTimestamp { get; init; }
     }
 
     /// <summary><see cref="PreEncryption.PreEncryptedCastContest"/>.</summary>

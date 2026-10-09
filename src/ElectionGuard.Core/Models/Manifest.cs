@@ -54,7 +54,8 @@ public record Manifest
 
         for (int position = 0; position < Contests.Count; position++)
         {
-            var contest = Contests[position];
+            var contest = Contests[position]
+                ?? throw new InvalidManifestException($"Manifest {ElectionId} has a null entry at position {position + 1} of its contest list.");
             if (contest.Index != position + 1)
             {
                 throw new InvalidManifestException(
@@ -85,7 +86,8 @@ public record Manifest
 
             for (int choicePosition = 0; choicePosition < contest.Choices.Count; choicePosition++)
             {
-                var choice = contest.Choices[choicePosition];
+                var choice = contest.Choices[choicePosition]
+                    ?? throw new InvalidManifestException($"Contest {contest.Id} has a null entry at position {choicePosition + 1} of its option list.");
                 if (choice.Index != choicePosition + 1)
                 {
                     throw new InvalidManifestException(
@@ -116,6 +118,19 @@ public record Manifest
         if (FirstDuplicateId(Contests, static x => x.Id) is string duplicateContestId)
         {
             throw new InvalidManifestException($"Contest id {duplicateContestId} appears more than once in the manifest; contest labels must be unique (§3.1.3).");
+        }
+
+        if (BallotStyles != null)
+        {
+            for (int position = 0; position < BallotStyles.Count; position++)
+            {
+                var style = BallotStyles[position]
+                    ?? throw new InvalidManifestException($"Manifest {ElectionId} has a null entry at position {position + 1} of its ballot style list.");
+                if (style.ContestIds == null || style.ContestIds.Contains(null!))
+                {
+                    throw new InvalidManifestException($"Ballot style {style.Id} has no contest id list, or a null entry in it.");
+                }
+            }
         }
 
         if (BallotStyles != null && FirstDuplicateId(BallotStyles, static x => x.Id) is string duplicateBallotStyleId)
@@ -187,7 +202,8 @@ public record Manifest
         Span<bool> kindSeen = stackalloc bool[SupplementalField.KindCount + 1];
         for (int position = 0; position < fields.Count; position++)
         {
-            var field = fields[position];
+            var field = fields[position]
+                ?? throw new InvalidManifestException($"Contest {contest.Id} has a null entry at position {position + 1} of its supplemental field list.");
             if (field.Index != optionCount + position + 1)
             {
                 throw new InvalidManifestException(
@@ -282,6 +298,10 @@ public record Manifest
 public class InvalidManifestException : ArgumentException
 {
     public InvalidManifestException(string message) : base(message)
+    {
+    }
+
+    public InvalidManifestException(string message, Exception innerException) : base(message, innerException)
     {
     }
 }

@@ -29,7 +29,7 @@ public class DecryptedTally
         public required int ChoiceIndex { get; init; }
 
         /// <summary>The decrypted count t, with T = K^t mod p (Verification 10.C).</summary>
-        public int VoteCount { get; init; }
+        public required int VoteCount { get; init; }
 
         /// <summary>T = (B·M^-1) mod p (eq. 82).</summary>
         public required IntegerModP T { get; init; }

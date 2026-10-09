@@ -118,6 +118,11 @@ public class BallotAggregationVerifier
     /// before any value is compared.</item>
     /// <item>"9.A" or "9.B", naming the first contest and option in manifest order whose A or B
     /// differs.</item>
+    /// <item>"9.structure", after 9.A and 9.B, if a contest's published cast weight
+    /// (<see cref="EncryptedTally.EncryptedAggregateContest.CastWeight"/>, the sum of the weights of
+    /// the cast ballots that list it) differs from the recomputed one. The spec publishes no such
+    /// value; the library does, because it bounds each count's decryption search when the tally is
+    /// read back from a record (S10a).</item>
     /// </list>
     ///
     /// Does not consume or reset the recomputation: more ballots may be added afterwards and
@@ -184,6 +189,22 @@ public class BallotAggregationVerifier
                 {
                     throw new VerificationFailedException("9.B", $"Ballot aggregation verification failed for contest {contest.Id}, choice {choice.Id}: expected B {expectedChoice.B}, got {claimedChoice.B}");
                 }
+            }
+        }
+
+        // Not 9.A/9.B (the spec publishes no cast weight), so checked after them: the published
+        // per-contest cast weight bounds each count's decryption search (EncryptedAggregateChoice.
+        // MaximumCount). A tally read back from a record takes it from the document (S10a), so a
+        // wrong weight would narrow the administrator's search (decryption fails) or widen it (time
+        // and memory), and is refused here. The ballot count is not compared: it bounds nothing,
+        // and one ballot of weight 3 aggregates exactly as three of weight 1 (see BallotsAdded).
+        foreach (var contest in manifest.Contests)
+        {
+            long expectedWeight = _expected.Contests[contest.Id].CastWeight;
+            long claimedWeight = encryptedTally.Contests[contest.Id].CastWeight;
+            if (expectedWeight != claimedWeight)
+            {
+                throw new VerificationFailedException("9.structure", $"Ballot aggregation verification failed for contest {contest.Id}: the tally gives a cast weight of {claimedWeight}, but the cast ballots that list the contest weigh {expectedWeight} (eq. 80).");
             }
         }
     }

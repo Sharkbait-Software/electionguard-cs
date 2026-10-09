@@ -2,6 +2,7 @@ using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.KeyGeneration;
 using ElectionGuard.Core.Models;
+using ElectionGuard.Core.Serialization;
 using ElectionGuard.Core.Tally;
 using ElectionGuard.Testing.Common;
 
@@ -373,6 +374,8 @@ public class TallyAdminSearchRangeTests
             choices.Add(new Choice { Id = $"choice-{i + 1}", Name = $"Choice {i + 1}", Index = i + 1 });
         }
 
+        // The record parses its manifest from the file (S10a), so the file is built after the choices are added.
+        manifestFile = ManifestSerializer.ToManifestFile(manifest);
         var encryptionRecord = ElectionFixtureBuilder.CreateEncryptionRecord(guardianSet, manifest, manifestFile).EncryptionRecord;
         var choiceIds = choices.Select(x => x.Id).ToList();
         var tally = new EncryptedTally(manifest);

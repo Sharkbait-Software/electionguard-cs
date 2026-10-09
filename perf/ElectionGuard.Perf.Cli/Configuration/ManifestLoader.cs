@@ -1,5 +1,5 @@
-using System.Text.Json;
 using ElectionGuard.Core.Models;
+using ElectionGuard.Core.Serialization;
 
 namespace ElectionGuard.Perf.Cli.Configuration;
 
@@ -31,19 +31,16 @@ public static class ManifestLoader
                 $"Scenario '{scenario.Id}' points at manifest {manifestPath}, which does not exist.");
         }
 
-        Manifest? manifest;
+        // Core's manifest format (ManifestSerializer): strict, case-sensitive, validated. It is the
+        // format the encryption record parses its manifest from.
         try
         {
-            manifest = JsonSerializer.Deserialize<Manifest>(File.ReadAllBytes(manifestPath), PerfJson.Options);
+            return ManifestSerializer.Deserialize(File.ReadAllBytes(manifestPath));
         }
-        catch (JsonException ex)
+        catch (InvalidManifestException ex)
         {
             throw new ScenarioConfigurationException(
                 $"Scenario '{scenario.Id}' points at manifest {manifestPath}, which could not be read: {ex.Message}");
         }
-
-        return manifest
-            ?? throw new ScenarioConfigurationException(
-                $"Scenario '{scenario.Id}' points at manifest {manifestPath}, which deserialized to null.");
     }
 }

@@ -2,6 +2,7 @@
 using ElectionGuard.Core.KeyGeneration;
 using ElectionGuard.Core.Models;
 using ElectionGuard.Core.PreEncryption;
+using ElectionGuard.Core.Serialization;
 using ElectionGuard.Core.Tally;
 using System.Text.Json;
 
@@ -245,21 +246,33 @@ public static class ElectionFixtureBuilder
             HashTrimmingFunction = hashTrimmingFunction,
         };
 
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(manifest);
-        var manifestFile = new ManifestFile { Bytes = bytes };
+        // The library's manifest format (ManifestSerializer), which an EncryptionRecord parses its
+        // Manifest from.
+        var manifestFile = ManifestSerializer.ToManifestFile(manifest);
 
         return (manifest, manifestFile);
     }
 
     /// <summary>
     /// Builds the ElectionBaseHash/ExtendedBaseHash/EncryptionRecord layer for a given guardian set
-    /// and manifest (mirrors Program.cs lines 80-100).
+    /// and manifest (mirrors Program.cs). The record parses its manifest from
+    /// <paramref name="manifestFile"/>; <paramref name="manifest"/> is the caller's copy, and must
+    /// be what the file holds (compared in the library's written form), so a test cannot build a
+    /// record over one manifest while reasoning about another. A test that changes its manifest
+    /// object after building the file must build the file again
+    /// (<see cref="ManifestSerializer.ToManifestFile"/>). <c>record.Manifest</c> is the record's own
+    /// parse and is treated as read-only; only a test probing that misuse changes it.
     /// </summary>
     public static EncryptionRecordResult CreateEncryptionRecord(
         GuardianSetResult guardianSet,
         Manifest manifest,
         ManifestFile manifestFile)
     {
+        if (!ManifestSerializer.Serialize(manifest).AsSpan().SequenceEqual(ManifestSerializer.Serialize(ManifestSerializer.Deserialize(manifestFile))))
+        {
+            throw new ArgumentException("The manifest object is not the manifest the manifest file holds; build the file from the manifest (ManifestSerializer.ToManifestFile).", nameof(manifest));
+        }
+
         var electionBaseHash = new ElectionBaseHash(EGParameters.ParameterBaseHash, manifestFile);
         var extendedBaseHash = new ExtendedBaseHash(electionBaseHash, guardianSet.ElectionPublicKeys);
 
@@ -273,7 +286,6 @@ public static class ElectionFixtureBuilder
             Guardians = guardianSet.GuardianPublicViews,
             ElectionPublicKeys = guardianSet.ElectionPublicKeys,
             ExtendedBaseHash = extendedBaseHash,
-            Manifest = manifest,
         };
 
         return new EncryptionRecordResult

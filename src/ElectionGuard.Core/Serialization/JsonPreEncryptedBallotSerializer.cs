@@ -9,9 +9,10 @@ namespace ElectionGuard.Core.Serialization;
 /// §4.2) and for the election record of uncast ones (<see cref="PreEncryptedUncastBallot"/>, §4.3.1,
 /// §4.4), in the encoding the ballot serializer uses: camelCase properties, group elements, Z_q
 /// values and hashes base64. Decoding is strict: every element of Z_p and Z_q canonical
-/// (<see cref="NonCanonicalEncodingException"/> otherwise), id_B, every selection hash and a
-/// released ξ_B exactly 32 bytes, the chaining field 36, short codes and every required property
-/// present. The shape against the manifest is Verification 16's, 18's and 19's to check.
+/// (<see cref="NonCanonicalEncodingException"/> otherwise), id_B, H_I, every selection hash, the
+/// confirmation code and a released ξ_B exactly 32 bytes, the chaining field 36, short codes and
+/// every required property present, no unknown property and no property named twice (S10a; a member the model
+/// marks <c>[JsonIgnore]</c>, such as a computed property, is skipped rather than refused). The shape against the manifest is Verification 16's, 18's and 19's to check.
 ///
 /// A cast pre-encrypted ballot's record is an <see cref="BallotEncryption.EncryptedBallot"/> and is
 /// written by <see cref="JsonEncryptedBallotSerializer"/> and <see cref="ProtobufEncryptedBallotSerializer"/>.
@@ -24,6 +25,7 @@ public class JsonPreEncryptedBallotSerializer
     private static readonly JsonSerializerOptions Options = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow,
         WriteIndented = true,
         Converters =
         {
@@ -47,7 +49,17 @@ public class JsonPreEncryptedBallotSerializer
 
     public PreEncryptedBallot? DeserializeBallot(Stream source)
     {
-        return JsonSerializer.Deserialize<PreEncryptedBallot>(source, Options);
+        return JsonSerializer.Deserialize<PreEncryptedBallot>(Unambiguous(source), Options);
+    }
+
+    /// <summary>The document's bytes, refused if it names a property twice in an object or starts with a byte order mark (S10a).</summary>
+    private static byte[] Unambiguous(Stream source)
+    {
+        using var buffer = new MemoryStream();
+        source.CopyTo(buffer);
+        byte[] bytes = buffer.ToArray();
+        StrictJson.RejectAmbiguity(bytes);
+        return bytes;
     }
 
     public void Serialize(Stream destination, PreEncryptedUncastBallot ballot)
@@ -57,6 +69,6 @@ public class JsonPreEncryptedBallotSerializer
 
     public PreEncryptedUncastBallot? DeserializeUncastBallot(Stream source)
     {
-        return JsonSerializer.Deserialize<PreEncryptedUncastBallot>(source, Options);
+        return JsonSerializer.Deserialize<PreEncryptedUncastBallot>(Unambiguous(source), Options);
     }
 }
