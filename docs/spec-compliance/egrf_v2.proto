@@ -1,0 +1,484 @@
+// EGRF v2: the ElectionGuard Record Format, canonical protobuf profile.
+//
+// This schema is NORMATIVE. The profile rules that make every item's bytes unique (field order,
+// presence, widths, varints, framing) are in the design document,
+// docs/spec-compliance/2026-10-08-election-record-design.md §4.2, and are summarized here:
+//
+//  - proto3. Field types are restricted to uint32, uint64, bool, enum, string, bytes, message and
+//    google.protobuf.Timestamp. No maps, floating point, signed or fixed-width integer types, Any,
+//    groups, `optional` keyword, or repeated scalar numeric fields (so packing never arises).
+//  - Fields are declared, and MUST be written, in ascending field-number order.
+//  - Implicit presence: a scalar, string or bytes field is written if and only if it differs from its
+//    default (0, false, the zero enum value, empty). Message fields are written iff set.
+//  - Every list is `repeated <message>` or one `bytes` field holding a concatenation of fixed-width
+//    values (option width_multiple). Fixed-width values are big-endian b(x, w) (spec §5.1): Z_p 512
+//    bytes, Z_q 32, hashes 32, chaining fields 36. Range (x < p, x < q) is NOT a format rule; the
+//    verifier reports it under the spec's lettered checks.
+//  - Timestamps are UTC with millisecond precision: seconds in [0, 253402300799] (1970-01-01 to
+//    9999-12-31), nanos a multiple of 1,000,000.
+//  - No oneof's member numbers may enclose a regular field's number (lint rule S8), so runtimes that
+//    encode a oneof at its lowest member's position (prost) still write field-number order.
+//  - No runtime enforces the decode rules (widths, enum membership, integer bounds, timestamp
+//    precision, envelope and key order). Every conformant reader checks them itself.
+//
+// Spec basis: ElectionGuard v2.1.0 §3.7 (pp.55-56), §4.4 (pp.62-63), Verifications 1-19.
+// Comments name the spec symbol each field carries.
+
+syntax = "proto3";
+
+package electionguard.egrf.v2;
+
+import "google/protobuf/descriptor.proto";
+import "google/protobuf/timestamp.proto";
+
+option csharp_namespace = "ElectionGuard.Core.Record.Protobuf";
+option go_package = "github.com/Sharkbait-Software/electionguard-cs/proto/electionguard/egrf/v2;egrfv2";
+option java_multiple_files = true;
+
+// ---- profile annotations (machine-readable width rules for any-language readers) -----------------
+
+// The numbers 50001-50003 are DRAFT placeholders in protobuf's 50000-99999 range for in-house use.
+// Before the schema is published they are replaced by numbers registered in protobuf's global
+// extension registry (S10b-18), so that no third party's options collide in a shared descriptor pool.
+extend google.protobuf.FieldOptions {
+  // A present bytes field has exactly this many bytes.
+  uint32 width = 50001;
+  // A present bytes field has a positive multiple of this many bytes.
+  uint32 width_multiple = 50002;
+  // A width-constrained bytes field that may be absent. Without it, absence is a width error.
+  bool omittable = 50003;
+}
+
+// ---- enumerations -------------------------------------------------------------------------------
+
+// Section types. The phase is min(type >> 8, 3): 0 setup, 1 voting (sealed), 2 aggregated, 3 final.
+// 32768-65533 are vendor sections (final phase); proto3 enums are open, so they travel as numbers.
+enum SectionType {
+  SECTION_TYPE_UNSPECIFIED = 0;
+  SECTION_TYPE_HEADER = 1;
+  SECTION_TYPE_PARAMETERS = 2;
+  SECTION_TYPE_MANIFEST = 3;
+  SECTION_TYPE_GUARDIANS = 4;
+  SECTION_TYPE_ELECTION_KEYS = 5;
+  SECTION_TYPE_DEVICE = 257;                         // 0x0101; key = device key (33 bytes)
+  SECTION_TYPE_DEVICE_ATTESTATIONS = 258;            // 0x0102
+  SECTION_TYPE_ENCRYPTED_TALLY = 513;                // 0x0201
+  SECTION_TYPE_CONTEST_DATA_REQUESTS = 514;          // 0x0202
+  SECTION_TYPE_DECRYPTED_TALLY = 769;                // 0x0301
+  SECTION_TYPE_CHALLENGED_BALLOT_DECRYPTIONS = 770;  // 0x0302
+  SECTION_TYPE_CONTEST_DATA_DECRYPTIONS = 771;       // 0x0303
+  SECTION_TYPE_UNCAST_NONCE_RELEASES = 772;          // 0x0304
+  SECTION_TYPE_TOC = 65534;                          // pseudo-section: the claimed TOC; never in a TOC
+  SECTION_TYPE_SIGNATURES = 65535;                   // pseudo-section: outside every root
+}
+
+enum DeviceKind {
+  DEVICE_KIND_UNSPECIFIED = 0;
+  DEVICE_KIND_REGULAR = 1;          // Verification 8; H_DI by eq. (72)
+  DEVICE_KIND_PRE_ENCRYPTING = 2;   // Verification 16; H_DI by eq. (119)
+}
+
+// §3.7 "the status of the ballot". Anything in the record was submitted; a ballot that was neither
+// cast nor challenged is SPOILED. UNSPECIFIED is invalid in a record.
+enum BallotStatus {
+  BALLOT_STATUS_UNSPECIFIED = 0;
+  BALLOT_STATUS_CAST = 1;
+  BALLOT_STATUS_CHALLENGED = 2;
+  BALLOT_STATUS_SPOILED = 3;
+}
+
+enum RecordPhase {
+  RECORD_PHASE_UNSPECIFIED = 0;
+  RECORD_PHASE_SETUP = 1;
+  RECORD_PHASE_SEALED = 2;
+  RECORD_PHASE_AGGREGATED = 3;
+  RECORD_PHASE_FINAL = 4;
+}
+
+// ---- framing ------------------------------------------------------------------------------------
+
+// A segment file is a varint-length-delimited stream: one SegmentHeader, then RecordItems
+// (WriteDelimitedTo / parseDelimitedFrom / protodelim / sizeDelimitedEncode). Every frame's length
+// is at most 64 MiB (67,108,864 bytes); a reader rejects a larger length before allocating. The
+// SegmentHeader is checked for canonicality like an item, and must agree with the file's path.
+message SegmentHeader {
+  string magic = 1;              // "EGRF"
+  uint32 format_major = 2;       // 2
+  SectionType section_type = 3;
+  bytes key = 4;                 // empty, except a device section's 33-byte device key
+  uint64 first_ordinal = 5;      // 0-based ordinal, within the section, of this segment's first item
+}
+
+// Every item, statement and digest leaf is a RecordItem. Its canonical bytes are what is stored,
+// hashed (leaf = SHA-256(0x00 || bytes)) and signed; the oneof field number is the item type.
+message RecordItem {
+  oneof item {
+    // setup
+    RecordHeader record_header = 1;
+    Parameters parameters = 2;
+    ManifestFile manifest_file = 3;
+    GuardianPublicKey guardian_public_key = 4;
+    ElectionKeys election_keys = 5;
+    // voting: device sections and attestations
+    DeviceHeader device_header = 10;
+    EncryptedBallot encrypted_ballot = 11;
+    PreEncryptedCastBallot pre_encrypted_cast_ballot = 12;
+    PreEncryptedUncastBallot pre_encrypted_uncast_ballot = 13;
+    DeviceClose device_close = 14;
+    SignedStatement device_attestation = 15;
+    // aggregated
+    EncryptedTallyHeader encrypted_tally_header = 20;
+    EncryptedTallyContest encrypted_tally_contest = 21;
+    ContestDataRequest contest_data_request = 22;
+    // final
+    DecryptedTallyContest decrypted_tally_contest = 30;
+    ChallengedBallotDecryption challenged_ballot_decryption = 31;
+    ContestDataDecryption contest_data_decryption = 32;
+    UncastNonceRelease uncast_nonce_release = 33;
+    // statements: signed payloads, never section items
+    ChainCloseStatement chain_close_statement = 40;
+    SectionSealStatement section_seal_statement = 41;
+    PrefixCheckpointStatement prefix_checkpoint_statement = 42;
+    RecordStatement record_statement = 43;
+    SignedStatement record_signature = 44;          // signatures pseudo-section only
+    // digest leaves
+    TocEntry toc_entry = 50;                        // TOC pseudo-section and the TOC tree
+    ConfirmationCodeLeaf confirmation_code_leaf = 51; // codes_root leaves; never stored
+    // vendor sections only
+    VendorItem vendor_item = 100;
+  }
+  // Open question NQ-1. Strictly ascending by tag; absent in every v2.0 writer's output.
+  repeated Extension extensions = 2047;
+}
+
+message Extension {
+  uint32 tag = 1;      // 1-65535 registry; 65536 and above vendor
+  bool critical = 2;   // a reader that does not know the tag must not evaluate the item
+  bytes value = 3;
+}
+
+message VendorItem {
+  string type_url = 1;  // vendor-chosen identifier; never verified
+  bytes value = 2;
+}
+
+// ---- setup --------------------------------------------------------------------------------------
+
+// The format version, plus §3.7's "information sufficient to uniquely identify and describe the
+// election ... (not otherwise included in the election manifest)". Nothing the manifest carries
+// (election id, contests, styles, chaining mode, hash trimming) is repeated here.
+message RecordHeader {
+  uint32 format_major = 1;                 // 2
+  uint32 format_minor = 2;                 // 0 (absent) in v2.0
+  repeated ElectionInfo election_info = 3; // strictly ascending by key bytes; may be empty
+}
+
+// One descriptive fact about the election. Covered by the root and signatures; never verified.
+// Registry keys (v2.0): "election_name", "election_date" (RFC 3339 full-date, YYYY-MM-DD; a
+// multi-day election repeats it as "election_date.2", ...), "election_type", "jurisdiction",
+// "location", "administrator". Other keys are "x-<vendor>-<name>". Producer software and creation
+// time are not election facts; they go in meta.json, outside the root.
+message ElectionInfo {
+  string key = 1;    // non-empty; a registry key or "x-" prefixed
+  string value = 2;  // non-empty
+}
+
+message Parameters {
+  bytes version = 1 [(width) = 32];   // eq. (4) ver: "v2.1.0" then 0x00 padding to 32 bytes
+  bytes p = 2 [(width) = 512];        // raw b(p,512), not an element of Z_p (decision G1)
+  bytes q = 3 [(width) = 32];
+  bytes r = 4 [(width) = 512];
+  bytes g = 5 [(width) = 512];
+  uint32 n = 6;
+  uint32 k = 7;
+  bytes h_p = 8 [(width) = 32];       // claim; Verification 1.E
+}
+
+message ManifestFile {
+  string media_type = 1;  // v2.0: "application/vnd.electionguard.manifest+json;format=1", whose
+                          // parser is S10a's strict ManifestSerializer reading (UTF-8 without a
+                          // BOM, no unknown properties); a writer refuses content it cannot parse
+  bytes content = 2;      // the manifest exactly as entered; the H_B input of eq. (5); never re-encoded
+  bytes h_b = 3 [(width) = 32];  // claim; Verification 1.F
+}
+
+message GuardianPublicKey {
+  uint32 index = 1;                                      // i, 1..n
+  bytes vote_commitments = 2 [(width_multiple) = 512];  // K_{i,0} || ... || K_{i,k-1}
+  bytes data_commitments = 3 [(width_multiple) = 512];  // K-hat_{i,0} || ... || K-hat_{i,k-1}
+  bytes kappa = 4 [(width) = 512];                       // kappa_i
+  bytes vote_proof = 5 [(width_multiple) = 32];          // c_i || v_{i,0} || ... || v_{i,k}
+  bytes data_proof = 6 [(width_multiple) = 32];          // c-hat_i || v-hat_{i,0} || ... || v-hat_{i,k}
+}
+
+message ElectionKeys {
+  bytes k = 1 [(width) = 512];      // K (claim; 3.A)
+  bytes k_hat = 2 [(width) = 512];  // K-hat (claim; 3.B)
+  bytes h_e = 3 [(width) = 32];     // H_E (claim; 4.A)
+}
+
+// ---- voting -------------------------------------------------------------------------------------
+
+message DeviceHeader {
+  DeviceKind kind = 1;             // = the section key's first byte
+  string device_id = 2;            // S_device
+  bytes h_di = 3 [(width) = 32];   // = the section key's last 32 bytes
+  uint32 chaining_mode = 4;        // §3.4.4 identifier: 0 none (absent), 1 simple; must equal the
+                                   // manifest's (8.D/16.E are per device, so the device states it)
+  bytes initial_hash = 5 [(width) = 32, (omittable) = true];  // H_0; present iff simple chaining
+}
+
+message HashedCiphertext {
+  bytes c0 = 1 [(width) = 512];
+  bytes c1 = 2 [(width_multiple) = 32];  // 32 (ballot nonce) or 32 * b_Lambda (contest data)
+  bytes c2 = 3 [(width) = 64];           // b(c,32) || b(v,32) (Q20)
+}
+
+message EncryptedField {
+  bytes alpha = 1 [(width) = 512];
+  bytes beta = 2 [(width) = 512];
+  bytes range_proof = 3 [(width_multiple) = 64];  // (c_j || v_j), j = 0..R (or 0..bound, Q2)
+}
+
+message EncryptedContest {
+  uint32 index = 1;                      // ind_c
+  repeated EncryptedField fields = 2;    // manifest order: options, then supplemental fields (Q1/Q14)
+  bytes limit_proof = 3 [(width_multiple) = 64];                                     // eq. (62), L+1 pairs
+  bytes undervote_difference_proof = 4 [(width_multiple) = 64, (omittable) = true];  // iff tracked (Q15)
+  bytes null_vote_proof = 5 [(width_multiple) = 64, (omittable) = true];             // iff tracked (Q17)
+  HashedCiphertext contest_data = 6;     // iff b_Lambda > 0 (S6)
+  bytes contest_hash = 7 [(width) = 32]; // chi
+}
+
+message EncryptedBallot {
+  bytes id_b = 1 [(width) = 32];        // first, so an id-only scan reads one field per frame
+  bytes h_i = 2 [(width) = 32];
+  string ballot_style = 3;
+  BallotStatus status = 4;              // CAST, CHALLENGED or SPOILED; never UNSPECIFIED
+  uint32 weight = 5;                    // >= 1, so always present (§3.5)
+  google.protobuf.Timestamp encrypted_at = 6;   // G40; ms UTC; absent when not recorded
+  repeated EncryptedContest contests = 7;       // ascending index; exactly the style's contests
+  bytes confirmation_code = 8 [(width) = 32];   // H_C
+  bytes chaining_field = 9 [(width) = 36];      // B_C
+  HashedCiphertext encrypted_ballot_nonce = 10; // C_xiB (§3.3.4); c1 exactly 32 bytes
+  string ballot_ref = 11;                       // optional free text; unverified, bound by no hash
+}
+
+message SelectedVector {
+  bytes vector = 1 [(width_multiple) = 1024];  // m x (alpha || beta), option order
+  bytes psi = 2 [(width) = 32];                // selection hash psi
+  string short_code = 3;
+}
+
+message PreEncryptedCastContest {
+  EncryptedContest contest = 1;                         // combined vector, standard proofs (Q26: no contest data)
+  bytes selection_hashes = 2 [(width_multiple) = 32];  // all m+L psi, strictly ascending
+  repeated SelectedVector selected = 3;                 // exactly L, strictly ascending by psi (Q27)
+}
+
+message PreEncryptedCastBallot {
+  bytes id_b = 1 [(width) = 32];
+  bytes h_i = 2 [(width) = 32];
+  string ballot_style = 3;
+  reserved 4;                                   // status: CAST, implied by the item type
+  uint32 weight = 5;
+  google.protobuf.Timestamp encrypted_at = 6;   // when the cast record was formed
+  repeated PreEncryptedCastContest contests = 7;
+  bytes confirmation_code = 8 [(width) = 32];   // eq. (116)
+  bytes chaining_field = 9 [(width) = 36];
+  HashedCiphertext encrypted_ballot_nonce = 10;  // C_xiB
+  string ballot_ref = 11;
+}
+
+message UncastSelection {
+  uint32 selection_index = 1;   // eq. (121)'s j: option index, or m+l for the l-th null vector
+  string option_label = 2;      // absent exactly on null vectors
+  bytes vector = 3 [(width_multiple) = 1024];  // m x (alpha || beta)
+  bytes psi = 4 [(width) = 32];
+  string short_code = 5;
+}
+
+message UncastContest {
+  uint32 index = 1;
+  string label = 2;
+  repeated UncastSelection selections = 3;  // m+L, ascending selection_index
+  bytes contest_hash = 4 [(width) = 32];
+}
+
+// The printed content of a pre-encrypted ballot that was not cast: returned uncast, or printed and
+// never returned (both are challenged). Its nonces are released in the final phase (UncastNonceRelease).
+message PreEncryptedUncastBallot {
+  bytes id_b = 1 [(width) = 32];
+  bytes h_i = 2 [(width) = 32];
+  string ballot_style = 3;
+  reserved 4, 5, 6;                             // status CHALLENGED is implied; no weight or time
+  repeated UncastContest contests = 7;          // ascending index
+  bytes confirmation_code = 8 [(width) = 32];
+  bytes chaining_field = 9 [(width) = 36];
+  HashedCiphertext encrypted_ballot_nonce = 10;  // C_xiB
+  string ballot_ref = 11;
+}
+
+message DeviceClose {
+  uint64 ballot_count = 1;   // l = the number of ballot items in the section
+  bytes closing_chaining_field = 2 [(width) = 36, (omittable) = true];  // B-bar_C; iff simple chaining
+  bytes closing_hash = 3 [(width) = 32, (omittable) = true];            // H-bar; iff simple chaining
+  google.protobuf.Timestamp closed_at = 4;
+}
+
+// A signed statement: a device attestation (in R_sealed) or a detached record signature.
+message SignedStatement {
+  bytes statement = 1;        // the canonical RecordItem bytes of a statement, exactly as signed.
+                              // Opaque to the wire walk, so the verifier checks it as a RecordItem
+                              // (canonicality, decode rules, member 40-43) before anything else.
+  string algorithm = 2;       // registry: ecdsa-p256-sha256, rsa-pss-sha256, ed25519, x509-cms-detached
+  bytes key_id = 3;
+  bytes signer_key = 4;       // public key or certificate chain; may be absent (out of band)
+  bytes signature = 5;
+  bytes timestamp_token = 6;  // RFC 3161 TimeStampToken over SHA-256(statement); optional
+}
+
+// ---- aggregated ---------------------------------------------------------------------------------
+
+message EncryptedTallyHeader {
+  uint64 cast_ballot_count = 1;   // both kinds; checked (R.summary)
+  uint64 total_cast_weight = 2;
+}
+
+message EncryptedTallyContest {
+  uint32 index = 1;
+  bytes fields = 2 [(width_multiple) = 1024];   // per manifest field: A || B
+  uint64 cast_weight = 3;                       // S10a: sum of W over cast ballots listing the contest
+}
+
+message BallotLocator {
+  DeviceKind kind = 1;
+  bytes h_di = 2 [(width) = 32];
+  uint64 position = 3;   // 1-based chain position (the spec's j)
+}
+
+// A contest-data ciphertext "marked for decryption" (§3.6.1), sealed before any decryption.
+message ContestDataRequest {
+  BallotLocator ballot = 1;        // a cast regular ballot
+  bytes h_i = 2 [(width) = 32];    // binding: must equal the ballot's
+  uint32 contest_index = 3;
+}
+
+// ---- final --------------------------------------------------------------------------------------
+
+message DecryptedTallyField {
+  uint32 index = 1;                      // manifest option or field index
+  string label = 2;
+  uint64 tally = 3;                      // t
+  bytes encoded_tally = 4 [(width) = 512];  // T = K^t
+  bytes proof = 5 [(width) = 64];        // c || v
+}
+
+message DecryptedTallyContest {
+  uint32 index = 1;
+  string label = 2;
+  repeated DecryptedTallyField fields = 3;
+}
+
+message DecryptedField {
+  uint32 index = 1;
+  string label = 2;
+  uint32 value = 3;                 // sigma
+  bytes nonce = 4 [(width) = 32];   // xi_{i,j}
+}
+
+message ReleasedContestData {
+  bytes nonce = 1 [(width) = 32];          // xi_i
+  bytes data = 2 [(width_multiple) = 32];  // D, 32 * b_Lambda bytes
+}
+
+message DecryptedContest {
+  uint32 index = 1;
+  string label = 2;
+  repeated DecryptedField fields = 3;       // every field of the contest
+  ReleasedContestData contest_data = 4;     // iff the contest has contest data
+}
+
+// §3.6.7 decryption of a challenged regular ballot, in nonce form (S7): no proof, no xi_B.
+message ChallengedBallotDecryption {
+  BallotLocator ballot = 1;              // a CHALLENGED regular ballot
+  bytes h_i = 2 [(width) = 32];          // binding: must equal the ballot's
+  repeated DecryptedContest contests = 3;  // ascending index
+}
+
+// §3.6.6 decryption of one requested contest-data ciphertext.
+message ContestDataDecryption {
+  BallotLocator ballot = 1;
+  bytes h_i = 2 [(width) = 32];
+  uint32 contest_index = 3;
+  bytes beta = 4 [(width) = 512];
+  bytes proof = 5 [(width) = 64];          // c || v
+  bytes data = 6 [(width_multiple) = 32];  // D
+}
+
+message UncastContestNonces {
+  uint32 index = 1;
+  bytes nonces = 2 [(width_multiple) = 32];  // xi_{i,j,k}: (m+L) selections x m options, selection-major
+}
+
+// The opening of an uncast pre-encrypted ballot (§4.3: "returns the encryption nonces"; Q28).
+message UncastNonceRelease {
+  BallotLocator ballot = 1;                  // a PreEncryptedUncastBallot
+  bytes h_i = 2 [(width) = 32];
+  repeated UncastContestNonces contests = 3; // ascending index; every contest in v2.0
+  bytes ballot_nonce = 4 [(width) = 32, (omittable) = true];  // xi_B in plaintext, only when opted in (Q28)
+}
+
+// ---- statements ---------------------------------------------------------------------------------
+
+message ChainCloseStatement {
+  bytes h_e = 1 [(width) = 32];
+  bytes device_key = 2 [(width) = 33];   // kind byte || H_DI
+  string device_id = 3;
+  uint32 chaining_mode = 4;
+  uint64 ballot_count = 5;
+  bytes codes_root = 6 [(width) = 32];   // MTH over the section's confirmation codes, chain order
+  bytes closing_hash = 7 [(width) = 32, (omittable) = true];  // H-bar; iff simple chaining
+  google.protobuf.Timestamp closed_at = 8;
+}
+
+message SectionSealStatement {
+  bytes h_e = 1 [(width) = 32];
+  bytes device_key = 2 [(width) = 33];
+  uint64 item_count = 3;                 // l + 2 (header and close)
+  bytes section_root = 4 [(width) = 32];
+}
+
+message PrefixCheckpointStatement {
+  bytes h_e = 1 [(width) = 32];
+  bytes device_key = 2 [(width) = 33];
+  uint64 ballot_count = 3;
+  bytes codes_root = 4 [(width) = 32];
+  google.protobuf.Timestamp at = 5;
+}
+
+message RecordStatement {
+  RecordPhase phase = 1;
+  bytes root = 2 [(width) = 32];
+  bytes h_e = 3 [(width) = 32];
+  uint32 format_major = 4;
+  uint32 format_minor = 5;
+  google.protobuf.Timestamp signed_at = 6;   // §3.7 "together with the date"
+  string signer_role = 7;
+}
+
+// ---- digest leaves ------------------------------------------------------------------------------
+
+message TocEntry {
+  SectionType section_type = 1;
+  bytes key = 2;
+  bool critical = 3;               // fixed per standard section type (design §4.5: true for every
+                                   // v2.0 type); for a type the reader does not know (vendor, or a
+                                   // later minor's), taken from the claimed TOC entry
+  uint64 item_count = 4;
+  bytes root = 5 [(width) = 32];   // the section's Merkle root
+}
+
+message ConfirmationCodeLeaf {
+  bytes code = 1 [(width) = 32];   // H_C
+}

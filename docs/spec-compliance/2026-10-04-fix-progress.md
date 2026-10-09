@@ -235,6 +235,68 @@ User answers (2026-10-04):
   - Plan: S10a fixes the Core correctness gaps (part A) and adds the G40 encryption timestamp.
   - S10b designs the canonical, streaming, multi-representation ElectionRecord. The design goes to the user for
     approval, then gets implemented together with a verify-everything entry point.
+- **S10b design answers, 2026-10-09.** These refer to the design doc's Q-1..Q-18, plus #19 = S10a-1. The user's words
+  are quoted.
+  - **#1:** "Canonical encoding should be protobuf, not binary. It's important that the distributed format be something
+    that can be used on any machine. JSON as a projection is fine as well."
+    - Design consequence: the canonical hash form is a deterministic-protobuf profile. Every item is a protobuf
+      message in field-number order, with no maps, no unknown fields and fixed-width `bytes` for group elements
+      and Z_q values. Digests are taken over those bytes. Any language's protobuf library can parse them, and a
+      verifier checks canonicality by re-encoding. JSON follows the proto3 JSON mapping.
+  - **#2:** "Fine". SHA-256 with RFC 9162 Merkle framing.
+  - **#3:** "Optimize for size of the files when encoding the encryptions. Beyond that, use json and protobuf standards
+    for naming, or the stuff that's already there."
+    - Group elements and Z_q values are raw fixed-width `bytes`, base64 in JSON.
+    - Field names are snake_case in `.proto`, lowerCamelCase in JSON per the proto3 mapping.
+  - **#4:** "NotSubmitted doesn't make sense. If we have it in the election record at all, it was by definition
+    submitted. Anything not cast or challenged can probably be considered Spoiled." So a `Spoiled` status replaces
+    `NotSubmitted` in the record.
+  - **#5:** "I think pre-encrypted ballts never returned can be considered challenged ballots." So they are recorded
+    as uncast pre-encrypted ballots, with released nonces.
+  - **#6:** "Where does this come into play? I don't know enough to answer this question." Asked again with more
+    detail.
+  - **#7:** "Sure". The recommended attestation and signature defaults stand.
+  - **#8:** "Yes". v1 requires a decryption for every challenged ballot.
+  - **#9:** "I don't know what this means, need more detail." Asked again.
+  - **#10:** "Need more detail." Asked again.
+  - **#11:** "Out of range values are a problem for a verifier, not the election record format." So the format
+    carries fixed-width bytes, and the verifier reports range failures under the spec's lettered checks.
+  - **#12:** "Need more detail." Asked again.
+  - **#13:** "If you want to argue for binary, you're going to need to do so, but we absolutely must be capable of
+    working on any device in any programming language, and it should be relatively easy to do so. Space is a concern,
+    which is why protobuf over json, and I'm open to other options, but binary seems like a nonstarter since someone
+    would have a hell of a time getting something reasonable with a javascript verifier." So protobuf is canonical,
+    and there is no custom binary format.
+  - **#14:** "If .7z would save significant space, we can consider that, else .zip is the way to go."
+    - Measured 2026-10-09 on current-format ballots: the cryptographic payload is incompressible (deflate 1.000, LZMA
+      1.002), and JSON is 0.612 with deflate versus 0.609 with LZMA.
+    - Decision: **.zip**.
+  - **#15:** "Yes". The format and verify-all go in Core, and the command-line tool in ElectionGuard.Verifier.
+  - **#16:** "We will do multiple tallies but we can wait and add it later." So v1 has one tally, with room left for
+    more.
+  - **#17:** "Sure". Keep the tally header.
+  - **#18:** "Need more detail on this." Asked again.
+  - **#19:** "The manifest need only be a valid document, and it should be output to the election record exactly as it
+    was entered. The canonical serialization for the manifest is not as important." So the manifest is stored
+    byte-for-byte as entered. `ManifestSerializer` only parses it, and its output is not canonical.
+- **S10b follow-up answers, 2026-10-09:**
+  - **#6 Timestamp precision:** "Full precision seems fine here. The entire point of the library is that an encrypted
+    ballot can't yield actual results, nor can your confirmation code. If a ballot is challenged, then it's purposefully
+    decrypted in a way that doesn't count and may not be a voter's actual votes. This isn't a real concern." So
+    timestamps are millisecond UTC, with no precision setting.
+  - **#9 Election info:** "Only what isn't in manifest". The record header carries only the format settings the library
+    needs. Descriptive election facts live in the manifest.
+  - **#10 Contest-data decryption:** "Record the requested set". The administrator's (ballot, contest) request list is
+    sealed into the record before decryption. Verifiers check that every request is decrypted and nothing extra was.
+  - **#12 String ballot id:** "Keep, optional". It is an optional free-text reference, documented as unverified.
+  - **#18 Lookup indexes:** "Alongside, not signed". They go in `derived/`, outside the root, can be regenerated, and
+    come with inclusion proofs.
+  - **Canonical protobuf profile:** "Yes, canonical protobuf".
+    - The `.proto` schemas are normative. Fields are written in field-number order, with no maps, no unknown fields
+      and fixed-width bytes, under proto3 default-omission rules.
+    - A verifier checks canonicality by re-serializing and comparing bytes.
+    - JSON is the proto3 JSON mapping.
+    - Golden vectors and a Python reference reader prove the profile.
 - **Cadence:** "Keep going". After each stage: commit, update this tracker, push, start the next stage. Stop only
   for a new spec contradiction or question.
 - **S7 design and API choices** (2026-10-06; implementer choices, none changes bytes the spec fixes; the first two are
