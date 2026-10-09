@@ -297,6 +297,27 @@ User answers (2026-10-04):
     - A verifier checks canonicality by re-serializing and comparing bytes.
     - JSON is the proto3 JSON mapping.
     - Golden vectors and a Python reference reader prove the profile.
+- **EGRF v2 new questions, answered 2026-10-09:**
+  - **NQ-1 Extensions:** the user wrote: "Vendors should never add fields to most of the types. The manifest is really
+    the only field I would ever expect a vendor to provide additional data, so honestly it's canonical form should
+    probably be json. Protobuf tends to be backwards compatible by default, so we should be good with future versions
+    already. I don't think we need anything special here."
+    - There is no per-item extension list.
+    - The manifest stays JSON, stored byte for byte. Its reader ignores unknown properties (vendor data), which H_B
+      still binds. It still rejects duplicate keys and malformed JSON.
+    - The record profile allows unknown fields only after all known fields, in field-number order. Field numbers are
+      append-only, so canonicality survives a re-encode by an older library.
+    - A verifier that sees a newer `format_minor` reports that the record is newer but still verifies everything it
+      understands.
+  - **NQ-2 Compact uncast form:** "Compact required for unreturned". The compact item is mandatory for never-returned
+    pre-encrypted ballots, and the verifier regenerates their content from ξ_B.
+  - **NQ-3 JavaScript conformance reader:** "Defer".
+  - **NQ-4 Election facts (§3.7):** "Optional manifest fields". Add optional name, date, location, type and
+    jurisdiction fields to the manifest model, bound into H_B. The record header carries only the format version.
+  - **NQ-5 Opening uncast pre-encrypted ballots:** "Later: guardian opens from sealed record". After S10b,
+    `TallyGuardian.DecryptBallotNonce` opens an uncast pre-encrypted ballot from a sealed, verified record. It refuses
+    any id_B cast in that record (Q31), with no issued list and no once-only state.
+  - **NQ-6 Pipe input:** "Drop it". A non-seekable input is spooled to a temporary file first.
 - **Cadence:** "Keep going". After each stage: commit, update this tracker, push, start the next stage. Stop only
   for a new spec contradiction or question.
 - **S7 design and API choices** (2026-10-06; implementer choices, none changes bytes the spec fixes; the first two are
