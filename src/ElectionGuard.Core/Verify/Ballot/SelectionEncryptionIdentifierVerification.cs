@@ -10,7 +10,7 @@ public class SelectionEncryptionIdentifierVerification
 {
     /// <summary>
     /// 5.A over <paramref name="identifiers"/>, which must be the identifiers of every submitted
-    /// (cast and challenged) ballot of the election: a list per ballot, or per batch, checks nothing
+    /// (cast, challenged and spoiled) ballot of the election: a list per ballot, or per batch, checks nothing
     /// across them. A caller that sees the ballots in batches should feed one
     /// <see cref="SelectionEncryptionIdentifierSet"/> instead.
     /// </summary>

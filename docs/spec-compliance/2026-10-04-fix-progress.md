@@ -318,6 +318,16 @@ User answers (2026-10-04):
     `TallyGuardian.DecryptBallotNonce` opens an uncast pre-encrypted ballot from a sealed, verified record. It refuses
     any id_B cast in that record (Q31), with no issued list and no once-only state.
   - **NQ-6 Pipe input:** "Drop it". A non-seekable input is spooled to a temporary file first.
+- **S10b-A readings, answered 2026-10-09:**
+  - **R-1 When the compact uncast form applies:** "Whenever ξ_B is released". Kept as built: compact exactly when
+    ξ_B is released, so every ballot has one encoding.
+  - **R-2 A newer format_minor:** "Pass, flagged incomplete". Kept as built: the verdict is Passed with
+    `Complete = false`, and the CLI exits 2.
+  - **R-3 Near-miss manifest property names:** "Ignore them too". This is a CHANGE: remove
+    `ManifestSerializer.RejectNearMisses` and its tests. Every unknown property is ignored, and H_B still binds the
+    bytes.
+  - **Guardian refusal of spoiled ballots:** "Refuse spoiled too". This is a CHANGE: the guardian's sealed-record view
+    and Q31 check refuse any id_B, H_I or C_ξB,0 that matches a cast OR spoiled ballot.
 - **Cadence:** "Keep going". After each stage: commit, update this tracker, push, start the next stage. Stop only
   for a new spec contradiction or question.
 - **S7 design and API choices** (2026-10-06; implementer choices, none changes bytes the spec fixes; the first two are
@@ -477,6 +487,9 @@ User answers (2026-10-04):
 
 - **S10a design and API choices** (2026-10-08; low-stakes implementer choices under Q37 part A; none changes a hash
   input, `test/kat/vectors.json` is unchanged and every KAT family passes; the first is also open question S10a-1):
+  - *Partly superseded by S10b-A (NQ-1, NQ-4): the manifest reader now ignores unknown properties (it still refuses
+    near-miss member names and repeated members), and the manifest has optional election facts. See "S10b-A design
+    and API choices". The bullet follows as written for S10a.*
   - **Manifest format = strict parse, not byte-canonical input.** `ManifestSerializer` is the one manifest format.
     Reading is strict (UTF-8 without BOM, case-sensitive camelCase members, no unknown or repeated member, comment,
     trailing comma, null value or null list entry, integers as JSON numbers, `kind` by exact
@@ -564,6 +577,103 @@ User answers (2026-10-04):
       the fixture builder; `ManifestValidationTests.Encryptors_ManifestReorderedAfterRecordCreation_Throw` is kept,
       commented as a deliberate misuse probe.
 
+- **S10b-A design and API choices** (2026-10-09; low-stakes implementer choices under NQ-1..NQ-6; none changes a
+  hash input, `test/kat/` is unchanged and every KAT family passes). The first three are readings of the answers that
+  the answers did not spell out; they are written into the design as stated and listed there as R-1..R-3 (§12) for
+  the user to confirm:
+  - **R-1, compact uncast form (NQ-2).** The form follows from what is released: `PreEncryptedCompactUncastBallot`
+    iff ξ_B is released, the full `PreEncryptedUncastBallot` iff it is not. Never-returned ballots always release ξ_B,
+    so they are always compact ("Compact required for unreturned"); a returned uncast ballot whose ξ_B is released
+    under Q28's opt-in is compact too, so no ballot has two valid encodings. The release carries `ballot_nonce` alone
+    for a compact item and `contests` alone for a full one (`18.structure` otherwise). The format cannot tell
+    never-returned from returned; `DeviceSectionWriter.AppendUncastAsync` takes an `UncastDisposition` so the writer
+    enforces the mandatory rule. Schema only so far (RecordItem member 16; same field numbers as the full item).
+  - **R-2, newer minor (NQ-1).** "Reports that the record is newer but still verifies everything it understands" is
+    read as informational: `Passed` = no failures; `Complete = false` is reported beside it with the content not
+    understood; `egrecord verify` exits 0 / 2 / 1 for passed-complete / passed-incomplete / failed. Unknown critical
+    sections and unknown item types in sections that must verify stay `R.version` failures. G-6 now promises that no
+    reader reports `Complete` with unread content.
+  - **R-3, near-miss manifest properties (NQ-1).** `ManifestSerializer` ignores unknown properties at every level but
+    refuses one whose name equals a member's once case, `_` and `-` are disregarded (`ChainingMode`, `chaining_mode`,
+    `Selection-Limit`): a loosely matching reader elsewhere would read it as that member and compute with another
+    manifest under the same H_B. The check walks the document along the model's `JsonTypeInfo` (manifest, contests,
+    options, supplemental fields, ballot styles) before deserializing.
+  - **An ignored manifest value is still text (review round 2).** Ignoring an unknown property skips its value
+    without decoding it, so `StrictJson.RejectAmbiguity` now checks the whole document with `Utf8.IsValid` (RFC 3629;
+    RFC 8259 §8.1) and decodes every escaped string (a lone-surrogate escape such as `"\uD800"` is refused, as the
+    protobuf side's W8 refuses surrogates). Acceptance therefore does not depend on which properties a reader knows.
+    It applies to every strict reader (manifest, record, device chain, pre-encrypted), which already decoded every
+    string they knew. The nesting limit of 64 levels (top-level value = level 1; the System.Text.Json default, which
+    RFC 8259 §9 permits) is kept and now stated in `ManifestSerializer`'s remarks, the design's ManifestFile paragraph
+    and the `media_type` comment; it applies to vendor data too.
+  - **Unknown fields in the profile (NQ-1).** W6 rewritten: unknown fields only after every known field, ascending,
+    numbered above every declared or reserved number of the message (`RecordItem` excepted: an unknown oneof member
+    is an unknown item type), VARINT or LEN only, a VARINT never 0. Method B keeps unknown fields; on the normal path
+    (record minor not newer than the reader's) a discard-unknown parse folds "no unknown field" into the comparison.
+    `EgrfUnknownFieldBehaviourTests` showed C# writes kept unknown fields after the known ones **in the order read**,
+    so a descending unknown tail survives Method B: for newer-minor records Method A's unknown-field branch is
+    required, and the design says so. D7 (election_info keys) is gone; D2 treats an undeclared enum value in a newer
+    record as content not understood (`R.version`, the item still digested); D5 is "exactly one field".
+  - **Schema location and codegen.** The one normative copy is `proto/electionguard/egrf/v2/egrf.proto` at the
+    repository root, as the design's §8.2 had planned (language-neutral; `go_package` already named that path), not
+    under `src/ElectionGuard.Core`. `docs/spec-compliance/egrf_v2.proto` is deleted and the design's §4.6 no longer
+    embeds the schema (it links it and lists the items). Core references Google.Protobuf 3.34.1 and Grpc.Tools 2.80.0
+    (libprotoc 31.1, the version the feasibility run used; `PrivateAssets="All"`), both from the NuGet cache, and
+    compiles the file with `Access="Internal"`, `GrpcServices="None"`.
+  - **Namespace `ElectionGuard.Core.RecordFormat.Protobuf`, not `...Core.Record.Protobuf`.** The first build failed
+    in the test files that call `Record.Exception`: a namespace `ElectionGuard.Core.Record` is found before xUnit's
+    global `Record` class from any namespace under `ElectionGuard.Core`, so those calls stopped compiling. The
+    design's planned `ElectionGuard.Core.Record` namespace and `src/ElectionGuard.Core/Record/` folder become
+    `RecordFormat`. The test folder is `test/ElectionGuard.Core.UnitTests/RecordFormat/`.
+  - **Reserved, not dropped.** `RecordHeader` field 3 (draft `election_info`) and `RecordItem` 2047 (draft
+    `extensions`) are `reserved`: never published, but the feasibility vectors used them, and S6 says removed numbers
+    are reserved.
+  - **Schema lint and table.** `EgrfSchemaLint` (test project) checks S1-S8 on a `FileDescriptorProto` parsed from
+    the compiled descriptor with the width options registered, so the same code runs on the real schema and on broken
+    copies. Beyond the design's list it checks: the package name; that every enum starts with
+    `<NAME>_UNSPECIFIED = 0`; that the only extensions are the three width options; that width options sit only on
+    singular `bytes` fields; that every `bytes` field without a width is on an explicit variable-length list (so S7's
+    "unannotated fixed-width field" is mechanical); that hot messages stay at 15 or below; that `RecordItem` has no
+    regular field; and that repeated strings and bytes are refused along with repeated numerics (S3: "a list is a
+    repeated message or one bytes field"). `test/egrf/schema.json` (generated, checked in) is the schema table; the
+    test fails unless it equals the compiled schema, and checks any change against it for S6 (nothing removed or
+    changed unless reserved, new fields above the old highest number, new item types anywhere unused). Accepting an
+    append-only change: run the test with `EGRF_WRITE_SCHEMA=1`.
+  - **Manifest election facts.** `ElectionName`, `ElectionDate`, `ElectionType`, `Jurisdiction`, `Location`: optional
+    strings, informational, not validated (the date is free text, RFC 3339 full-date recommended), declared after
+    `HashTrimmingFunction` with `JsonIgnore(WhenWritingNull)`, so the written form of every existing manifest is
+    byte-identical and no H_B moved. A member written as JSON `null` reads as absent (as `hashTrimmingFunction`
+    already did); the class remarks now say "no required member, list or list entry may be null".
+  - **Manifest tolerance is the manifest reader's only.** `ManifestSerializer` sets `UnmappedMemberHandling.Skip` on
+    its own options; `StrictJson.CreateOptions()` keeps `Disallow`, so the record, device-chain and pre-encrypted
+    readers still refuse unknown members. Writing drops unknown properties (the model does not hold them).
+  - **Statuses.** `RecordStatus` accepts Cast, Challenged and Spoiled, once. `EncryptedTally.AddBallot` skips
+    Challenged and Spoiled and fails `"9.structure"` on anything else, undeclared values included. No reader refuses
+    an undeclared status at decode time (the serializers that would retire in S10b-16 decode it as given; tallying
+    refuses it). A pre-encrypted record marked Spoiled is refused like any non-cast one
+    (`"15/16/17.structure"`), since its spoiled counterpart is the uncast item. Spoiled is not decrypted by this
+    library's paths: the nonce path and V13/V14 already required Challenged; tests now pin Spoiled there. (Review
+    round 1: that status test reads the requester's claim and the guardian's Q31 view holds cast ballots only, so a
+    spoiled ballot relabelled Challenged would be opened, as an unrecorded one already could; the record's section
+    seal and signatures protect the status. Whether a guardian should also refuse a match against a spoiled ballot
+    of the sealed record is left to S10b-9/S10b-19.)
+  - **Oneof members are messages (S8; review round 1).** W2 writes a set oneof member even at its default, so a
+    scalar member would put an explicit VARINT 0 on the wire, which W6 tells an older reader to reject in an unknown
+    field. Of the two fixes offered, the lint now refuses scalar oneof members (`RecordItem` complies; no bytes
+    change) rather than W6 dropping "an unknown VARINT is not 0". Recorded in design §11 so the user can overrule it.
+  - **Compact items and V17/V19 (review round 1).** A compact uncast item records no short codes or labels, and χ
+    binds the contest index, not text, so 17.A and 19.A-D hold by construction on it. The design states this as a
+    third divergence for the formal spec, and the report counts compact items as ones whose 17.A/19.A-D held by
+    construction (§6.9), not as a new `VerificationOutcome` value (outcomes are per verification, not per item).
+    It is the main practical difference between R-1's options for returned ballots (design §12).
+  - **Nonce DTO (S10b-0).** Deleted `ProtobufEncryptedValueWithProofs.EncryptionNonce`, the `ToEncryptedValue()`
+    method and the unused `ProtobufEncryptedValue` struct, and the mapping's `EncryptionNonce = s.EncryptionNonce`.
+    The wire bytes are unchanged (the members never had `[ProtoMember]`).
+  - **Console.** The first ballot is encrypted a third time as `<id>-spoiled`, appended to the device chain and
+    recorded Spoiled. It is published with the others and passes V5-V8 (per ballot and per device); it is not
+    tallied (tally unchanged: 0-0: 3, 0-1: 0) and not decrypted. Output only (`encrypted-json-ballots/0-spoiled.json`
+    in C:\temp\eg\data\1); no input file changed.
+
 ## Stages
 
 | Stage | G-IDs | Blocked on | Status | Commit |
@@ -581,7 +691,25 @@ User answers (2026-10-04):
 | S9b Nonce-decryption authorization gate (Q31) | Q31 / S9-6; the security review finding on S7's `TallyGuardian.DecryptBallotNonce` (caller-controlled Status) | S9 | done; partly superseded by S9c (pre-encrypted half, issued list and once-only state removed per Q35; the cast-ballot record check stays) | 5d5e43c |
 | S9c Pre-encryption scope: primitives only (Q35) | remove encrypting/recording tools and guardian pre-encrypted nonce path | after S9b | done | 99296bd |
 | S10a Record correctness gaps (Q37 part A) | G40 (G39 won't fix, per Q9); S2 carry-overs: bind the parsed `Manifest` to `ManifestFile` (S2 review R1), record JSON round trip; S3/S5 carry-over: typed errors for malformed ballot documents; S4 carry-overs: a `DecryptedTally` record serializer, and a tally loaded from a record must carry or recompute each option's `MaximumCount` (S4 review R1/F2); S6/S7 carry-overs: `DecryptedContestData` and `DecryptedChallengedBallot` serializers | — | done | see next commit |
-| S10b Canonical ElectionRecord bundle (Q37 part B) | streaming, multi-representation election record; verify-everything entry point; device-close signing/timestamp (S8b) | S10a; user approval of the design | todo (design first) | |
+| S10b Canonical ElectionRecord bundle (Q37 part B) | streaming, multi-representation election record (EGRF v2, `2026-10-08-election-record-design.md`); verify-everything entry point; device-close signing/timestamp (S8b). Split into the stages below, one per design step (§9.2) | S10a; the design (answers recorded 2026-10-09) | in progress | |
+| S10b-A EGRF groundwork | design update for NQ-1..NQ-6; S10b-0 nonce DTO cleanup; S10b-1 statuses (`Unrecorded`, `Spoiled`); S10b-1b manifest election facts and unknown-property tolerance (NQ-1, NQ-4); S10b-2 schema at `proto/electionguard/egrf/v2/egrf.proto`, codegen, schema lint | S10a | done (gate green; awaiting commit) | |
+| S10b-3 Canonicality checker | Method A and B (unknown fields per NQ-1 / W6), D1-D6, segment header, signed statements; first golden and negative vectors | S10b-A | todo | |
+| S10b-4 Domain mappers | one mapper per item; `RawZp`/`RawZq` range attribution; uncast split/join with the compact form (NQ-2); `RecordSetup`; reflection completeness test | S10b-3 | todo | |
+| S10b-5 Merkle, TOC, phase roots | RFC 9162 frontier and proofs; TOC; phase roots | S10b-A | todo | |
+| S10b-6 Directory carrier | writer and reader; frame ceiling; layout rules; phase gates; `DeviceSectionWriter` (`UncastDisposition`); torn tails | S10b-4, S10b-5 | todo | |
+| S10b-7 `.zip` carrier | STORED/DEFLATE, ZIP64, local/central check; non-seekable input spooled (NQ-6) | S10b-6 | todo | |
+| S10b-8 Streaming verifier pieces | `DeviceChainWalker`, `SpillingIdentifierSet`, `BallotAggregationVerifier.Merge`, join cursors | S10b-A | todo | |
+| S10b-9 `VerifyAllAsync` | steps A-F, profiles, report (`Complete` informational for a newer minor; compact items counted as 17.A/19.A-D held by construction), checkpoints, `VerifiedAggregate`; tests that a spoiled ballot's id_B is in 5.A (a spoiled ballot sharing id_B with a cast one fails 5.A); decide, with S10b-19, whether a guardian refuses an id_B/H_I/C_ξB,0 matching a spoiled ballot of the sealed record (S10b-A review round 1) | S10b-6, S10b-8 | todo | |
+| S10b-10 JSON projection, converter, diff | proto3 JSON with duplicate-member refusal; `ConvertAsync`; `DiffAsync` | S10b-6 | todo | |
+| S10b-11 Attestations and signatures | statements, signers, verifiers, policies | S10b-9 | todo | |
+| S10b-12 Python reference reader and golden records | `test/egrf/egrf_ref.py` (Method A with W6), golden records, schema-table diff against `test/egrf/schema.json` | S10b-6, S10b-7 | todo | |
+| S10b-13 TypeScript reader | protobuf-es conformance reader | — | deferred (NQ-3: "Defer") | |
+| S10b-14 `ElectionGuard.Verifier` | `egrecord` CLI | S10b-9, S10b-10 | todo | |
+| S10b-15 Migration of the consumers | console, egperf `writeRecord`/`verifyRecord`, Testing.Cli, `test/data/*` | S10b-9, S10b-10 | todo | |
+| S10b-16 Retire superseded code | old DTO tree, protobuf-net, JSON ballot/record serializers | S10b-15 | todo | |
+| S10b-17 Live tailing | may be deferred | S10b-9 | todo | |
+| S10b-18 Documentation and publication | CLAUDE.md record bullet, formal-spec skeleton, registered option numbers (user action) | S10b-16 | todo | |
+| S10b-19 Guardians open uncast pre-encrypted ballots (NQ-5) | `TallyGuardian.DecryptBallotNonce` opens an uncast pre-encrypted item from a sealed, verified record; refuses an id_B cast in it (Q31); no issued list, no once-only state; with S10b-9, decide whether it also refuses an id_B/H_I/C_ξB,0 matching a spoiled ballot of the sealed record (today the Q31 view holds cast ballots only, so a spoiled ballot relabelled challenged is opened; S10b-A review round 1) | S10b-9 | todo (after S10b) | |
 
 ## Pinned-value inventory
 
@@ -778,6 +906,226 @@ every KAT family passes. No test expectation was re-pinned. What moved, by desig
   new. Counts unchanged (0-0: 3, 0-1: 0). No input under `C:/temp/eg/data` changed, so no .bak.
 
 ## Log
+
+### 2026-10-09 — S10b-A review round 2 (ignored manifest values still text, nesting limit stated, spoiled ballots fail V6-V8)
+Worktree changes only; nothing committed. Three minor findings (spec, code, tests); all applied. The spec and code
+findings are the same defect. No hash input, KAT, fixture or pinned value moved, nothing was re-pinned,
+`test/egrf/schema.json` is unchanged (one proto comment changed). Decision added under "S10b-A design and API choices":
+an ignored manifest value is still text.
+
+Per finding:
+- **Spec / Code (an unknown manifest property's value is never decoded).** Correct. Probes against the round-1
+  build: raw `0xFF 0xFE` or `"\uD800"` in an unknown value was accepted, and refused in a known one.
+  `StrictJson.RejectAmbiguity` now refuses a document that is not well-formed UTF-8 (`Utf8.IsValid`, up front) and
+  decodes every escaped string token (`GetString` on `String` tokens with `ValueIsEscaped`; unescaped ones are already
+  valid by the UTF-8 check), translating the reader's `InvalidOperationException` as for property names. Chosen over
+  calling `GetString` on every string: no extra allocation for the record readers' long base64 strings. The depth
+  limit (64, the top-level object being level 1) is kept and documented: `ManifestSerializer` remarks, design
+  ManifestFile paragraph, egrf.proto `media_type` comment, `StrictJson` summary, CLAUDE.md, and
+  `JsonElectionRecordSerializer`'s remarks for the text rule. Tests (`ManifestSerializerTests`): `Malformations` rows
+  "known value a lone high surrogate", "unknown value a lone high surrogate", "unknown nested value a lone low
+  surrogate"; `Deserialize_NotUtf8_ThrowsInvalidManifestException` (6 rows: unknown value 0xFF 0xFE, an encoded
+  surrogate ED A0 80, an overlong C0 AF, a truncated E2 82 inside an array, an unknown property name 0xFF, a known
+  value 0xFF; each checks the untampered placeholder reads and the refusal names UTF-8);
+  `Deserialize_UnknownValueNestedTo64Levels_IsRead_And65AreRefused`; and, added after the gate (test only; the
+  manifest tests re-ran 51/51, so Core is now 2114), `Deserialize_AcceptsEscapedSurrogatePairs_KnownAndUnknown`: the
+  writer's `🗳` pair round-trips and a pair in an unknown value reads, so the lone-surrogate refusal does
+  not reach pairs. Mutation check: with both new checks disabled,
+  the two unknown-surrogate rows and five of the six UTF-8 rows fail (the four unknown-value rows refused nothing;
+  the known-value row was refused by the deserializer, but without naming UTF-8). The property-name row still passes,
+  because names were already decoded.
+- **Tests (spoiled ballot checked by V6-V8 only positively).** Correct. `SpoiledBallot_InTheChain_...` now also
+  breaks the spoiled ballot three ways and asserts the sub-section: a selection proof response + 1 fails `"6.D"`, a
+  contest proof challenge + 1 fails `"7.D"`, a flipped confirmation-code byte fails `"8.B"`. A status filter in V6,
+  V7 or V8 would make these throw nothing.
+
+Gate (before and after are one run; nothing was re-pinned; no test failed after the edits):
+- Build: `0 Warning(s)`, `0 Error(s)`.
+- Smoke: `correctness passed`; `EncryptBallots     245       0.245       165.7      0.1657      12/3/2     1,000`,
+  `VerifyBallots      1,005     1.005       12.2       0.0122      0/0/0      1,000`, VerifyTally 0.004, DecryptTally
+  0.035, VerifyDecryption 0.008 ms/ballot; a second run 0.244 / 0.990, Tally 0.008. No hot path changed (round 1:
+  0.240 / 0.981): noise.
+- Console: all verifications ran, `Tally, contest 0: 0-0=3, 0-1=0, ...`, `Done.`, then the expected ReadKey
+  InvalidOperationException; tally.json 0-0 voteCount 3, 0-1 voteCount 0.
+- Tests: Perf 231/231; Core 2113/2113 (2103 plus 3 `Malformations` rows, 6 UTF-8 rows and 1 depth test).
+
+Carry-overs unchanged from round 1 (S10b-9 5.A spoiled id_B test, compact-item report, spoiled-match refusal with
+S10b-19); R-1..R-3 still await the user.
+
+### 2026-10-09 — S10b-A review round 1 (compact items and V17/V19, scalar oneof members, spoiled-ballot wording, lint and status test gaps)
+Worktree changes only; nothing committed. Eight findings (three spec, one code, four tests); all applied, one
+narrowed. No hash input, KAT, fixture or pinned value moved, nothing was re-pinned, and `test/egrf/schema.json` is
+unchanged (only proto comments changed; the descriptor is the same). Decisions added under "S10b-A design and API
+choices": oneof members are messages (S8), and how the report shows compact items for V17/V19.
+
+Per finding:
+- **Spec 1 (compact items cannot fail V17/V19).** Correct: 17.A (p.65) checks the short code "displayed with the
+  selectable option", 19.A-D (p.67) the text labels "on the uncast pre-encrypted ballot", and eq. (115) hashes
+  ind_c(Λ) and ψ, not labels. The compact item records neither, so they hold by construction. Design §3.2 (table row,
+  a new paragraph, the narrowed claim "proves the ballot's ciphertexts, ψ and χ were the regenerated ones", a third
+  divergence for the formal spec), §3.3 rows 17/19, §6.2 compact row, §6.9 (the report counts compact items as
+  held by construction), the S10b-9/S10b-19 plan rows (V16 and V18, not V16-V19), §12 R-1 (the main difference
+  between (a) and (b) for returned ballots), the status note, and the comment above
+  `PreEncryptedCompactUncastBallot` in egrf.proto.
+- **Spec 2 (W6's "unknown VARINT is not 0" vs a scalar oneof member).** Correct: W2 writes a set member at its
+  default. Took option (a): S8 now requires oneof members to be messages, enforced by `EgrfSchemaLint` (new
+  violation "is a member of oneof ... oneof members are messages"); design §4.2.1 S8, W6, Method A's comment, §11,
+  and the egrf.proto header. Option (b) would weaken W6 for every record; (a) changes no bytes.
+- **Spec 3 / Tests 3 (spoiled ballots and 11.D).** Added
+  `TallyContentsVerificationTests.Verify_ContestIdsFromSpoiledBallotsCount`: the only ballot passed is spoiled and
+  the tally lacks its contest, so it fails 11.D, and fails the test if the ballot-taking overload ever filters
+  spoiled ballots. The spoiled-ballot test's summary now points there instead of claiming 11.D. Its relabel-as-cast
+  assertion now pins `"9.A"` (V9 aggregates cast ballots only; 9.A comes before the cast-weight check). **Narrowed:**
+  the 5.A case (a spoiled ballot sharing id_B with a cast one) cannot test status handling today, because
+  `SelectionEncryptionIdentifierVerification.Verify` takes identifiers, not ballots; it is added to the S10b-9 row,
+  where the record verifier collects them.
+- **Code 1 ("never decrypted" overclaims).** Correct; doc only. `BallotStatus.Spoiled`'s summary, CLAUDE.md's Tally
+  paragraph, design §3.2's divergence, §3.3's paragraph, §6.2's row and §8.3's enum comment now say "not decrypted
+  by this library's paths", that the status test reads the requester's claim, that the Q31 view protects cast
+  ballots only, and that the section seal and signatures protect the status (S10b-6+). The S10b-9 and S10b-19 rows
+  carry the open question of refusing matches against spoiled ballots. No code change.
+- **Tests 1 (append-only core check not isolated; major).** `AppendOnly_CatchesEachBreak` now takes the expected
+  text and asserts the break produces exactly one violation containing it. "Below the highest number" adds DeviceClose
+  field 5 under a published table that already has field 6 (the real schema has no gap below a highest number), and
+  "at a reserved number" keeps `reserved 3`; neither touches a reservation. New row: a `RecordItem` member at the
+  reserved 2047 (reservation kept) is rejected. Mutation check: disabling the numbering check fails those three rows.
+- **Tests 2 (S8 range check masked by the RecordItem rule).** The range case is now a oneof in DeviceClose (message
+  members 5 and 7, regular field 6); the RecordItem case moved to field 3000, above the member range. All 19
+  `Lint_CatchesEachBreak` rows now assert exactly one violation with the expected text (the "omittable without a
+  width" row moved from SignedStatement, whose field 5 exists, to DeviceClose). Mutation check: disabling the range
+  loop fails the range row.
+- **Tests 4 (R-3 rows).** The four near-miss rows moved out of `Malformations` into
+  `NearMisses_AreRefused_ReadingR3`, a block marked as depending on R-3 (delete it with `RejectNearMisses` if the user
+  picks R-3(b)); each asserts a `JsonException` inner exception whose message says "reads as its member", which also
+  shows the `ElectionId` row fails on the near-miss path, not only on the missing required member.
+
+Gate (before and after are one run; nothing was re-pinned; no failing tests at any point after the edits):
+- Build: `0 Warning(s)`, `0 Error(s)`.
+- Smoke: `correctness passed`; `EncryptBallots     240       0.240       165.8      0.1658      12/3/2     1,000`,
+  `VerifyBallots      981       0.981       12.2       0.0122      0/0/0      1,000`, Tally 0.008, VerifyTally 0.004,
+  DecryptTally 0.034, VerifyDecryption 0.009 ms/ballot. No runtime code changed (S10b-A: 0.244 / 0.988).
+- Console: all verifications ran, `Tally, contest 0: 0-0=3, 0-1=0, ...`, `Done.`, then the expected ReadKey
+  InvalidOperationException; tally.json 0-0 voteCount 3, 0-1 voteCount 0.
+- Tests: Perf 231/231; Core 2103/2103 (2099, plus 2 lint rows, 1 append-only row, 1 spoiled 11.D test and 4 R-3
+  rows, minus the 4 rows moved out of `Malformations`).
+
+Carry-overs: S10b-9 (5.A test for a spoiled id_B; report counts compact items; spoiled-match refusal question with
+S10b-19). R-1..R-3 still await the user.
+
+### 2026-10-09 — S10b-A (EGRF groundwork: design update for NQ-1..NQ-6, nonce DTO cleanup, statuses, manifest fields, .proto + codegen + lint)
+Worktree changes only; nothing committed. Implements design steps S10b-0, S10b-1, S10b-1b (new: the manifest
+changes) and S10b-2, and applies the user's answers NQ-1..NQ-6 ("EGRF v2 new questions, answered 2026-10-09") to the
+design document and the schema. No hash input, KAT vector (`git diff test/kat/` empty), committed fixture
+(`git diff test/data/` empty) or pinned value moved, and nothing was re-pinned. Decisions: "S10b-A design and API
+choices" under Decisions; three of them are readings for the user to confirm (design §12, R-1..R-3).
+
+Per item:
+- **Q37 part B / design (NQ-1..NQ-6), `2026-10-08-election-record-design.md` revision 3.**
+  - NQ-1: the per-item `extensions` list is removed (2047 reserved). The canonical profile changes from "no unknown
+    fields" to "unknown fields only after every known field, in field-number order, numbered above every declared or
+    reserved number, kept on re-encoding": S6 (append-only, checked against `test/egrf/schema.json`), W6 rewritten,
+    D2/D5 re-checked, D7 removed (rules are now D1-D6), Method A's pseudo-code gains the unknown-field branch, and
+    Method B now **keeps** unknown fields (the opposite of revision 2's advice), with the discard parse kept as the
+    one-pass form of "no unknown field" for a record of the reader's own minor. A newer `format_minor` is
+    informational: `Passed` = no failures, `Complete = false` beside it (§6.9, §7, risk 16; reading R-2). §5.1:
+    unknown fields survive protobuf re-encoding but cannot be converted to JSON (`R.version`). `R.extension` is gone.
+    The manifest stays JSON stored byte for byte, its reader ignores unknown properties (§4.6, §9.3, §13).
+  - NQ-2: `PreEncryptedCompactUncastBallot` (RecordItem 16): id_B, H_I, style, C_ξB, per contest (index, χ), H_C, B_C.
+    Mandatory for never-returned ballots; the form follows from whether ξ_B is released (reading R-1); the release
+    carries `ballot_nonce` alone for it and `contests` alone for a full item (§3.2, §4.2.3, §4.5, §4.7, §5.2, §6.2,
+    §8.3 `UncastDisposition`, §10).
+  - NQ-3: S10b-13 deferred. NQ-4: `RecordHeader` = `format_major`, `format_minor` (field 3 reserved); election facts
+    are manifest fields (§3.1, §4.6, §8.3). NQ-5: new step S10b-19 (guardians open an uncast pre-encrypted ballot from
+    a sealed, verified record; refuse an id_B cast in it; no issued list, no once-only state), referenced from §1,
+    §3.2, §6.9. NQ-6: unchanged design (spool a non-seekable input), wording updated.
+  - §11 gains a row per answer, with the user's words; §12 now lists only the three readings; §4.6 links the schema
+    instead of embedding it; §8.1/§8.2 record the codegen as built and the `RecordFormat` namespace; §9.1/§9.2 mark
+    S10b-0/1/1b/2 done and add S10b-1b and S10b-19.
+  - `protoc` (Grpc.Tools 2.80.0, libprotoc 31.1) compiles the edited schema to C# and Python:
+    `protoc -I proto -I <grpc.tools>/build/native/include --csharp_out --python_out --descriptor_set_out
+    --include_imports proto/electionguard/egrf/v2/egrf.proto` succeeded, and the Core build compiles it.
+- **S10b-0, nonce DTO (Q37 part B).** `IEncryptedBallotSerializer.cs`: the mapping no longer copies
+  `s.EncryptionNonce`; `ProtobufEncryptedValueWithProofs.EncryptionNonce`, its `ToEncryptedValue()` and the unused
+  `ProtobufEncryptedValue` struct are deleted. The wire format is unchanged. The test that asserted the DTO members
+  read back null (`RoundTrip_DoesNotAttemptToSerializeEncryptionNonce`) can no longer compile and is replaced by
+  `SerializationDtos_HaveNoNonceMember_AndNoNonceReachesTheWire`: reflection over every DTO type (no member named
+  `*Nonce*` except `EncryptedBallotNonce`, the ciphertext) plus a search of a real ballot's protobuf bytes for each
+  option and field nonce.
+- **S10b-1, statuses.** `BallotStatus.NotSubmitted` → `Unrecorded` (0, in memory only); `Spoiled = 3`.
+  `RecordStatus` accepts Cast, Challenged or Spoiled, once. `EncryptedTally.AddBallot` (and so V9) skips Challenged
+  and Spoiled and fails `"9.structure"` on anything else. The nonce path and V13/V14 already required Challenged; the
+  pre-encrypted cast record already required Cast. Doc comments of V5.A and V11 now say "submitted" = cast,
+  challenged and spoiled. JSON (status as a number) and protobuf (field 9) carry 3 unchanged. The console encrypts the
+  first ballot a third time and records it Spoiled (5 ballots on the device).
+- **S10b-1b, manifest (NQ-4, NQ-1).** `Manifest.ElectionName`, `ElectionDate`, `ElectionType`, `Jurisdiction`,
+  `Location` (optional strings, informational, omitted when null, so no manifest's written form or H_B moved).
+  `ManifestSerializer` ignores unknown properties at every level (own options with `UnmappedMemberHandling.Skip`;
+  the record readers keep `Disallow`), refuses near-miss names (reading R-3), and still refuses duplicate keys (known
+  or not), a BOM, comments, trailing commas, wrong types, nulls where required and missing required members.
+- **S10b-2, schema + codegen + lint.** `proto/electionguard/egrf/v2/egrf.proto` is the one normative copy
+  (`docs/spec-compliance/egrf_v2.proto` deleted). Core: Google.Protobuf 3.34.1, Grpc.Tools 2.80.0 (build-only),
+  generated types internal in `ElectionGuard.Core.RecordFormat.Protobuf`. Tests in
+  `test/ElectionGuard.Core.UnitTests/RecordFormat/`: `EgrfSchemaLintTests` (S1-S8 on the compiled descriptor; 17 broken
+  copies, one per rule kind; the schema table `test/egrf/schema.json` and the append-only check with 9 negative and one
+  positive case; NQ-1/NQ-2/NQ-4 shape; generated types internal and status numbers equal to the domain's) and
+  `EgrfUnknownFieldBehaviourTests` (C# keeps unknown fields after the known ones, in the order read; discard
+  shortens; an unknown field before a known one is moved; a descending unknown tail survives, which is why Method A's
+  unknown-field branch is required for newer-minor records). No mappers, readers or writers yet.
+
+Re-pinned tests: none. Test expectations changed because the behaviour changed by decision, each with its reason in
+the test:
+- `ManifestSerializerTests.Malformations`: the "unknown property" row (S10a's refusal) is removed, since NQ-1 makes the
+  manifest reader tolerant; `Deserialize_IgnoresUnknownProperties_WhichH_BStillBinds` now asserts the opposite
+  (same manifest, different H_B). "property in another case" still fails, now as a near miss; "missing contests" still
+  fails, now because the required member is missing (the misspelt one is ignored). Comments say so.
+- `ProtobufEncryptedBallotSerializerTests.RoundTrip_DoesNotAttemptToSerializeEncryptionNonce` replaced (above).
+- `BallotStatusAndWeightTests.RecordStatus_AcceptsOnlyCastOrChallenged` renamed `..._AcceptsOnlyCastChallengedOrSpoiled`
+  (same cases: Unrecorded and 7 refused).
+- `NotSubmitted` → `Unrecorded` in six test files and `ElectionFixtureBuilder` (rename only).
+
+New or extended tests (Core 2047 -> 2099, +52; Perf 231 unchanged):
+- `BallotStatusAndWeightTests`: `RecordStatus_IsFinal` over all three statuses; `BallotStatus_Values_AreTheRecordFormatsEnumNumbers`;
+  `SpoiledBallot_InTheChain_PassesVerifications5To8_AndIsNotTallied` (simple chaining, a spoiled ballot between two
+  cast ones: 5.A, 5.B, 6, 7, 8 per ballot and per device pass; the tally counts 2; relabelling it cast fails V9);
+  Spoiled cases in the AddBallot skip, V9 leave-out and JSON/protobuf round-trip theories; an undeclared status (4)
+  fails 9.structure.
+- `ChallengedBallotDecryptionTests`: a Spoiled ballot's nonce request is refused by guardians and administrator;
+  V13/V14 fail a Spoiled ballot presented with a decryption.
+- `PublishedCastBallotsTests`: a Spoiled ballot is not added as cast. `PreEncryptedRecordVerificationTests`: a
+  pre-encrypted record marked Spoiled fails structure.
+- `ManifestSerializerTests`: unknown properties at the root, in a contest, an option, a supplemental field and a
+  ballot style (objects, arrays, null); election facts round trip, absent by default, null reads as absent; near
+  misses (another case, snake case, kebab case), a duplicate unknown key and a fact of the wrong type are refused.
+- `RecordFormat/*` (35 tests, above).
+
+Gate (all code and test changes in; no pinned value broke, so the gate before re-pinning is also the gate after):
+- Build: `0 Warning(s)`, `0 Error(s)`.
+- Smoke: `correctness passed`.
+  - EncryptBallots 244 ms wall, 0.244 ms/ballot, 165.7 MB.
+  - VerifyBallots 988 ms wall, 0.988 ms/ballot, 12.2 MB.
+  - Tally 8 ms, VerifyTally 4 ms, DecryptTally 36 ms, VerifyDecryption 8 ms.
+  - json 8,891 ser/s, 5,878 deser/s, 21,237 bytes; protobuf 48,386 ser/s, 40,581 deser/s, 12,489 bytes.
+- Console: `Writing out guardian record.`, `Writing out encryption record.`, `Device Device 1: 5 ballots, chaining mode
+  None.`, `Ballot 0, contest 0: contest data "Write-in: Ada Lovelace".`, `Challenged ballot 0-challenged, contest 0:
+  0-0=1, 0-1=0, contest data "Write-in: Ada Lovelace".`, `Tally, contest 0: 0-0=3, 0-1=0, overvotes=0, null-votes=0,
+  undervotes=0, undervote-difference=0, write-ins=0.`, `Done.`, then the expected ReadKey `InvalidOperationException`.
+  `tally.json` has 0-0: 3, 0-1: 0. New output `encrypted-json-ballots/0-spoiled.json`; no input in C:\temp\eg\data
+  changed.
+- Tests: Perf `Passed: 231, Total: 231`; Core `Passed: 2099, Total: 2099`.
+
+Perf: no hot path changed (the only runtime change on the pipeline is `AddBallot`'s status test). Smoke vs S10a
+(0.237 Encrypt, 1.007 Verify ms/ballot): 0.244 / 0.988, and a second run 0.242 / 0.990, allocation 165.7-165.8 MB and
+12.2 MB as before. Noise (S10a's own runs spanned 0.242-0.249 and 0.999-1.019).
+
+Carry-overs:
+- To the user: R-1 (compact iff ξ_B released), R-2 (newer minor informational), R-3 (near-miss manifest names);
+  design §12.
+- To S10b-3: Method B on the hot path with the discard parse for same-minor records and Method A for newer ones; the
+  W6 negative vectors of §5.7.
+- To S10b-4/S10b-6: the compact form and `UncastDisposition`; a mapper for the manifest's election facts is not
+  needed (they ride in the bytes).
+- Name clash to keep in mind: generated `ManifestFile`, `BallotStatus`, `EncryptedBallot`, `EncryptedContest` share
+  names with domain types; the mappers (S10b-4) must alias one side.
 
 ### 2026-10-08 — S10a review round 1 (cast-weight bound, canonical base64, property-name errors, manifest copy, test gaps)
 Worktree changes only; nothing committed. Ten minor findings covering seven distinct issues: the cast-weight finding

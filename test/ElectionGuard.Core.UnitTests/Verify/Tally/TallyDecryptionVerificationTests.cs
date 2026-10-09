@@ -266,13 +266,30 @@ public class TallyContentsVerificationTests
     [Fact]
     public void Verify_ContestIdsFromChallengedBallotsCount()
     {
-        // "Submitted" is cast or challenged: a contest seen only on a challenged ballot must still
-        // be in the tally.
+        // "Submitted" includes challenged ballots (and spoiled ones, below): a contest seen only on a
+        // challenged ballot must still be in the tally.
         var (election, decrypted) = Decrypted();
         decrypted.Contests.Remove("contest-1");
         var challenged = TallyDecryptionElection.WithWeight(election.Ballots[0], 1, ElectionGuard.Core.BallotEncryption.BallotStatus.Challenged);
 
         var exception = Assert.Throws<VerificationFailedException>(() => new TallyContentsVerification().Verify(election.Manifest, decrypted, [challenged]));
+        Assert.Equal("11.D", exception.SubSection);
+    }
+
+    /// <summary>
+    /// S10b-1 (user decision S10b #4: "If we have it in the election record at all, it was by
+    /// definition submitted"): a contest seen only on a spoiled ballot must still be in the tally.
+    /// The spoiled ballot is the only ballot passed and the tally lacks its contest, so this test
+    /// fails if the ballot-taking overload ever filters spoiled ballots out.
+    /// </summary>
+    [Fact]
+    public void Verify_ContestIdsFromSpoiledBallotsCount()
+    {
+        var (election, decrypted) = Decrypted();
+        decrypted.Contests.Remove("contest-1");
+        var spoiled = TallyDecryptionElection.WithWeight(election.Ballots[0], 1, ElectionGuard.Core.BallotEncryption.BallotStatus.Spoiled);
+
+        var exception = Assert.Throws<VerificationFailedException>(() => new TallyContentsVerification().Verify(election.Manifest, decrypted, [spoiled]));
         Assert.Equal("11.D", exception.SubSection);
     }
 }

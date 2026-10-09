@@ -61,7 +61,7 @@ public class ElectionRecordSerializationTests
             status: status);
 
         var first = Encrypt("ballot-1", 1, BallotStatus.Cast);
-        var heavy = Encrypt("ballot-2", 1, BallotStatus.NotSubmitted);
+        var heavy = Encrypt("ballot-2", 1, BallotStatus.Unrecorded);
         var weighted = new EncryptedBallot
         {
             Id = heavy.Id,

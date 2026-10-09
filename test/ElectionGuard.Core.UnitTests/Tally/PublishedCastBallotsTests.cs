@@ -90,7 +90,8 @@ public class PublishedCastBallotsTests
         var cast = Regular("r-1");
 
         Assert.Contains("not as cast", Assert.Throws<ArgumentException>(() => view.Add(Regular("r-2", cast: false))).Message);
-        Assert.Contains("not as cast", Assert.Throws<ArgumentException>(() => view.Add(Relabel(cast, BallotStatus.NotSubmitted))).Message);
+        Assert.Contains("not as cast", Assert.Throws<ArgumentException>(() => view.Add(Relabel(cast, BallotStatus.Unrecorded))).Message);
+        Assert.Contains("not as cast", Assert.Throws<ArgumentException>(() => view.Add(Relabel(cast, BallotStatus.Spoiled))).Message);
         Assert.Contains("H_I", Assert.Throws<ArgumentException>(() => view.Add(Relabel(cast, BallotStatus.Cast, new SelectionEncryptionIdentifierHash(new byte[32])))).Message);
         Assert.Contains("H_I", Assert.Throws<ArgumentException>(() => new PublishedCastBallots(PreEncryptedElection.Get(ChainingMode.Simple).Record.ExtendedBaseHash).Add(cast)).Message);
         Assert.Equal(0, view.Count);

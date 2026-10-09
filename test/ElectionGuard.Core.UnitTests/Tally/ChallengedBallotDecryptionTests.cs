@@ -52,7 +52,7 @@ public class ChallengedBallotDecryptionTests
                 null,
                 new SelectionEncryptionIdentifier(ElectionGuardRandom.GetBytes(32)),
                 ballotNonce ?? new BallotNonce(ElectionGuardRandom.GetBytes(32)));
-            if (status != BallotStatus.NotSubmitted)
+            if (status != BallotStatus.Unrecorded)
             {
                 encrypted.RecordStatus(status);
             }
@@ -261,7 +261,8 @@ public class ChallengedBallotDecryptionTests
     /// <summary>Decrypting a cast ballot's nonce would reveal its votes: guardians and administrator refuse.</summary>
     [Theory]
     [InlineData(BallotStatus.Cast)]
-    [InlineData(BallotStatus.NotSubmitted)]
+    [InlineData(BallotStatus.Unrecorded)]
+    [InlineData(BallotStatus.Spoiled)]
     public void DecryptBallotNonce_BallotNotRecordedAsChallenged_IsRefused(BallotStatus status)
     {
         var election = Shared.Value;
@@ -701,13 +702,18 @@ public class ChallengedBallotDecryptionTests
         Assert.Contains("is not the ballot's C_0", exception.Message);
     }
 
-    /// <summary>A cast ballot presented with a decryption as if it were challenged fails 13.structure (and 14.structure).</summary>
-    [Fact]
-    public void Verification13And14_CastBallotPresentedAsChallenged_Fail()
+    /// <summary>
+    /// A cast ballot presented with a decryption as if it were challenged fails 13.structure (and
+    /// 14.structure); so does a spoiled one (S10b-1: a spoiled ballot is never decrypted).
+    /// </summary>
+    [Theory]
+    [InlineData(BallotStatus.Cast)]
+    [InlineData(BallotStatus.Spoiled)]
+    public void Verification13And14_BallotNotChallengedPresentedWithADecryption_Fail(BallotStatus status)
     {
         var election = Shared.Value;
         var (ballot, decrypted) = Opened.Value;
-        var cast = Copy(ballot, status: BallotStatus.Cast);
+        var cast = Copy(ballot, status: status);
 
         Assert.Equal("13.structure", Assert.Throws<VerificationFailedException>(() => election.Verify13(cast, decrypted)).SubSection);
         Assert.Equal("14.structure", Assert.Throws<VerificationFailedException>(() => election.Verify14(cast, decrypted)).SubSection);

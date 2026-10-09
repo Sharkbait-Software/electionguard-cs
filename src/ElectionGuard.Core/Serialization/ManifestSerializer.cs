@@ -1,5 +1,7 @@
 using ElectionGuard.Core.Models;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 
 namespace ElectionGuard.Core.Serialization;
 
@@ -11,20 +13,36 @@ namespace ElectionGuard.Core.Serialization;
 /// <see cref="EncryptionRecord.Manifest"/> is parsed from its <see cref="EncryptionRecord.ManifestFile"/>
 /// here, so the manifest every verification computes with is the one H_B was computed over.
 ///
-/// <para><b>Reading</b> (<see cref="Deserialize"/>) is strict, so that two conformant readers
-/// cannot see different manifests in the same bytes:</para>
+/// <para><b>Reading</b> (<see cref="Deserialize"/>) is strict about everything the library reads,
+/// so that two conformant readers cannot see different manifests in the same bytes, and tolerant of
+/// properties it does not know:</para>
 /// <list type="bullet">
-/// <item>UTF-8 JSON without a byte order mark, comments or trailing commas; one top-level object.</item>
+/// <item>UTF-8 JSON without a byte order mark, comments or trailing commas; one top-level object.
+/// Every byte is well-formed UTF-8 and no string or property name escapes to a lone surrogate,
+/// including inside the value of a property the reader ignores (RFC 8259 §8.1 requires UTF-8; §8.2
+/// leaves lone surrogates' behaviour unpredictable). Whether a file is a manifest therefore does not
+/// depend on which properties a reader knows. Nesting is at most 64 levels deep, the top-level
+/// object being level 1, vendor data included (RFC 8259 §9 lets a parser limit depth).</item>
 /// <item>Property names are the camelCase names of the <see cref="Manifest"/>, <see cref="Contest"/>,
 /// <see cref="Choice"/>, <see cref="SupplementalField"/> and <see cref="BallotStyle"/> members, matched
-/// case-sensitively. An unknown property, or one named twice in an object, is refused.</item>
+/// case-sensitively. A property named twice in an object is refused, known or not.</item>
+/// <item>A property the model does not have is ignored, at any level and whatever its value (user
+/// decision NQ-1, 2026-10-09: the manifest is the one place a vendor may add data). It stays in
+/// the file's bytes, so H_B (eq. 5), which hashes the file as it is, still binds it. Ignored
+/// except for one case: a name that matches a member's name once case, <c>_</c> and <c>-</c> are
+/// disregarded (<c>ChainingMode</c>, <c>chaining_mode</c>) is refused. A reader that matched
+/// names loosely would read such a property as that member, and this one would not, so the two
+/// would compute with different manifests under the same H_B.</item>
 /// <item>Required members (<c>electionId</c>, <c>contests</c>, <c>ballotStyles</c>; a contest's
 /// <c>id</c>, <c>name</c>, <c>selectionLimit</c>, <c>optionSelectionLimit</c>, <c>index</c>,
 /// <c>choices</c>; an option's <c>id</c>, <c>name</c>, <c>index</c>; a supplemental field's as an
 /// option's plus <c>kind</c>; a ballot style's <c>id</c>, <c>name</c>, <c>contestIds</c>) must be
 /// present. The optional ones default as the model does: <c>chainingMode</c> 0,
 /// <c>hashTrimmingFunction</c> absent, <c>supplementalFields</c> [], <c>writeInFieldCount</c> 0,
-/// <c>contestDataBlocks</c> 0. No value may be null, and no list entry may be null.</item>
+/// <c>contestDataBlocks</c> 0, and the informational election facts (<c>electionName</c>,
+/// <c>electionDate</c>, <c>electionType</c>, <c>jurisdiction</c>, <c>location</c>; §3.7, user
+/// decision NQ-4) absent. No required member, list or list entry may be null; an optional
+/// member written as null reads as absent.</item>
 /// <item>Integers are JSON numbers in the 32-bit range (no strings, no fractions).
 /// <c>chainingMode</c> and <c>hashTrimmingFunction</c> are numbers (the 4-byte mode identifier of
 /// §3.4.4, the Ω subscript of §4.6); a supplemental field's <c>kind</c> is its
@@ -37,7 +55,8 @@ namespace ElectionGuard.Core.Serialization;
 /// <para><b>Writing</b> (<see cref="Serialize"/>) is deterministic: the same manifest always gives
 /// the same bytes. Compact (no whitespace), UTF-8 without a byte order mark, members in declaration
 /// order (<c>electionId</c>, <c>contests</c>, <c>ballotStyles</c>, <c>chainingMode</c>, then
-/// <c>hashTrimmingFunction</c> only when set; a contest's <c>id</c>, <c>name</c>, <c>selectionLimit</c>,
+/// <c>hashTrimmingFunction</c>, <c>electionName</c>, <c>electionDate</c>, <c>electionType</c>,
+/// <c>jurisdiction</c> and <c>location</c>, each only when set; a contest's <c>id</c>, <c>name</c>, <c>selectionLimit</c>,
 /// <c>optionSelectionLimit</c>, <c>index</c>, <c>choices</c>, <c>supplementalFields</c>,
 /// <c>writeInFieldCount</c>, <c>contestDataBlocks</c>; an option's <c>id</c>, <c>name</c>,
 /// <c>index</c>; a supplemental field's <c>kind</c> first, then an option's members; a ballot
@@ -45,8 +64,10 @@ namespace ElectionGuard.Core.Serialization;
 /// default encoder escapes them (non-ASCII and HTML-sensitive characters as <c>\uXXXX</c>).</para>
 ///
 /// <para>A file need not be in the written form to be read: H_B is computed over the file as it is
-/// (§3.1.4), whitespace and member order included, and the reader accepts any document that meets
-/// the rules above. Election tooling should publish the written form.</para>
+/// (§3.1.4), whitespace, member order and unknown properties included, and the reader accepts any
+/// document that meets the rules above. The election record stores the file byte for byte as it
+/// was entered (user decision S10b #19); the written form has no canonical status. Writing drops
+/// unknown properties, since the model does not hold them.</para>
 /// </summary>
 public static class ManifestSerializer
 {
@@ -56,8 +77,13 @@ public static class ManifestSerializer
     {
         var options = StrictJson.CreateOptions();
 
+        // NQ-1: unknown properties are vendor data, ignored here and bound by H_B through the
+        // bytes. Only this reader is tolerant; the record readers keep StrictJson's Disallow.
+        options.UnmappedMemberHandling = JsonUnmappedMemberHandling.Skip;
+
         // Overrides the type's JsonStringEnumConverter, which also reads numbers and any casing.
         options.Converters.Add(new StrictEnumNameConverter<SupplementalFieldKind>());
+        options.MakeReadOnly(populateMissingResolver: true);
         return options;
     }
 
@@ -84,6 +110,7 @@ public static class ManifestSerializer
         try
         {
             StrictJson.RejectAmbiguity(utf8Json);
+            RejectNearMisses(utf8Json);
             manifest = JsonSerializer.Deserialize<Manifest>(utf8Json, Options);
         }
         catch (JsonException ex)
@@ -106,4 +133,60 @@ public static class ManifestSerializer
         ArgumentNullException.ThrowIfNull(manifestFile);
         return Deserialize(manifestFile.Bytes);
     }
+
+    /// <summary>
+    /// Throws <see cref="JsonException"/> if an object of the manifest holds a property the model
+    /// does not have whose name equals one of that object's member names once case, <c>_</c> and
+    /// <c>-</c> are disregarded (see the class remarks). Walks the document along the model's own
+    /// shape: the manifest, its contests, their options and supplemental fields, and its ballot
+    /// styles. Anything that does not have the expected JSON kind is left for the deserializer to
+    /// report.
+    /// </summary>
+    private static void RejectNearMisses(ReadOnlySpan<byte> utf8Json)
+    {
+        using var document = JsonDocument.Parse(utf8Json.ToArray());
+        Walk(document.RootElement, Options.GetTypeInfo(typeof(Manifest)));
+    }
+
+    private static void Walk(JsonElement element, JsonTypeInfo typeInfo)
+    {
+        if (element.ValueKind != JsonValueKind.Object || typeInfo.Kind != JsonTypeInfoKind.Object)
+        {
+            return;
+        }
+
+        foreach (var property in element.EnumerateObject())
+        {
+            var member = typeInfo.Properties.FirstOrDefault(x => string.Equals(x.Name, property.Name, StringComparison.Ordinal));
+            if (member is null)
+            {
+                var nearMiss = typeInfo.Properties.FirstOrDefault(x => Loose(x.Name) == Loose(property.Name));
+                if (nearMiss is not null)
+                {
+                    throw new JsonException($"Property \"{property.Name}\" is not a member of {typeInfo.Type.Name}, but reads as its member \"{nearMiss.Name}\" if case, '_' and '-' are disregarded. Unknown properties are ignored, so a reader matching names loosely would see another manifest under the same H_B; member names are matched exactly.");
+                }
+
+                continue;
+            }
+
+            var memberInfo = Options.GetTypeInfo(member.PropertyType);
+            if (memberInfo.Kind == JsonTypeInfoKind.Enumerable && memberInfo.ElementType is { } elementType)
+            {
+                if (property.Value.ValueKind == JsonValueKind.Array)
+                {
+                    var elementInfo = Options.GetTypeInfo(elementType);
+                    foreach (var item in property.Value.EnumerateArray())
+                    {
+                        Walk(item, elementInfo);
+                    }
+                }
+            }
+            else
+            {
+                Walk(property.Value, memberInfo);
+            }
+        }
+    }
+
+    private static string Loose(string name) => name.Replace("_", "", StringComparison.Ordinal).Replace("-", "", StringComparison.Ordinal).ToLowerInvariant();
 }

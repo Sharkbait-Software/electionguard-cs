@@ -1,13 +1,21 @@
 // EGRF v2: the ElectionGuard Record Format, canonical protobuf profile.
 //
-// This schema is NORMATIVE. The profile rules that make every item's bytes unique (field order,
-// presence, widths, varints, framing) are in the design document,
-// docs/spec-compliance/2026-10-08-election-record-design.md §4.2, and are summarized here:
+// This schema is NORMATIVE, and this file is its one copy: the C# build generates its types from
+// it, and every other implementation reads it from here. The profile rules that make every item's
+// bytes unique (field order, presence, widths, varints, framing) are in the design document,
+// docs/spec-compliance/2026-10-08-election-record-design.md §4.2-§4.4, and are summarized here:
 //
 //  - proto3. Field types are restricted to uint32, uint64, bool, enum, string, bytes, message and
 //    google.protobuf.Timestamp. No maps, floating point, signed or fixed-width integer types, Any,
 //    groups, `optional` keyword, or repeated scalar numeric fields (so packing never arises).
+//    A lint test in ElectionGuard.Core.UnitTests (EgrfSchemaLintTests) enforces these rules.
 //  - Fields are declared, and MUST be written, in ascending field-number order.
+//  - Field numbers are append-only: a later format minor adds fields only above every number a
+//    message already declares (reserved numbers included), and never reuses a removed number.
+//    So a field a reader does not know always follows every field it knows. A reader keeps such
+//    unknown fields when it re-encodes (the bytes, and so every digest, survive), and a verifier
+//    reports a record of a newer minor as informational and verifies what it understands
+//    (user decision NQ-1).
 //  - Implicit presence: a scalar, string or bytes field is written if and only if it differs from its
 //    default (0, false, the zero enum value, empty). Message fields are written iff set.
 //  - Every list is `repeated <message>` or one `bytes` field holding a concatenation of fixed-width
@@ -16,10 +24,14 @@
 //    verifier reports it under the spec's lettered checks.
 //  - Timestamps are UTC with millisecond precision: seconds in [0, 253402300799] (1970-01-01 to
 //    9999-12-31), nanos a multiple of 1,000,000.
-//  - No oneof's member numbers may enclose a regular field's number (lint rule S8), so runtimes that
-//    encode a oneof at its lowest member's position (prost) still write field-number order.
+//  - A oneof's members are messages (lint rule S8): a set member is written even when its value is
+//    the default, so a scalar member could put an explicit 0 on the wire, which a reader older than
+//    the record may never meet in an unknown field. No oneof's member numbers may enclose a regular
+//    field's number (also S8), so runtimes that encode a oneof at its lowest member's position
+//    (prost) still write field-number order.
 //  - No runtime enforces the decode rules (widths, enum membership, integer bounds, timestamp
-//    precision, envelope and key order). Every conformant reader checks them itself.
+//    precision, the one-member envelope, the placement of unknown fields). Every conformant reader
+//    checks them itself.
 //
 // Spec basis: ElectionGuard v2.1.0 §3.7 (pp.55-56), §4.4 (pp.62-63), Verifications 1-19.
 // Comments name the spec symbol each field carries.
@@ -31,7 +43,9 @@ package electionguard.egrf.v2;
 import "google/protobuf/descriptor.proto";
 import "google/protobuf/timestamp.proto";
 
-option csharp_namespace = "ElectionGuard.Core.Record.Protobuf";
+// Not ElectionGuard.Core.Record: a namespace of that name hides xUnit's Record class from every
+// test in ElectionGuard.Core.UnitTests.
+option csharp_namespace = "ElectionGuard.Core.RecordFormat.Protobuf";
 option go_package = "github.com/Sharkbait-Software/electionguard-cs/proto/electionguard/egrf/v2;egrfv2";
 option java_multiple_files = true;
 
@@ -126,6 +140,7 @@ message RecordItem {
     PreEncryptedUncastBallot pre_encrypted_uncast_ballot = 13;
     DeviceClose device_close = 14;
     SignedStatement device_attestation = 15;
+    PreEncryptedCompactUncastBallot pre_encrypted_compact_uncast_ballot = 16;
     // aggregated
     EncryptedTallyHeader encrypted_tally_header = 20;
     EncryptedTallyContest encrypted_tally_contest = 21;
@@ -147,14 +162,9 @@ message RecordItem {
     // vendor sections only
     VendorItem vendor_item = 100;
   }
-  // Open question NQ-1. Strictly ascending by tag; absent in every v2.0 writer's output.
-  repeated Extension extensions = 2047;
-}
-
-message Extension {
-  uint32 tag = 1;      // 1-65535 registry; 65536 and above vendor
-  bool critical = 2;   // a reader that does not know the tag must not evaluate the item
-  bytes value = 3;
+  // A RecordItem has exactly one field, the member of `item`. A later minor adds item types as new
+  // members, at any number not declared or reserved here; RecordItem never gets a regular field.
+  reserved 2047;  // draft only (per-item extensions, never published; removed by user decision NQ-1)
 }
 
 message VendorItem {
@@ -164,23 +174,14 @@ message VendorItem {
 
 // ---- setup --------------------------------------------------------------------------------------
 
-// The format version, plus §3.7's "information sufficient to uniquely identify and describe the
-// election ... (not otherwise included in the election manifest)". Nothing the manifest carries
-// (election id, contests, styles, chaining mode, hash trimming) is repeated here.
+// The format version only. §3.7's "information sufficient to uniquely identify and describe the
+// election" is in the manifest, as its optional election facts (user decision NQ-4), and so bound
+// into H_B. Producer software and creation time are not election facts; they go in meta.json,
+// outside the root.
 message RecordHeader {
-  uint32 format_major = 1;                 // 2
-  uint32 format_minor = 2;                 // 0 (absent) in v2.0
-  repeated ElectionInfo election_info = 3; // strictly ascending by key bytes; may be empty
-}
-
-// One descriptive fact about the election. Covered by the root and signatures; never verified.
-// Registry keys (v2.0): "election_name", "election_date" (RFC 3339 full-date, YYYY-MM-DD; a
-// multi-day election repeats it as "election_date.2", ...), "election_type", "jurisdiction",
-// "location", "administrator". Other keys are "x-<vendor>-<name>". Producer software and creation
-// time are not election facts; they go in meta.json, outside the root.
-message ElectionInfo {
-  string key = 1;    // non-empty; a registry key or "x-" prefixed
-  string value = 2;  // non-empty
+  uint32 format_major = 1;   // 2
+  uint32 format_minor = 2;   // 0 (absent) in v2.0
+  reserved 3;                // draft only (election_info, never published; removed by NQ-4)
 }
 
 message Parameters {
@@ -196,8 +197,11 @@ message Parameters {
 
 message ManifestFile {
   string media_type = 1;  // v2.0: "application/vnd.electionguard.manifest+json;format=1", whose
-                          // parser is S10a's strict ManifestSerializer reading (UTF-8 without a
-                          // BOM, no unknown properties); a writer refuses content it cannot parse
+                          // parser is ManifestSerializer's reading: UTF-8 JSON without a BOM, no
+                          // duplicate keys, known members strict, unknown properties ignored (vendor
+                          // data, still bound by H_B; NQ-1) but still well-formed UTF-8 with no
+                          // lone-surrogate escapes, nesting at most 64 levels everywhere. A writer
+                          // refuses content it cannot parse
   bytes content = 2;      // the manifest exactly as entered; the H_B input of eq. (5); never re-encoded
   bytes h_b = 3 [(width) = 32];  // claim; Verification 1.F
 }
@@ -305,8 +309,10 @@ message UncastContest {
   bytes contest_hash = 4 [(width) = 32];
 }
 
-// The printed content of a pre-encrypted ballot that was not cast: returned uncast, or printed and
-// never returned (both are challenged). Its nonces are released in the final phase (UncastNonceRelease).
+// The printed content of a pre-encrypted ballot that was returned uncast (challenged) and whose
+// ballot nonce xi_B is not released: its per-selection nonces are released in the final phase
+// (UncastNonceRelease.contests). A ballot whose xi_B is released, which every never-returned ballot
+// is, uses PreEncryptedCompactUncastBallot instead.
 message PreEncryptedUncastBallot {
   bytes id_b = 1 [(width) = 32];
   bytes h_i = 2 [(width) = 32];
@@ -314,6 +320,34 @@ message PreEncryptedUncastBallot {
   reserved 4, 5, 6;                             // status CHALLENGED is implied; no weight or time
   repeated UncastContest contests = 7;          // ascending index
   bytes confirmation_code = 8 [(width) = 32];
+  bytes chaining_field = 9 [(width) = 36];
+  HashedCiphertext encrypted_ballot_nonce = 10;  // C_xiB
+  string ballot_ref = 11;
+}
+
+message CompactUncastContest {
+  uint32 index = 1;
+  bytes contest_hash = 2 [(width) = 32];   // chi, eq. (115)
+}
+
+// A pre-encrypted ballot that was not cast and whose ballot nonce xi_B is released in the final
+// phase (UncastNonceRelease.ballot_nonce): mandatory for a ballot printed and never returned
+// (user decision NQ-2), and the form of any uncast ballot whose xi_B is released, so each uncast
+// ballot has one representation. Every vector, psi and short code printed on it is a function of
+// xi_B (eqs. 113-121), so the item keeps only what the verifier compares: each contest's chi, H_C
+// and B_C. The verifier regenerates the vectors and psi from xi_B and checks each chi and H_C
+// against this item, which proves the ballot's ciphertexts, psi and chi were the regenerated ones,
+// then runs V16 and V18 on the regenerated content. Chi (eq. 115) binds the contest index, not the
+// printed text, and the item carries no short codes or labels, so 17.A and 19.A-D hold by
+// construction: the voter's comparison of the paper with the derived view is the only check of
+// what was printed. Same field numbers as PreEncryptedUncastBallot.
+message PreEncryptedCompactUncastBallot {
+  bytes id_b = 1 [(width) = 32];
+  bytes h_i = 2 [(width) = 32];
+  string ballot_style = 3;
+  reserved 4, 5, 6;                             // status CHALLENGED is implied; no weight or time
+  repeated CompactUncastContest contests = 7;   // ascending index; exactly the style's contests
+  bytes confirmation_code = 8 [(width) = 32];   // eq. (116)
   bytes chaining_field = 9 [(width) = 36];
   HashedCiphertext encrypted_ballot_nonce = 10;  // C_xiB
   string ballot_ref = 11;
@@ -422,11 +456,14 @@ message UncastContestNonces {
 }
 
 // The opening of an uncast pre-encrypted ballot (§4.3: "returns the encryption nonces"; Q28).
+// Exactly one of contests and ballot_nonce is present, fixed by the item it opens.
 message UncastNonceRelease {
-  BallotLocator ballot = 1;                  // a PreEncryptedUncastBallot
+  BallotLocator ballot = 1;                  // a PreEncryptedUncastBallot or PreEncryptedCompactUncastBallot
   bytes h_i = 2 [(width) = 32];
-  repeated UncastContestNonces contests = 3; // ascending index; every contest in v2.0
-  bytes ballot_nonce = 4 [(width) = 32, (omittable) = true];  // xi_B in plaintext, only when opted in (Q28)
+  repeated UncastContestNonces contests = 3; // full item: ascending index, every contest; compact item: absent
+  bytes ballot_nonce = 4 [(width) = 32, (omittable) = true];  // xi_B in plaintext: present iff the
+                                                              // item is compact (Q28 opt-in, or never
+                                                              // returned, NQ-2); the xi_{i,j,k} follow by eq. (121)
 }
 
 // ---- statements ---------------------------------------------------------------------------------

@@ -1,24 +1,44 @@
 # ElectionGuard Record Format (EGRF) v2: the canonical election record (S10b design)
 
-Status: revised design for user approval (Q37 part B), rewritten 2026-10-09 to apply every user answer recorded in
-the tracker (`2026-10-04-fix-progress.md`, Decisions: "S10b design answers, 2026-10-09" and "S10b follow-up answers,
-2026-10-09"). Nothing is implemented. The only other file this revision writes is the normative schema,
-`docs/spec-compliance/egrf_v2.proto`, which §4.6 embeds verbatim. It compiles to C# and Python with the protoc that
-ships in the Grpc.Tools NuGet package (2.72.0 and 2.80.0; the latter is libprotoc 31.1).
+Status: design for Q37 part B, in implementation since stage S10b-A. Rewritten 2026-10-09 to apply every user answer
+recorded in the tracker (`2026-10-04-fix-progress.md`, Decisions: "S10b design answers, 2026-10-09", "S10b follow-up
+answers, 2026-10-09" and "EGRF v2 new questions, answered 2026-10-09").
+
+**Revision 3 (2026-10-09, stage S10b-A): NQ-1 to NQ-6 are answered and applied** (§11), and the first steps are
+implemented (§9.2: S10b-0, S10b-1, S10b-1b, S10b-2). What the answers changed:
+
+- **No per-item extensions (NQ-1).** The `extensions` list on `RecordItem` is gone. The profile now allows unknown
+  fields, but only after every known field of their message, in field-number order, and a reader keeps them when it
+  re-encodes. Field numbers are append-only, so this is exactly what an older library sees in a newer record. A
+  verifier reports a newer `format_minor` as informational and verifies everything it understands (W6, §4.4, §7).
+- **Election facts live in the manifest (NQ-4).** `RecordHeader` carries only `format_major` and `format_minor`.
+  The manifest gained optional name, date, type, jurisdiction and location fields, bound into H_B through its bytes.
+- **The manifest reader ignores unknown properties (NQ-1).** The manifest stays JSON, stored byte for byte; vendor
+  data in it is ignored by the parser and still bound by H_B. Duplicate keys and malformed JSON are still refused.
+- **Compact uncast form (NQ-2).** `PreEncryptedCompactUncastBallot` is mandatory for a pre-encrypted ballot that was
+  printed and never returned, and is the form of any uncast ballot whose ξ_B is released (§3.2). It records no
+  short codes or labels, so 17.A and 19.A-D hold by construction on it (§3.2, a divergence for the formal spec).
+- **No JavaScript reader for now (NQ-3).** S10b-13 is deferred.
+- **Guardians open uncast pre-encrypted ballots, later (NQ-5).** A new step after S10b, S10b-19.
+- **No single-pass pipe input (NQ-6).** A non-seekable input is spooled to a temporary file (§5.4), as designed.
+
+The schema is now `proto/electionguard/egrf/v2/egrf.proto`, compiled by the Core build (§4.6, §8.1).
+
+Revision 2 summary (kept for the tracker's references):
 
 **Review round 1 and the feasibility proof are applied** (same day). Two design reviews and a four-runtime
 feasibility run (Python upb, C# Google.Protobuf, protobufjs, protobuf-es; §4.4) checked this revision. Every
 canonical-bytes claim held in all four runtimes. The changes they caused are in place, and §13 explains each finding
 that was rejected or changed in scope. The main changes:
 
-- `RecordHeader` carries §3.7's election-identifying facts again, limited to what the manifest lacks (§3.1, NQ-4).
+- `RecordHeader` carried §3.7's election-identifying facts (superseded by NQ-4: they are manifest fields now).
 - The `critical` bit is fixed per section type (§4.5).
 - Later tallies arrive as new section types (§4.5).
 - Frames are capped at 64 MiB (§5.2).
 - Carrier layout and conflict rules are normative (§5.3.1).
 - Single-pass reading from a pipe is dropped (§5.4, NQ-6).
 - The JSON text is not canonical; only its parsed structure is (§5.5).
-- Method B names its discard-unknown call for each runtime (§4.4).
+- Method B named its discard-unknown call for each runtime (superseded by NQ-1: Method B keeps unknown fields).
 - Signed statements get the canonicality check (§4.9).
 
 Spec basis: ElectionGuard v2.1.0 §3.6.1 (p.45), §3.7 (pp.55-56), §4.3-§4.5 (pp.61-64) and §6 (pp.79-99). Nothing
@@ -36,17 +56,18 @@ the other.
 | Canonical encoding | custom fixed-schema binary hash form | a **canonical protobuf profile**: the `.proto` is normative, and every item has exactly one protobuf encoding (§4) | #1, #13, follow-up "Yes, canonical protobuf" |
 | Value encoding | raw big-endian bytes | unchanged: raw fixed-width big-endian `bytes`; lists of fixed-width values packed into one `bytes` field for size (§4.6) | #3 |
 | Naming | snake_case JSON, uppercase hex | snake_case in `.proto`; JSON is the proto3 JSON mapping (lowerCamelCase, base64, 64-bit integers as strings) (§5.5) | #3 |
-| Ballot status | `not_submitted`, `cast`, `challenged` | `CAST`, `CHALLENGED`, `SPOILED`; zero value `UNSPECIFIED` is invalid in a record (§4.6, §8.3) | #4 |
-| Never-returned pre-encrypted ballots | `PreEncryptedUnreturnedBallot` stub | recorded as challenged (uncast) pre-encrypted ballots with released nonces; the stub is gone (§3.2) | #5 |
+| Ballot status | `not_submitted`, `cast`, `challenged` | `CAST`, `CHALLENGED`, `SPOILED`; zero value `UNSPECIFIED` is invalid in a record (§4.6, §8.3); C# `BallotStatus.Unrecorded`/`Spoiled` (S10b-1, done) | #4 |
+| Never-returned pre-encrypted ballots | `PreEncryptedUnreturnedBallot` stub | recorded as challenged (uncast) pre-encrypted ballots with released nonces, in the compact form with ξ_B released (§3.2) | #5, NQ-2 |
 | Uncast nonces | inside the uncast item, in the sealed device section | split: printed content stays in the device section, the nonce release is a final-phase item (§3.2, §4.5) | consequence of #5 and Q36 |
 | Timestamps | optional, precision setting, privacy-risk framing | `google.protobuf.Timestamp`, UTC, millisecond precision, no precision setting (§4.3) | follow-up #6 |
-| Header | `election_info` key/value registry | format version plus `election_info`, limited to facts the manifest does not carry (§4.6) | follow-up #9 (reading confirmed by NQ-4) |
-| Manifest | `ManifestSerializer` reading rules as "manifest format 1"; writers SHOULD publish the written form | stored byte for byte as entered; `ManifestSerializer` only parses; H_B over those bytes (§4.6, §9.3) | #19 |
+| Header | `election_info` key/value registry | format version only; the election facts are optional manifest fields (§3.1, §4.6) | follow-up #9, NQ-4 |
+| Manifest | `ManifestSerializer` reading rules as "manifest format 1"; writers SHOULD publish the written form | stored byte for byte as entered; `ManifestSerializer` only parses, ignoring unknown properties; H_B over those bytes (§4.6, §9.3) | #19, NQ-1 |
 | Carriers | directory and ZIP64; tar and `.egr` considered | directory and `.zip`; no `.7z`, no tar; normative layout and conflict rules (§5.3.1, §5.4) | #14 (measured) |
 | Single-pass reading | a `.zip` read from a pipe in one pass | dropped; a non-seekable input is spooled to disk first (§5.4) | review round 1; NQ-6 |
 | Frame size | unbounded | at most 64 MiB per frame (§5.2) | review round 1 |
 | Out-of-range values | asked (Q-11) | the format checks widths only; the verifier reports ranges under the lettered checks (§4.8) | #11 |
-| Per-item extensions | in-band list with a critical bit | one `extensions` field on the item envelope, pending NQ-1 | new question |
+| Per-item extensions | in-band list with a critical bit | none; vendor data goes in the manifest or a vendor section (§7) | NQ-1 |
+| Unknown fields | refused | allowed only after every known field, in field-number order; kept on re-encoding; a newer minor is reported, not failed (W6, §4.4, §7) | NQ-1 |
 | Codec | hand-written | Google.Protobuf code generated from the normative `.proto`; protobuf-net retired (§8.1) | implementer choice, justified |
 
 **Kept from v1:** the content map to §3.7/§4.4 and V1-V19 (§3); sections, the TOC and phase roots that are prefixes
@@ -70,10 +91,11 @@ CLI in `ElectionGuard.Verifier` (#15).
 - **Measured compression (2026-10-09).** On current-format ballots the cryptographic payload is incompressible
   (deflate 1.000, LZMA 1.002). JSON compresses to 0.612 of its size with deflate and 0.609 with LZMA. That is why the
   container is `.zip` and why protobuf entries are stored, not deflated.
-- **The protobuf nonce hazard.** `ProtobufEncryptedValueWithProofs.EncryptionNonce` and
-  `ProtobufEncryptedValue.EncryptionNonce` (`IEncryptedBallotSerializer.cs` lines 508 and 532) have no
-  `[ProtoMember]`, but the mapping at line 83 still copies `s.EncryptionNonce` into the DTO. Every selection nonce is
-  one attribute away from being serialized. Step S10b-0 deletes them before anything else.
+- **The protobuf nonce hazard (fixed in S10b-0).** `ProtobufEncryptedValueWithProofs.EncryptionNonce` and
+  `ProtobufEncryptedValue.EncryptionNonce` had no `[ProtoMember]`, but the mapping still copied `s.EncryptionNonce`
+  into the DTO, so every selection nonce was one attribute away from being serialized. The members, the copy and the
+  unused `ProtobufEncryptedValue` struct are deleted; a reflection test pins that no DTO member can hold a nonce
+  and that no nonce of a real ballot appears in its serialized bytes.
 
 ---
 
@@ -100,8 +122,9 @@ CLI in `ElectionGuard.Verifier` (#15).
    - Detached record signatures with a signing date (§3.7).
    - Per-device chain-close attestations (S8b) and optional mid-election prefix checkpoints.
    - Merkle inclusion proofs for voters looking up confirmation codes.
-6. **G-6 Versioned and extensible.** No reader can report a full pass while content it did not understand went
-   unchecked, in any representation.
+6. **G-6 Versioned and extensible.** No reader can report a record as completely verified (`Complete`) while content
+   it did not understand went unchecked, in any representation. Content from a newer format minor is reported as
+   informational, not as a failure, and everything the reader understands is still verified (NQ-1, §6.9, §7).
 7. **G-7 Any device, any language.** Any language with a protobuf runtime (C#, Java, Go, Python, JavaScript and
    TypeScript, Rust, C++, Swift, Kotlin) reads a record with code generated from the `.proto`. A runtime is not even
    required: the Python reference reader (§5.7) does it with the standard library alone, about 300 lines for the
@@ -120,9 +143,10 @@ CLI in `ElectionGuard.Verifier` (#15).
 - Pre-encryption tools (Q35). The record holds pre-encrypted ballots only as published inputs. Producing the released
   nonces of uncast ballots (§4.3.1: "guardians, an administrator, or a local database") is the out-of-scope recording
   tool's job; the record carries them and Verification 18 checks them. Since S9c, Core has no path that decrypts the
-  C_ξB of a pre-encrypted ballot (`TallyGuardian.DecryptBallotNonce` takes a challenged `EncryptedBallot` only). So a
-  record with uncast pre-encrypted ballots can be completed only with nonces from that out-of-scope tool. NQ-5 asks
-  whether Core should instead open sealed uncast ballots through the guardians.
+  C_ξB of a pre-encrypted ballot (`TallyGuardian.DecryptBallotNonce` takes a challenged `EncryptedBallot` only). So
+  until S10b-19, a record with uncast pre-encrypted ballots can be completed only with nonces from that out-of-scope
+  tool. NQ-5 ("Later: guardian opens from sealed record") adds S10b-19 after S10b: the guardians open an uncast
+  pre-encrypted ballot from a sealed, verified record.
 - Transport compression. Ciphertexts do not compress (measured above). Digests are always over canonical item bytes.
 
 ---
@@ -151,7 +175,7 @@ CLI in `ElectionGuard.Verifier` (#15).
 
 | §3.7 item | Record location | Consumed by | Note |
 |---|---|---|---|
-| Information that identifies the election (date, location, type, ...) "not otherwise included in the election manifest" | `RecordHeader.election_info`: (key, value) entries, strictly ascending by key, from a small registry plus `x-` vendor keys | none (covered by the root and signatures) | Follow-up #9: "Only what isn't in manifest". The manifest model (`Manifest.cs`) has no date, location or type, and `ManifestSerializer` refuses unknown properties, so these facts have no other signed place. Nothing the manifest carries is repeated. NQ-4 confirms this reading. |
+| Information that identifies the election (date, location, type, ...) "not otherwise included in the election manifest" | the manifest's optional `electionName`, `electionDate`, `electionType`, `jurisdiction` and `location` (S10b-1b), inside `ManifestFile.content` | none (informational; bound by H_B through the manifest bytes) | Follow-up #9: "Only what isn't in manifest"; NQ-4: "Optional manifest fields". `RecordHeader` carries only the format version. Further facts a jurisdiction wants recorded can be vendor properties of the manifest, which the parser ignores and H_B binds (NQ-1). |
 | The election manifest file | `ManifestFile.content`: the bytes exactly as entered, with `media_type` | V1.F (H_B over these bytes); parsed for everything else | #19. The parsed `Manifest` is only ever derived from these bytes (S10a binding). |
 | p, q, r with p = qr + 1 | `Parameters.p/q/r`, raw `bytes` of 512, 32 and 512 | 1.B, 1.C | Raw bytes, never `IntegerModP`/`IntegerModQ`, which would reduce p and q to 0 (decision G1). r is not checked (v2.1 dropped it from V1). |
 | Generator g | `Parameters.g` | 1.D | |
@@ -194,19 +218,50 @@ CLI in `ElectionGuard.Verifier` (#15).
 | Cast: standard selection vectors with all standard proofs | `PreEncryptedCastBallot.contests[].contest` (an `EncryptedContest` each) | 5, 6, 7, 9, 11.D |
 | Cast: selection hashes of every option, nulls included, sorted numerically per contest | `contests[].selection_hashes`: m+L values, strictly ascending | 16.A-16.C |
 | Cast: short codes and pre-encryption vectors of the voter's selections (nulls included) | `contests[].selected[]`: exactly L entries (Q27 null padding), strictly ascending by ψ; no option named | 15.A, 17.A |
-| Uncast (returned uncast, **or printed and never returned**): the printed content | `PreEncryptedUncastBallot` in the printer's device section: every vector, ψ, short code, χ, H_C, B_C, C_ξB | 5, 6.A (range layer only, §4.8; uncast vectors carry no range proofs, and subgroup membership follows from 18.A's recomputation), 16, 17, 19 |
-| Uncast: "the ballot nonce for that ballot is published" | `UncastNonceRelease` (final phase): ξ_{i,j,k} per vector; `ballot_nonce` (ξ_B) only when opted in (Q28) | 18 |
+| Uncast, returned, ξ_B not released: the printed content | `PreEncryptedUncastBallot` (full form) in the printer's device section: every vector, ψ, short code, χ, H_C, B_C, C_ξB | 5, 6.A (range layer only, §4.8; uncast vectors carry no range proofs, and subgroup membership follows from 18.A's recomputation), 16, 17, 19 |
+| Uncast, **printed and never returned** (or returned with ξ_B released): the printed content | `PreEncryptedCompactUncastBallot` (compact form, NQ-2): id_B, H_I, style, C_ξB, per contest (index, χ), H_C, B_C | 5; 16 and 18 on the content regenerated from ξ_B; 17.A and 19.A-D hold by construction (no displayed codes or labels are recorded) |
+| Uncast: "the ballot nonce for that ballot is published" | `UncastNonceRelease` (final phase): for a full item, ξ_{i,j,k} per vector (Q28); for a compact item, ξ_B and nothing else | 18 |
 | Confirmation codes from the full set of pre-encryptions | `confirmation_code` and `chaining_field` on every pre-encrypted item | 16.C, 16.E-16.H |
 | Pre-encrypted device chains | pre-encrypting device sections: cast and uncast items interleaved in print order | 16.D-16.H |
 | §4.4.1 presentation | derived views only | |
 
-**Never-returned ballots (#5).** The user wrote: "pre-encrypted ballots never returned can be considered challenged
-ballots". §4.3 already calls every uncast ballot "implicitly or explicitly challenged", so a printed ballot that never
-came back is recorded exactly as a returned uncast one: its printed content in the device section, in print order,
-and its nonces released in the final phase. v1's `PreEncryptedUnreturnedBallot` stub, which published no nonces, is
-removed. The status of a pre-encrypted item is implied by its type: a `PreEncryptedCastBallot` is cast and a
-`PreEncryptedUncastBallot` is challenged. Neither carries a `status` field (field 4 is reserved on both), so the two
-can never disagree.
+**Never-returned ballots (#5, NQ-2).** The user wrote: "pre-encrypted ballots never returned can be considered
+challenged ballots". §4.3 already calls every uncast ballot "implicitly or explicitly challenged", so a printed ballot
+that never came back is recorded as an uncast one: an item in the device section, in print order, and its opening in
+the final phase. v1's `PreEncryptedUnreturnedBallot` stub, which published no nonces, is removed. The status of a
+pre-encrypted item is implied by its type: a `PreEncryptedCastBallot` is cast, and a `PreEncryptedUncastBallot` or
+`PreEncryptedCompactUncastBallot` is challenged. None carries a `status` field (field 4 is reserved on all three), so
+the two can never disagree.
+
+**The compact form (NQ-2: "Compact required for unreturned").** Everything printed on a pre-encrypted ballot (every
+vector, ψ and short code) is a deterministic function of ξ_B (eqs. 113-121). So when ξ_B is released, the device
+section keeps only what the verifier compares: id_B, H_I, the style, C_ξB, per contest (index, χ), H_C and B_C
+(`PreEncryptedCompactUncastBallot`, about 0.8 KB instead of about 31 KB per contest at m = 5, L = 1). The verifier
+regenerates the vectors and ψ from the released ξ_B and checks each χ and H_C against the item, which proves that the
+ballot's ciphertexts, ψ and χ were the regenerated ones. It then runs V16 and V18 on the regenerated content.
+
+**What the compact form cannot check (V17, V19).** χ (eq. 115) hashes the contest index ind_c(Λ) and the ψ values,
+not any printed text, and the compact item records no short codes and no labels. 17.A (p.65) checks "the short code
+ω displayed with the selectable option", and 19.A-D (p.67) check the contest and option text labels "on the uncast
+pre-encrypted ballot" against the manifest. On a compact item the only codes are Ω(ψ) of the regenerated ψ and the
+only labels are the manifest's, so 17.A and 19.A-D hold by construction and cannot fail. The report says so: it
+counts the compact items whose 17.A and 19.A-D held by construction (§6.9), so that a V17 or V19 `Passed` is not
+read as a check of what was printed on them. What was actually printed is checked only by the voter, who
+compares the paper ballot with the derived view (§5.6) generated from ξ_B. Under R-1(a) (§12) this also applies to a
+returned uncast ballot whose ξ_B is released, which is the ballot a voter actually audits; a full item records its
+codes and labels, so V17 and V19 check them. Rules:
+
+- **Never returned ⇒ compact.** A printed ballot that never came back is always written in the compact form, and its
+  release carries ξ_B.
+- **One representation per ballot.** The form follows from what is released: the compact form iff ξ_B is released
+  (`UncastNonceRelease.ballot_nonce` present, `contests` absent), the full form iff it is not (`contests` present,
+  `ballot_nonce` absent). So a returned uncast ballot whose ξ_B is released under Q28's opt-in is compact too, and no
+  ballot has two valid encodings. A release that does not match its item's form is `18.structure`.
+- **The format cannot tell never-returned from returned.** Both are uncast; the mandatory rule binds the writer
+  (`DeviceSectionWriter.AppendUncastAsync`, §8.3), which is told which case it has.
+- Releasing ξ_B on an uncast ballot reveals no voter choice: a pre-encrypted ballot encodes every option, and the
+  voter's marks are on paper. Two departures go into the formal spec: from §4.3.1/§4.4's "posts ... the full set of
+  pre-encryption vectors" (they are derivable instead), and the voter-facing short codes coming from derived views.
 
 **Why the release is split from the printed content.** The device section is sealed when voting closes (R_sealed).
 Whether a printed ballot was cast, returned uncast or never returned is known only once voting is over, and its
@@ -214,24 +269,29 @@ release opens it as a challenged ballot's decryption does. So the printed conten
 in R_final, exactly as a challenged regular ballot sits in its device section and its decryption in the final phase.
 This is a placement rule only; it does not say who produces the nonces. Spec p.66 derives the ξ_{i,j,k} "from the
 ballot nonce ξ_B via Equation 121 after it has been decrypted as specified in Section 3.6.7". Under Q35 that producer
-is the out-of-scope recording tool (§1, Non-goals), and NQ-5 asks whether the guardians should do it in Core. The
-mapper splits the domain `PreEncryptedUncastBallot` (`Ballot` + `BallotNonce?` + released `Contests`) into the two
-items and joins them on read. v2.0 requires exactly one release for every uncast item. That follows from #5 (an
-uncast ballot is challenged) together with #8 (every challenged ballot has its decryption), and from §4.4, which
-publishes the nonces of every uncast ballot.
+is the out-of-scope recording tool (§1, Non-goals), until S10b-19 lets the guardians open an uncast ballot from the
+sealed record (NQ-5). The mapper splits the domain `PreEncryptedUncastBallot` (`Ballot` + `BallotNonce?` + released
+`Contests`) into the two items and joins them on read. v2.0 requires exactly one release for every uncast item. That
+follows from #5 (an uncast ballot is challenged) together with #8 (every challenged ballot has its decryption), and
+from §4.4, which publishes the nonces of every uncast ballot.
 
-**Cost of #5.** The printed content of an uncast ballot per contest is (m+L) vectors of m·1,024 B, each with its 32 B
-ψ and its short code: (m+L)·(m·1,024 + 32) B plus framing and short codes, 30,912 B at m = 5, L = 1. A vote-by-mail
-election where many printed ballots never come back pays that for each one. NQ-2 offers a compact form that keeps the
-decision and drops most of the cost.
+**Cost of #5.** The full printed content of an uncast ballot per contest is (m+L) vectors of m·1,024 B, each with
+its 32 B ψ and its short code: (m+L)·(m·1,024 + 32) B plus framing and short codes, 30,912 B at m = 5, L = 1. NQ-2's
+compact form removes that cost for every never-returned ballot, which is where a vote-by-mail election would pay it
+most often; only returned uncast ballots whose ξ_B stays secret are written in full.
 
 **Divergences to state in the formal spec:**
 
 - §4.4 says the uncast "ballot nonce" is published. Q28 publishes the per-selection nonces ξ_{i,j,k}, and ξ_B only
-  when opted in.
+  when opted in or when the ballot was never returned (NQ-2), in which case the compact item replaces the printed
+  vectors.
 - §3.7 lists "the status of the ballot (cast or challenged)". The record adds `SPOILED` (#4) for a submitted ballot
-  that was neither: it is in the chain, counts for 5.A and 11.D, gets V6-V8, and is never tallied or decrypted
-  (§3.3).
+  that was neither: it is in the chain, counts for 5.A and 11.D, gets V6-V8, is never tallied, and is not decrypted
+  by this library's paths (§3.3).
+- Verifications 17 and 19 check what is displayed and printed on an uncast ballot: the short codes (17.A, p.65) and
+  the contest and option text labels (19.A-D, p.67). A compact item records neither, and χ (eq. 115) binds the
+  contest index and ψ, not the text. So for a compact item 17.A and 19.A-D hold by construction, and the voter's
+  comparison of the paper ballot with the derived view is the only check of the printed text (see above).
 
 ### 3.3 Verification inputs
 
@@ -252,17 +312,22 @@ decision and drops most of the cost.
 | 14 | decrypted labels and values; manifest | `ChallengedBallotDecryption` + manifest |
 | 15 | selected vectors, combined vector | `PreEncryptedCastBallot` |
 | 16 | vectors/hashes, χ, H_C, B_C, H_DI, H_0, close | pre-encrypted items + their section's header and close |
-| 17 | ψ, short codes | cast and uncast items |
-| 18 | uncast vectors, released nonces, K (V18's recomputation also settles the subgroup membership half of 6.A for uncast vectors) | `PreEncryptedUncastBallot` + `UncastNonceRelease` |
-| 19 | uncast labels, manifest | `PreEncryptedUncastBallot` + manifest |
+| 17 | ψ, short codes | cast and full uncast items; for a compact item 17.A holds by construction (no displayed codes recorded; codes would be Ω(ψ) of the regenerated ψ, §3.2) |
+| 18 | uncast vectors, released nonces, K (V18's recomputation also settles the subgroup membership half of 6.A for uncast vectors) | `PreEncryptedUncastBallot` + `UncastNonceRelease`; for a compact item, the content regenerated from the released ξ_B, whose χ and H_C must equal the item's |
+| 19 | uncast labels, manifest | `PreEncryptedUncastBallot` + manifest; for a compact item 19.A-D hold by construction (no labels recorded; χ binds the contest index, not the text, §3.2) |
 
 **Spoiled ballots and "submitted".** Verifications 5.A and 11.D speak of "submitted (cast and challenged)"
 ballots. The user wrote (#4): "If we have it in the election record at all, it was by definition submitted." So a
 spoiled ballot counts as submitted: it is in 5.A and 5.B, and its contests count for 11.D. It gets V6-V8 like any
-other ballot, it is not aggregated (V9 reads cast ballots only), and it is never decrypted: a
-`ChallengedBallotDecryption` that names it is `13.structure`, and the guardians' Q31 check refuses it because it is
-not challenged. In v2.0 11.D cannot fail on a spoiled ballot alone, because the one tally lists every manifest
-contest.
+other ballot, and it is not aggregated (V9 reads cast ballots only). It is not decrypted by this library's paths, and
+a `ChallengedBallotDecryption` that names it is `13.structure` in the record. What stops an administrator from having
+it decrypted anyway is narrower than that suggests. `TallyGuardian.DecryptBallotNonce`'s status test checks only the
+status the requester states, so it is a sanity check; the guardian's real authorization, the Q31 view
+(`IPublishedCastBallots`), protects cast ballots only and cannot hold a spoiled one. An administrator who relabels a
+spoiled ballot as challenged therefore gets its nonce decrypted (unrecorded ballots had the same gap before S10b).
+The recorded status itself is protected by the section seal and the signatures (S10b-6 onward); whether a guardian
+should also refuse an id_B, H_I or C_ξB,0 that matches a spoiled ballot of the sealed record is left to S10b-9 and
+S10b-19. In v2.0 11.D cannot fail on a spoiled ballot alone, because the one tally lists every manifest contest.
 
 ---
 
@@ -275,8 +340,8 @@ something that can be used on any machine"; #13: "we absolutely must be capable 
 programming language, and it should be relatively easy to do so. Space is a concern, which is why protobuf over
 json"). Protobuf on its own is not canonical. Its specification lets a parser accept fields in any order, repeated
 singular fields (last one wins, or messages merge), overlong varints, explicitly written default values, and unknown
-fields, and its "deterministic serialization" option promises stability only within one binary, not across languages
-or versions. So EGRF v2 is protobuf **plus a profile**:
+fields anywhere, and its "deterministic serialization" option promises stability only within one binary, not across
+languages or versions. So EGRF v2 is protobuf **plus a profile**:
 
 1. **Schema rules** (§4.2.1) restrict the `.proto` so that the standard encoders' natural output is the only valid
    encoding: no maps, no packed-or-unpacked choice, no signed or floating types.
@@ -290,12 +355,21 @@ The result is the property v1 had by grammar: a strict reader D and the writer E
 D(b) is defined, E(D(b)) = b. Every digest is over the bytes as stored, so a protobuf reader hashes items in place,
 never re-encoding GBs.
 
+**Forward compatibility (NQ-1).** The user wrote: "Protobuf tends to be backwards compatible by default, so we should
+be good with future versions already." The profile keeps that property without giving up uniqueness. A later format
+minor only appends fields, above every number a message already declares, so in a canonical encoding the fields an
+older reader does not know always come last, in ascending order (W6). An older reader keeps them when it re-encodes
+(the default in C#, Python, protobuf-es, Go and Java; the placement is pinned for C# and still to be pinned for the
+others, §4.4), so E(D(b)) = b still holds for it and every digest survives. It verifies what it understands and
+reports the rest (§7).
+
 ### 4.2 Profile rules (normative)
 
 #### 4.2.1 Schema rules
 
-The schema is `egrf_v2.proto` (§4.6), package `electionguard.egrf.v2`. A schema lint test (S10b-2) enforces these
-rules on the compiled descriptor, so a future edit cannot break them silently.
+The schema is `proto/electionguard/egrf/v2/egrf.proto` (§4.6), package `electionguard.egrf.v2`. A schema lint test
+(`EgrfSchemaLintTests`, S10b-2) enforces these rules on the compiled descriptor, and checks each one against a
+deliberately broken copy, so a future edit cannot break them silently.
 
 - **S1.** `syntax = "proto3"`.
 - **S2.** Field types are `uint32`, `uint64`, `bool`, an enum, `string`, `bytes`, a message of this package, or
@@ -309,17 +383,26 @@ rules on the compiled descriptor, so a future edit cannot break them silently.
 - **S5.** Within each message, fields (oneof members included) are declared in ascending field-number order. This is
   hygiene that keeps the schema readable, not the mechanism behind W1. All four tested runtimes write fields in
   field-number order even with scrambled declarations (feasibility run, `scratch_order.proto`).
-- **S6.** Field numbers are append-only. A format minor version adds fields only with numbers above every existing
-  field of that message, except the envelope's `extensions = 2047`, which stays last. Removed fields become
-  `reserved`. Hot messages (`EncryptedBallot`, `EncryptedContest`, `EncryptedField`, `HashedCiphertext`) keep every
-  field at 15 or below, so each tag is one byte.
+- **S6.** Field numbers are append-only. A format minor version adds fields only with numbers above every number the
+  message already declares, reserved numbers included, so an added field follows every older field on the wire (the
+  basis of W6). The one exception is `RecordItem`: a new item type is a new member of its oneof, at any number not
+  used or reserved before (§7). Removed fields become `reserved`, and a reserved number is never reused. Hot messages
+  (`EncryptedBallot`, `EncryptedContest`, `EncryptedField`, `HashedCiphertext`) keep every field at 15 or below, so
+  each tag is one byte. The lint test checks every schema change against the committed table `test/egrf/schema.json`
+  (§4.6): no field, reservation, message or enum value disappears or changes, and new fields are numbered above the
+  old ones.
 - **S7.** Every `bytes` field that carries a fixed-width value is annotated with `(width)` or `(width_multiple)`,
   plus `(omittable) = true` when it may be absent. Every enum has `..._UNSPECIFIED = 0`, which is invalid wherever
-  the field is required.
+  the field is required. The lint test holds the list of variable-length `bytes` fields (segment and TOC keys, the
+  manifest content, vendor values, the parts of a signed statement), so a new unannotated `bytes` field fails it.
 - **S8.** No regular (non-oneof) field number lies between the lowest and highest member numbers of a oneof in the
   same message. Rust's prost encodes a oneof at the position of its lowest-numbered member, whichever member is set
   (prost-derive's source says so in a TODO). With S8 that position is still field-number order. Today `RecordItem`
-  is the only oneof (members 1-100), and only `extensions = 2047` follows it.
+  is the only oneof (members 1-100), and it has no regular field at all. S8 also requires every oneof member to be a
+  message. W2 writes a set member even when its value is the default, so a scalar member could put an explicit
+  VARINT 0 on the wire; with message members, an explicit 0 never occurs, which is what lets W6 reject an unknown
+  VARINT of 0 without rejecting a canonical record of a newer minor that adds a oneof. `RecordItem` already
+  complies.
 
 #### 4.2.2 Wire rules: the canonical encoding of a message
 
@@ -336,8 +419,20 @@ rules on the compiled descriptor, so a future edit cannot break them silently.
   continuation, one byte for 0. A `bool` is the single byte 0x01 (false is absent).
 - **W5 Exact lengths.** A LEN record's length is the exact byte count of its payload, and a nested message's
   payload is that message's canonical encoding (recursively).
-- **W6 Known fields only.** Every field number is defined in the schema the record's `format_minor` names. A reader
-  that knows that minor rejects any other number (`R.encoding`); a reader older than the record follows §7.
+- **W6 Unknown fields (NQ-1).** Every field number is defined in the schema the record's `format_minor` names, so a
+  reader that knows that minor (or a later one) rejects any number its schema does not define (`R.encoding`). A
+  reader older than the record meets fields it does not know, and checks that the encoding is still canonical as far
+  as it can tell:
+  - every unknown field of a message comes after all of its known fields, and the unknown fields are in strictly
+    ascending number order (W1), except that a LEN field may repeat in contiguous records;
+  - each unknown number is above every number the reader's schema declares or reserves for that message (S6). The
+    one exception is `RecordItem`, whose only field may be an unknown oneof member: an item type the reader does not
+    know (D5, §7);
+  - each unknown field has wire type VARINT or LEN (W3), minimal varints (W4) and an exact length (W5); an unknown
+    VARINT is not 0 (W2: no explicitly written default; S8 keeps scalars out of every oneof, so no later minor can
+    write one) and occurs once (S3: a repeated numeric field would be LEN).
+  The reader cannot check an unknown LEN field's payload (message, string or bytes), so it is kept opaque, digested as
+  stored and reported (§7).
 - **W7 Repeated messages.** One LEN record per element, never packed.
 - **W8 Strings.** Valid UTF-8 (RFC 3629: no surrogate code points, no overlong forms). No normalization: labels
   compare byte for byte with the manifest's.
@@ -350,19 +445,19 @@ Optional fields, and how absence is expressed:
 |---|---|---|
 | `encrypted_at` (both cast ballot kinds), `DeviceClose.closed_at` | not recorded | message presence |
 | `ballot_ref` (all ballot items) | no reference | empty string |
-| `RecordHeader.election_info` | no facts given | empty repeated field |
 | `DeviceHeader.initial_hash`; `DeviceClose.closing_chaining_field`, `closing_hash`; `ChainCloseStatement.closing_hash` | no chaining | `(omittable)` bytes |
 | `EncryptedContest.undervote_difference_proof`, `null_vote_proof` | not tracked by the manifest | `(omittable)` bytes |
 | `EncryptedContest.contest_data`, `DecryptedContest.contest_data` | b_Λ = 0 | message presence |
 | `UncastSelection.option_label` | a null vector | empty string |
-| `UncastNonceRelease.ballot_nonce` | ξ_B not released (Q28) | `(omittable)` bytes |
+| `UncastNonceRelease.ballot_nonce` | ξ_B not released (Q28); present exactly when the released item is compact (NQ-2) | `(omittable)` bytes |
+| `UncastNonceRelease.contests` | the released item is compact, so the nonces follow from ξ_B | empty repeated field |
 | `SignedStatement.signer_key`, `timestamp_token` | out of band; no token | empty bytes |
 
 Fields where 0 is a meaningful value, so the value 0 is written as absence (the proto3 rule, and no ambiguity):
 `DeviceHeader.chaining_mode` (0 = no chaining), `DecryptedField.value` (σ = 0), `DecryptedTallyField.tally`
 (t = 0), `EncryptedTallyContest.cast_weight`, `RecordHeader.format_minor`, `SegmentHeader.first_ordinal`,
-`TocEntry.item_count` and `critical`, `Extension.critical`. Fields that are never 0 in a valid record, so are always
-present: every 1-based index, `weight`, `status`, `kind`, `format_major`, n and k.
+`TocEntry.item_count` and `critical`. Fields that are never 0 in a valid record, so are always present: every
+1-based index, `weight`, `status`, `kind`, `format_major`, n and k.
 
 ### 4.3 Decode rules (checked after parsing)
 
@@ -374,28 +469,30 @@ Re-serialization cannot see these, so every reader checks them explicitly. A fai
   contests) are structure (`N.structure`, §4.8). Values are big-endian b(x, w) (§5.1), leading zeros kept, never
   minimal-length integers.
 - **D2 Enums.** The value is a declared member, and not `UNSPECIFIED` where the field is required. Proto3 enums are
-  open, so a runtime keeps an unknown integer; the reader rejects it. `SectionType` additionally admits the vendor
-  range 32768-65533 in `SegmentHeader` and `TocEntry`.
+  open, so a runtime keeps an unknown integer; a reader that knows the record's minor rejects it. A reader older than
+  the record treats an undeclared value as content it does not understand (a later minor may add enum values, §7):
+  the checks that depend on it are `NotEvaluable` with `R.version`, and the item is still digested. `SectionType`
+  additionally admits the vendor range 32768-65533 in `SegmentHeader` and `TocEntry`.
 - **D3 Timestamps.** `seconds` in [0, 253402300799], which is 1970-01-01T00:00:00Z to 9999-12-31T23:59:59Z, and
   `nanos` in {0, 1,000,000, ..., 999,000,000}: UTC, millisecond precision, as S10a's `EncryptionTimestamp`
   (follow-up #6). S10a's `DateTimeOffset` also admits times before 1970, so the writer's mapper refuses a pre-1970
   time rather than writing negative seconds.
 - **D4 Integer bounds.** `uint32` values below 2^31 (the spec's 4-byte indices have MSB 0, §5.1.3, and C# reads them
   as `int`); `uint64` values below 2^63 (`long`).
-- **D5 Envelope.** A `RecordItem` has exactly one oneof member set. `extensions` tags are strictly ascending and at
-  least 1.
+- **D5 Envelope.** A `RecordItem` has exactly one field: one member of its oneof. For a reader older than the record
+  that field may be an unknown member, an item type the reader does not know (§7). An empty `RecordItem`, or one with
+  two fields, fails.
 - **D6 Segment header.** A `SegmentHeader` passes the §4.4 check like an item, and D1-D4 where they apply. `magic` is
   `"EGRF"` and `format_major` is 2, and the header agrees with the file's path (§5.3.1). Any failure is
   `R.container`.
-- **D7 Keyed lists.** `RecordHeader.election_info` keys are non-empty, strictly ascending by UTF-8 bytes (so unique),
-  and each is a registry key or starts with `x-`. Values are non-empty. A registry key whose value breaks its syntax
-  (for example an `election_date` that is not an RFC 3339 full-date) is `R.structure`.
+
+(Revision 2's D7, the key order of `election_info`, is gone with that field, NQ-4.)
 
 **The decode rules are mandatory in every conformant reader.** The feasibility run confirmed that no runtime enforces
 any of them. In all four runtimes tested, every decode-rule negative vector passed parse, re-serialize and compare:
 an undeclared enum value, `UNSPECIFIED` status, a `uint32` ≥ 2^31, sub-millisecond nanos, negative seconds, a wrong
-width or width multiple, an absent width field that is not omittable, an empty `RecordItem`, and extension tags out
-of order.
+width or width multiple, an absent width field that is not omittable, and an empty `RecordItem`. They apply to known
+fields; an unknown field's payload is opaque (W6).
 
 **Range is not a decode rule** (#11: "Out of range values are a problem for a verifier, not the election record
 format"). A 512-byte value ≥ p or a 32-byte value ≥ q decodes. The verifier reports it under the spec's lettered
@@ -405,53 +502,80 @@ check (§4.8).
 
 Two methods are conformant. Both run on the stored bytes of each item, before its leaf hash is accepted.
 
-**Method A, the wire walk (the normative reference).** About 120 lines over the schema's descriptor (or a transcribed
-table of field numbers, types and width options):
+**Method A, the wire walk (the normative reference).** About 150 lines over the schema's descriptor (or a transcribed
+table of field numbers, types, width options and reserved numbers, such as `test/egrf/schema.json`):
 
 ```
-walk(bytes, message type):
-  last = 0
+walk(bytes, message type, reader knows the record's minor):
+  last = 0; in_unknown = false
   while bytes remain:
     tag = read minimal varint                      -- W4
     number, wiretype = tag >> 3, tag & 7
-    field = schema(message type, number) or fail   -- W6
-    wiretype == field's wire type or fail          -- W3
-    number > last, or (number == last and field is repeated and the previous record was this field) or fail  -- W1, W2
-    value = read minimal varint, or read minimal-varint length then exactly that many bytes  -- W4, W5
-    implicit-presence field: value != default or fail                                         -- W2
-    string: valid UTF-8 or fail                                                               -- W8
-    message: walk(value, field's message type)                                                -- W5
+    field = schema(message type, number)
+    if field is known:
+      not in_unknown or fail                       -- W6: known fields all come before unknown ones
+      wiretype == field's wire type or fail        -- W3
+      number > last, or (number == last and field is repeated and the previous record was this field) or fail  -- W1, W2
+      value = read minimal varint, or read minimal-varint length then exactly that many bytes  -- W4, W5
+      implicit-presence field: value != default or fail                                         -- W2
+      string: valid UTF-8 or fail                                                               -- W8
+      message: walk(value, field's message type, ...)                                           -- W5
+    else:                                          -- W6
+      reader is older than the record or fail (R.encoding)
+      message type is RecordItem and this is its only field: an unknown item type (D5, §7)
+        or number > every number the schema declares or reserves for the message, or fail
+      number > last, or (number == last and wiretype == LEN and the previous record was this field) or fail
+      wiretype is VARINT (value != 0: W2, S8) or LEN (minimal length, exactly that many bytes), or fail
+      in_unknown = true; record (message type, number) as content not understood
     last = number
-  then apply D1-D7 to the decoded values
+  then apply D1-D6 to the decoded known values
 ```
 
-**Method B, parse, re-serialize, compare.** Parse with the generated code **discarding unknown fields**, apply the
-decode rules D1-D7, serialize, and compare with the input byte for byte. Equal bytes mean canonical.
+**Method B, parse, re-serialize, compare.** Parse with the generated code **keeping unknown fields**, apply the
+decode rules D1-D6, serialize, and compare with the input byte for byte. Equal bytes mean canonical as far as the
+reader's schema reaches. Then apply the W6 rule for unknown fields, as below.
 
 - **Why it is sound.** Method B accepts only bytes that equal a canonical serializer's output. A runtime whose
   parser is lenient or quirky can therefore cause false rejections, never false acceptances. The checks fall out as
-  follows. W1, W2, W4 and W5 change the bytes. Under W6, a discarded unknown field shortens the output. W3 either
-  becomes an unknown field or makes the parse throw (protobuf-es reads the payload by the schema's type, loses sync
-  and throws "illegal tag"). W8 either throws or is replaced, which changes the bytes.
-- **Discarding unknown fields is required, and each runtime spells it differently.** C# Google.Protobuf, Python
-  (upb) and protobuf-es keep unknown fields by default and write them back out. With those defaults, all three
-  accepted every unknown-field vector in the feasibility run. The calls:
+  follows. W1, W2, W4 and W5 change the bytes. W3 either becomes an unknown field or makes the parse throw (protobuf-es
+  reads the payload by the schema's type, loses sync and throws "illegal tag"). W8 either throws or is replaced,
+  which changes the bytes. An unknown field placed before a known one is written back after the known fields, which
+  changes the bytes (pinned for C# by `EgrfUnknownFieldBehaviourTests`).
+- **Keeping unknown fields is required (NQ-1), and is the default of every runtime below that has the option.**
+  That is what makes a newer record's bytes survive a re-encode by an older library. The v2 revision of this design
+  discarded them instead; under the new rule that would make every newer-minor item fail Method B.
 
-  | Runtime | Discard unknown fields | Tested |
-  |---|---|---|
-  | C# Google.Protobuf | `Parser.WithDiscardUnknownFields(true)` | yes |
-  | Python protobuf (upb) | `msg.DiscardUnknownFields()` after parsing | yes |
-  | protobuf-es | `fromBinary(schema, bytes, { readUnknownFields: false })` | yes |
-  | protobufjs | always discards; no option | yes |
-  | Go | `proto.UnmarshalOptions{DiscardUnknown: true}` | no |
-  | Java | `DiscardUnknownFieldsParser.wrap(parser)` | no |
-  | Rust prost | always discards | no |
+  | Runtime | Keeps unknown fields | Where it writes them back | Evidence |
+  |---|---|---|---|
+  | C# Google.Protobuf | by default | after the known fields, in the order read | tested (`EgrfUnknownFieldBehaviourTests`, all three cases) |
+  | Python protobuf (upb) | by default | kept and written back (feasibility run); placement and order not tested | feasibility run, partial |
+  | protobuf-es | by default (`readUnknownFields: true`) | kept and written back (feasibility run); placement and order not tested | feasibility run, partial |
+  | Go | by default (documented) | not tested | none |
+  | Java | by default for proto3 since 3.5 (documented) | not tested | none |
+  | protobufjs | never: always discards | n/a | feasibility run |
+  | Rust prost | never: always discards (documented) | n/a | none |
 
+  S10b-3 pins the untested placements with the newer-minor golden vectors (§5.7), and S10b-12 runs them in Python;
+  a runtime that fails them uses Method A for newer-minor records.
+
+- **Method B does not check the unknown fields themselves.** C# writes unknown fields back in the order it read
+  them, so a descending unknown tail survives re-encoding unchanged (pinned by
+  `EgrfUnknownFieldBehaviourTests.DescendingUnknownTail_SurvivesReEncoding_SoMethodBAloneDoesNotCatchIt`), and no
+  runtime can tell whether an unknown number lies in a reserved range. So the W6 rule is a separate step:
+  - **The record's minor is not newer than the reader's** (the normal case): any unknown field is `R.encoding`. A
+    parse that discards unknown fields detects one in the same pass, because discarding shortens the bytes and the
+    comparison fails. So on this path a runtime may use its discard option, and protobufjs and prost, which always
+    discard, are conformant here. The calls: C# `Parser.WithDiscardUnknownFields(true)`, Python
+    `msg.DiscardUnknownFields()` after parsing, protobuf-es `fromBinary(schema, bytes, { readUnknownFields: false })`,
+    Go `proto.UnmarshalOptions{DiscardUnknown: true}`, Java `DiscardUnknownFieldsParser.wrap(parser)`.
+  - **The record's minor is newer**: the reader runs Method A, whose walk checks W6, or Method B keeping unknown
+    fields followed by Method A's unknown-field branch. Runtimes that always discard (protobufjs, prost) must use
+    Method A for these records.
 - **Field order.** Method B relies on the runtime writing a map-free message's fields in field-number order. All four
   tested runtimes do, oneof members included. S8 covers prost. The golden vectors (§5.7) arbitrate, and a runtime
   that fails any of them uses Method A.
 - **The decode rules are separate code.** Parse, re-serialize and compare accepted every D-rule vector in every
-  runtime (§4.3), so a reader that runs Method B without D1-D7 is not conformant.
+  runtime (§4.3), so a reader that runs Method B without D1-D6 is not conformant.
 - **Cost.** One serialization per item, a few microseconds for a 13 KB ballot, against about 1 ms of verification
   cryptography per ballot.
 
@@ -462,8 +586,13 @@ to bytes was lossless in Python, C# and protobuf-es. Method A rejected all 37 ha
 rule this section names. Method B rejected the same 27 wire-level vectors in all four runtimes, and needed explicit
 decode-rule code (D1-D5, which were the rules then) for the other 10. Java and Go were not tested.
 
-The C# reference uses Method B on the hot path and Method A for records of a newer minor (§7) and as a cross-check in
-tests. The Python reference reader (§5.7) uses Method A only, with the standard library.
+The C# reference uses Method B on the hot path (with `WithDiscardUnknownFields(true)` when the record's minor is not
+newer than the library's, which folds the W6 check into the same comparison) and Method A for records of a newer
+minor (§7) and as a cross-check in tests. The Python reference reader (§5.7) uses Method A only, with the standard
+library.
+
+(The feasibility run's negative vectors predate NQ-1. Its "unknown field" vectors stay negatives for a reader at the
+record's minor; S10b-3 adds the newer-minor vectors of §5.7.)
 
 ### 4.5 Sections, phases and canonical order
 
@@ -523,504 +652,39 @@ Rules for device sections:
   (eq. 72 with 0x2A for regular devices; eq. 119 with 0x43 for pre-encrypting ones; 8.C/16.D). Strictly ascending
   keys make "one device, two sections of the same kind" a structural error found in O(1).
 - A regular section holds `encrypted_ballot` items only, of any status. A pre-encrypting section holds
-  `pre_encrypted_cast_ballot` and `pre_encrypted_uncast_ballot` items only, interleaved in print order. Anything else
-  is `8.structure` or `16.structure`.
+  `pre_encrypted_cast_ballot`, `pre_encrypted_uncast_ballot` and `pre_encrypted_compact_uncast_ballot` items only,
+  interleaved in print order. Anything else is `8.structure` or `16.structure`.
 - Under no chaining, the order is still the device's recorded processing order. Only the chain-close attestation
   fixes it cryptographically (§4.9).
 - Spoiled ballots stay in their chain position (#4), so 8.E and 8.G hold on an honest record.
 
 ### 4.6 The schema (normative)
 
-The schema below is `docs/spec-compliance/egrf_v2.proto`, copied verbatim. On implementation (S10b-2) it moves to
-`proto/electionguard/egrf/v2/egrf.proto` at the repository root, a language-neutral location that the C# build, the
-Python reference reader and any other implementation share.
+The schema is [`proto/electionguard/egrf/v2/egrf.proto`](../../proto/electionguard/egrf/v2/egrf.proto), package
+`electionguard.egrf.v2`. That file is the one normative copy (S10b-2 moved it there from `docs/spec-compliance/`;
+this document no longer embeds it, so the two cannot drift). It sits at the repository root, outside any project,
+because every implementation shares it: the Core build generates its C# types from it (§8.1), and the Python
+reference reader transcribes it. `test/egrf/schema.json` is the same schema as a table (field numbers, types,
+labels, width options, reserved numbers; `"label": "optional"` is the descriptor's name for a singular field, not
+the forbidden `optional` keyword), generated from the compiled descriptor by `EgrfSchemaLintTests`, which
+also enforces S1-S8 (§4.2.1) and checks every change against the committed table for S6. It compiles with the
+protoc in the Grpc.Tools NuGet package (2.80.0, libprotoc 31.1) to C# and Python.
 
-```proto
-// EGRF v2: the ElectionGuard Record Format, canonical protobuf profile.
-//
-// This schema is NORMATIVE. The profile rules that make every item's bytes unique (field order,
-// presence, widths, varints, framing) are in the design document,
-// docs/spec-compliance/2026-10-08-election-record-design.md §4.2, and are summarized here:
-//
-//  - proto3. Field types are restricted to uint32, uint64, bool, enum, string, bytes, message and
-//    google.protobuf.Timestamp. No maps, floating point, signed or fixed-width integer types, Any,
-//    groups, `optional` keyword, or repeated scalar numeric fields (so packing never arises).
-//  - Fields are declared, and MUST be written, in ascending field-number order.
-//  - Implicit presence: a scalar, string or bytes field is written if and only if it differs from its
-//    default (0, false, the zero enum value, empty). Message fields are written iff set.
-//  - Every list is `repeated <message>` or one `bytes` field holding a concatenation of fixed-width
-//    values (option width_multiple). Fixed-width values are big-endian b(x, w) (spec §5.1): Z_p 512
-//    bytes, Z_q 32, hashes 32, chaining fields 36. Range (x < p, x < q) is NOT a format rule; the
-//    verifier reports it under the spec's lettered checks.
-//  - Timestamps are UTC with millisecond precision: seconds in [0, 253402300799] (1970-01-01 to
-//    9999-12-31), nanos a multiple of 1,000,000.
-//  - No oneof's member numbers may enclose a regular field's number (lint rule S8), so runtimes that
-//    encode a oneof at its lowest member's position (prost) still write field-number order.
-//  - No runtime enforces the decode rules (widths, enum membership, integer bounds, timestamp
-//    precision, envelope and key order). Every conformant reader checks them itself.
-//
-// Spec basis: ElectionGuard v2.1.0 §3.7 (pp.55-56), §4.4 (pp.62-63), Verifications 1-19.
-// Comments name the spec symbol each field carries.
+What the schema holds, by `RecordItem` member (the oneof field number is the item type):
 
-syntax = "proto3";
+| Members | Phase | Messages |
+|---|---|---|
+| 1-5 | setup | `RecordHeader` (format version only, NQ-4), `Parameters`, `ManifestFile`, `GuardianPublicKey`, `ElectionKeys` |
+| 10-16 | voting | `DeviceHeader`, `EncryptedBallot`, `PreEncryptedCastBallot`, `PreEncryptedUncastBallot` (full form), `DeviceClose`, `device_attestation` (`SignedStatement`), `PreEncryptedCompactUncastBallot` (compact form, NQ-2) |
+| 20-22 | aggregated | `EncryptedTallyHeader`, `EncryptedTallyContest`, `ContestDataRequest` |
+| 30-33 | final | `DecryptedTallyContest`, `ChallengedBallotDecryption`, `ContestDataDecryption`, `UncastNonceRelease` |
+| 40-44 | statements | `ChainCloseStatement`, `SectionSealStatement`, `PrefixCheckpointStatement`, `RecordStatement`, `record_signature` (`SignedStatement`) |
+| 50-51 | digest leaves | `TocEntry`, `ConfirmationCodeLeaf` |
+| 100 | vendor sections | `VendorItem` |
 
-package electionguard.egrf.v2;
+`RecordItem` has no other field. Number 2047 (the draft's per-item extension list) and `RecordHeader` field 3 (the
+draft's `election_info`) are `reserved`: neither was ever published, but draft feasibility vectors used them.
 
-import "google/protobuf/descriptor.proto";
-import "google/protobuf/timestamp.proto";
-
-option csharp_namespace = "ElectionGuard.Core.Record.Protobuf";
-option go_package = "github.com/Sharkbait-Software/electionguard-cs/proto/electionguard/egrf/v2;egrfv2";
-option java_multiple_files = true;
-
-// ---- profile annotations (machine-readable width rules for any-language readers) -----------------
-
-// The numbers 50001-50003 are DRAFT placeholders in protobuf's 50000-99999 range for in-house use.
-// Before the schema is published they are replaced by numbers registered in protobuf's global
-// extension registry (S10b-18), so that no third party's options collide in a shared descriptor pool.
-extend google.protobuf.FieldOptions {
-  // A present bytes field has exactly this many bytes.
-  uint32 width = 50001;
-  // A present bytes field has a positive multiple of this many bytes.
-  uint32 width_multiple = 50002;
-  // A width-constrained bytes field that may be absent. Without it, absence is a width error.
-  bool omittable = 50003;
-}
-
-// ---- enumerations -------------------------------------------------------------------------------
-
-// Section types. The phase is min(type >> 8, 3): 0 setup, 1 voting (sealed), 2 aggregated, 3 final.
-// 32768-65533 are vendor sections (final phase); proto3 enums are open, so they travel as numbers.
-enum SectionType {
-  SECTION_TYPE_UNSPECIFIED = 0;
-  SECTION_TYPE_HEADER = 1;
-  SECTION_TYPE_PARAMETERS = 2;
-  SECTION_TYPE_MANIFEST = 3;
-  SECTION_TYPE_GUARDIANS = 4;
-  SECTION_TYPE_ELECTION_KEYS = 5;
-  SECTION_TYPE_DEVICE = 257;                         // 0x0101; key = device key (33 bytes)
-  SECTION_TYPE_DEVICE_ATTESTATIONS = 258;            // 0x0102
-  SECTION_TYPE_ENCRYPTED_TALLY = 513;                // 0x0201
-  SECTION_TYPE_CONTEST_DATA_REQUESTS = 514;          // 0x0202
-  SECTION_TYPE_DECRYPTED_TALLY = 769;                // 0x0301
-  SECTION_TYPE_CHALLENGED_BALLOT_DECRYPTIONS = 770;  // 0x0302
-  SECTION_TYPE_CONTEST_DATA_DECRYPTIONS = 771;       // 0x0303
-  SECTION_TYPE_UNCAST_NONCE_RELEASES = 772;          // 0x0304
-  SECTION_TYPE_TOC = 65534;                          // pseudo-section: the claimed TOC; never in a TOC
-  SECTION_TYPE_SIGNATURES = 65535;                   // pseudo-section: outside every root
-}
-
-enum DeviceKind {
-  DEVICE_KIND_UNSPECIFIED = 0;
-  DEVICE_KIND_REGULAR = 1;          // Verification 8; H_DI by eq. (72)
-  DEVICE_KIND_PRE_ENCRYPTING = 2;   // Verification 16; H_DI by eq. (119)
-}
-
-// §3.7 "the status of the ballot". Anything in the record was submitted; a ballot that was neither
-// cast nor challenged is SPOILED. UNSPECIFIED is invalid in a record.
-enum BallotStatus {
-  BALLOT_STATUS_UNSPECIFIED = 0;
-  BALLOT_STATUS_CAST = 1;
-  BALLOT_STATUS_CHALLENGED = 2;
-  BALLOT_STATUS_SPOILED = 3;
-}
-
-enum RecordPhase {
-  RECORD_PHASE_UNSPECIFIED = 0;
-  RECORD_PHASE_SETUP = 1;
-  RECORD_PHASE_SEALED = 2;
-  RECORD_PHASE_AGGREGATED = 3;
-  RECORD_PHASE_FINAL = 4;
-}
-
-// ---- framing ------------------------------------------------------------------------------------
-
-// A segment file is a varint-length-delimited stream: one SegmentHeader, then RecordItems
-// (WriteDelimitedTo / parseDelimitedFrom / protodelim / sizeDelimitedEncode). Every frame's length
-// is at most 64 MiB (67,108,864 bytes); a reader rejects a larger length before allocating. The
-// SegmentHeader is checked for canonicality like an item, and must agree with the file's path.
-message SegmentHeader {
-  string magic = 1;              // "EGRF"
-  uint32 format_major = 2;       // 2
-  SectionType section_type = 3;
-  bytes key = 4;                 // empty, except a device section's 33-byte device key
-  uint64 first_ordinal = 5;      // 0-based ordinal, within the section, of this segment's first item
-}
-
-// Every item, statement and digest leaf is a RecordItem. Its canonical bytes are what is stored,
-// hashed (leaf = SHA-256(0x00 || bytes)) and signed; the oneof field number is the item type.
-message RecordItem {
-  oneof item {
-    // setup
-    RecordHeader record_header = 1;
-    Parameters parameters = 2;
-    ManifestFile manifest_file = 3;
-    GuardianPublicKey guardian_public_key = 4;
-    ElectionKeys election_keys = 5;
-    // voting: device sections and attestations
-    DeviceHeader device_header = 10;
-    EncryptedBallot encrypted_ballot = 11;
-    PreEncryptedCastBallot pre_encrypted_cast_ballot = 12;
-    PreEncryptedUncastBallot pre_encrypted_uncast_ballot = 13;
-    DeviceClose device_close = 14;
-    SignedStatement device_attestation = 15;
-    // aggregated
-    EncryptedTallyHeader encrypted_tally_header = 20;
-    EncryptedTallyContest encrypted_tally_contest = 21;
-    ContestDataRequest contest_data_request = 22;
-    // final
-    DecryptedTallyContest decrypted_tally_contest = 30;
-    ChallengedBallotDecryption challenged_ballot_decryption = 31;
-    ContestDataDecryption contest_data_decryption = 32;
-    UncastNonceRelease uncast_nonce_release = 33;
-    // statements: signed payloads, never section items
-    ChainCloseStatement chain_close_statement = 40;
-    SectionSealStatement section_seal_statement = 41;
-    PrefixCheckpointStatement prefix_checkpoint_statement = 42;
-    RecordStatement record_statement = 43;
-    SignedStatement record_signature = 44;          // signatures pseudo-section only
-    // digest leaves
-    TocEntry toc_entry = 50;                        // TOC pseudo-section and the TOC tree
-    ConfirmationCodeLeaf confirmation_code_leaf = 51; // codes_root leaves; never stored
-    // vendor sections only
-    VendorItem vendor_item = 100;
-  }
-  // Open question NQ-1. Strictly ascending by tag; absent in every v2.0 writer's output.
-  repeated Extension extensions = 2047;
-}
-
-message Extension {
-  uint32 tag = 1;      // 1-65535 registry; 65536 and above vendor
-  bool critical = 2;   // a reader that does not know the tag must not evaluate the item
-  bytes value = 3;
-}
-
-message VendorItem {
-  string type_url = 1;  // vendor-chosen identifier; never verified
-  bytes value = 2;
-}
-
-// ---- setup --------------------------------------------------------------------------------------
-
-// The format version, plus §3.7's "information sufficient to uniquely identify and describe the
-// election ... (not otherwise included in the election manifest)". Nothing the manifest carries
-// (election id, contests, styles, chaining mode, hash trimming) is repeated here.
-message RecordHeader {
-  uint32 format_major = 1;                 // 2
-  uint32 format_minor = 2;                 // 0 (absent) in v2.0
-  repeated ElectionInfo election_info = 3; // strictly ascending by key bytes; may be empty
-}
-
-// One descriptive fact about the election. Covered by the root and signatures; never verified.
-// Registry keys (v2.0): "election_name", "election_date" (RFC 3339 full-date, YYYY-MM-DD; a
-// multi-day election repeats it as "election_date.2", ...), "election_type", "jurisdiction",
-// "location", "administrator". Other keys are "x-<vendor>-<name>". Producer software and creation
-// time are not election facts; they go in meta.json, outside the root.
-message ElectionInfo {
-  string key = 1;    // non-empty; a registry key or "x-" prefixed
-  string value = 2;  // non-empty
-}
-
-message Parameters {
-  bytes version = 1 [(width) = 32];   // eq. (4) ver: "v2.1.0" then 0x00 padding to 32 bytes
-  bytes p = 2 [(width) = 512];        // raw b(p,512), not an element of Z_p (decision G1)
-  bytes q = 3 [(width) = 32];
-  bytes r = 4 [(width) = 512];
-  bytes g = 5 [(width) = 512];
-  uint32 n = 6;
-  uint32 k = 7;
-  bytes h_p = 8 [(width) = 32];       // claim; Verification 1.E
-}
-
-message ManifestFile {
-  string media_type = 1;  // v2.0: "application/vnd.electionguard.manifest+json;format=1", whose
-                          // parser is S10a's strict ManifestSerializer reading (UTF-8 without a
-                          // BOM, no unknown properties); a writer refuses content it cannot parse
-  bytes content = 2;      // the manifest exactly as entered; the H_B input of eq. (5); never re-encoded
-  bytes h_b = 3 [(width) = 32];  // claim; Verification 1.F
-}
-
-message GuardianPublicKey {
-  uint32 index = 1;                                      // i, 1..n
-  bytes vote_commitments = 2 [(width_multiple) = 512];  // K_{i,0} || ... || K_{i,k-1}
-  bytes data_commitments = 3 [(width_multiple) = 512];  // K-hat_{i,0} || ... || K-hat_{i,k-1}
-  bytes kappa = 4 [(width) = 512];                       // kappa_i
-  bytes vote_proof = 5 [(width_multiple) = 32];          // c_i || v_{i,0} || ... || v_{i,k}
-  bytes data_proof = 6 [(width_multiple) = 32];          // c-hat_i || v-hat_{i,0} || ... || v-hat_{i,k}
-}
-
-message ElectionKeys {
-  bytes k = 1 [(width) = 512];      // K (claim; 3.A)
-  bytes k_hat = 2 [(width) = 512];  // K-hat (claim; 3.B)
-  bytes h_e = 3 [(width) = 32];     // H_E (claim; 4.A)
-}
-
-// ---- voting -------------------------------------------------------------------------------------
-
-message DeviceHeader {
-  DeviceKind kind = 1;             // = the section key's first byte
-  string device_id = 2;            // S_device
-  bytes h_di = 3 [(width) = 32];   // = the section key's last 32 bytes
-  uint32 chaining_mode = 4;        // §3.4.4 identifier: 0 none (absent), 1 simple; must equal the
-                                   // manifest's (8.D/16.E are per device, so the device states it)
-  bytes initial_hash = 5 [(width) = 32, (omittable) = true];  // H_0; present iff simple chaining
-}
-
-message HashedCiphertext {
-  bytes c0 = 1 [(width) = 512];
-  bytes c1 = 2 [(width_multiple) = 32];  // 32 (ballot nonce) or 32 * b_Lambda (contest data)
-  bytes c2 = 3 [(width) = 64];           // b(c,32) || b(v,32) (Q20)
-}
-
-message EncryptedField {
-  bytes alpha = 1 [(width) = 512];
-  bytes beta = 2 [(width) = 512];
-  bytes range_proof = 3 [(width_multiple) = 64];  // (c_j || v_j), j = 0..R (or 0..bound, Q2)
-}
-
-message EncryptedContest {
-  uint32 index = 1;                      // ind_c
-  repeated EncryptedField fields = 2;    // manifest order: options, then supplemental fields (Q1/Q14)
-  bytes limit_proof = 3 [(width_multiple) = 64];                                     // eq. (62), L+1 pairs
-  bytes undervote_difference_proof = 4 [(width_multiple) = 64, (omittable) = true];  // iff tracked (Q15)
-  bytes null_vote_proof = 5 [(width_multiple) = 64, (omittable) = true];             // iff tracked (Q17)
-  HashedCiphertext contest_data = 6;     // iff b_Lambda > 0 (S6)
-  bytes contest_hash = 7 [(width) = 32]; // chi
-}
-
-message EncryptedBallot {
-  bytes id_b = 1 [(width) = 32];        // first, so an id-only scan reads one field per frame
-  bytes h_i = 2 [(width) = 32];
-  string ballot_style = 3;
-  BallotStatus status = 4;              // CAST, CHALLENGED or SPOILED; never UNSPECIFIED
-  uint32 weight = 5;                    // >= 1, so always present (§3.5)
-  google.protobuf.Timestamp encrypted_at = 6;   // G40; ms UTC; absent when not recorded
-  repeated EncryptedContest contests = 7;       // ascending index; exactly the style's contests
-  bytes confirmation_code = 8 [(width) = 32];   // H_C
-  bytes chaining_field = 9 [(width) = 36];      // B_C
-  HashedCiphertext encrypted_ballot_nonce = 10; // C_xiB (§3.3.4); c1 exactly 32 bytes
-  string ballot_ref = 11;                       // optional free text; unverified, bound by no hash
-}
-
-message SelectedVector {
-  bytes vector = 1 [(width_multiple) = 1024];  // m x (alpha || beta), option order
-  bytes psi = 2 [(width) = 32];                // selection hash psi
-  string short_code = 3;
-}
-
-message PreEncryptedCastContest {
-  EncryptedContest contest = 1;                         // combined vector, standard proofs (Q26: no contest data)
-  bytes selection_hashes = 2 [(width_multiple) = 32];  // all m+L psi, strictly ascending
-  repeated SelectedVector selected = 3;                 // exactly L, strictly ascending by psi (Q27)
-}
-
-message PreEncryptedCastBallot {
-  bytes id_b = 1 [(width) = 32];
-  bytes h_i = 2 [(width) = 32];
-  string ballot_style = 3;
-  reserved 4;                                   // status: CAST, implied by the item type
-  uint32 weight = 5;
-  google.protobuf.Timestamp encrypted_at = 6;   // when the cast record was formed
-  repeated PreEncryptedCastContest contests = 7;
-  bytes confirmation_code = 8 [(width) = 32];   // eq. (116)
-  bytes chaining_field = 9 [(width) = 36];
-  HashedCiphertext encrypted_ballot_nonce = 10;  // C_xiB
-  string ballot_ref = 11;
-}
-
-message UncastSelection {
-  uint32 selection_index = 1;   // eq. (121)'s j: option index, or m+l for the l-th null vector
-  string option_label = 2;      // absent exactly on null vectors
-  bytes vector = 3 [(width_multiple) = 1024];  // m x (alpha || beta)
-  bytes psi = 4 [(width) = 32];
-  string short_code = 5;
-}
-
-message UncastContest {
-  uint32 index = 1;
-  string label = 2;
-  repeated UncastSelection selections = 3;  // m+L, ascending selection_index
-  bytes contest_hash = 4 [(width) = 32];
-}
-
-// The printed content of a pre-encrypted ballot that was not cast: returned uncast, or printed and
-// never returned (both are challenged). Its nonces are released in the final phase (UncastNonceRelease).
-message PreEncryptedUncastBallot {
-  bytes id_b = 1 [(width) = 32];
-  bytes h_i = 2 [(width) = 32];
-  string ballot_style = 3;
-  reserved 4, 5, 6;                             // status CHALLENGED is implied; no weight or time
-  repeated UncastContest contests = 7;          // ascending index
-  bytes confirmation_code = 8 [(width) = 32];
-  bytes chaining_field = 9 [(width) = 36];
-  HashedCiphertext encrypted_ballot_nonce = 10;  // C_xiB
-  string ballot_ref = 11;
-}
-
-message DeviceClose {
-  uint64 ballot_count = 1;   // l = the number of ballot items in the section
-  bytes closing_chaining_field = 2 [(width) = 36, (omittable) = true];  // B-bar_C; iff simple chaining
-  bytes closing_hash = 3 [(width) = 32, (omittable) = true];            // H-bar; iff simple chaining
-  google.protobuf.Timestamp closed_at = 4;
-}
-
-// A signed statement: a device attestation (in R_sealed) or a detached record signature.
-message SignedStatement {
-  bytes statement = 1;        // the canonical RecordItem bytes of a statement, exactly as signed.
-                              // Opaque to the wire walk, so the verifier checks it as a RecordItem
-                              // (canonicality, decode rules, member 40-43) before anything else.
-  string algorithm = 2;       // registry: ecdsa-p256-sha256, rsa-pss-sha256, ed25519, x509-cms-detached
-  bytes key_id = 3;
-  bytes signer_key = 4;       // public key or certificate chain; may be absent (out of band)
-  bytes signature = 5;
-  bytes timestamp_token = 6;  // RFC 3161 TimeStampToken over SHA-256(statement); optional
-}
-
-// ---- aggregated ---------------------------------------------------------------------------------
-
-message EncryptedTallyHeader {
-  uint64 cast_ballot_count = 1;   // both kinds; checked (R.summary)
-  uint64 total_cast_weight = 2;
-}
-
-message EncryptedTallyContest {
-  uint32 index = 1;
-  bytes fields = 2 [(width_multiple) = 1024];   // per manifest field: A || B
-  uint64 cast_weight = 3;                       // S10a: sum of W over cast ballots listing the contest
-}
-
-message BallotLocator {
-  DeviceKind kind = 1;
-  bytes h_di = 2 [(width) = 32];
-  uint64 position = 3;   // 1-based chain position (the spec's j)
-}
-
-// A contest-data ciphertext "marked for decryption" (§3.6.1), sealed before any decryption.
-message ContestDataRequest {
-  BallotLocator ballot = 1;        // a cast regular ballot
-  bytes h_i = 2 [(width) = 32];    // binding: must equal the ballot's
-  uint32 contest_index = 3;
-}
-
-// ---- final --------------------------------------------------------------------------------------
-
-message DecryptedTallyField {
-  uint32 index = 1;                      // manifest option or field index
-  string label = 2;
-  uint64 tally = 3;                      // t
-  bytes encoded_tally = 4 [(width) = 512];  // T = K^t
-  bytes proof = 5 [(width) = 64];        // c || v
-}
-
-message DecryptedTallyContest {
-  uint32 index = 1;
-  string label = 2;
-  repeated DecryptedTallyField fields = 3;
-}
-
-message DecryptedField {
-  uint32 index = 1;
-  string label = 2;
-  uint32 value = 3;                 // sigma
-  bytes nonce = 4 [(width) = 32];   // xi_{i,j}
-}
-
-message ReleasedContestData {
-  bytes nonce = 1 [(width) = 32];          // xi_i
-  bytes data = 2 [(width_multiple) = 32];  // D, 32 * b_Lambda bytes
-}
-
-message DecryptedContest {
-  uint32 index = 1;
-  string label = 2;
-  repeated DecryptedField fields = 3;       // every field of the contest
-  ReleasedContestData contest_data = 4;     // iff the contest has contest data
-}
-
-// §3.6.7 decryption of a challenged regular ballot, in nonce form (S7): no proof, no xi_B.
-message ChallengedBallotDecryption {
-  BallotLocator ballot = 1;              // a CHALLENGED regular ballot
-  bytes h_i = 2 [(width) = 32];          // binding: must equal the ballot's
-  repeated DecryptedContest contests = 3;  // ascending index
-}
-
-// §3.6.6 decryption of one requested contest-data ciphertext.
-message ContestDataDecryption {
-  BallotLocator ballot = 1;
-  bytes h_i = 2 [(width) = 32];
-  uint32 contest_index = 3;
-  bytes beta = 4 [(width) = 512];
-  bytes proof = 5 [(width) = 64];          // c || v
-  bytes data = 6 [(width_multiple) = 32];  // D
-}
-
-message UncastContestNonces {
-  uint32 index = 1;
-  bytes nonces = 2 [(width_multiple) = 32];  // xi_{i,j,k}: (m+L) selections x m options, selection-major
-}
-
-// The opening of an uncast pre-encrypted ballot (§4.3: "returns the encryption nonces"; Q28).
-message UncastNonceRelease {
-  BallotLocator ballot = 1;                  // a PreEncryptedUncastBallot
-  bytes h_i = 2 [(width) = 32];
-  repeated UncastContestNonces contests = 3; // ascending index; every contest in v2.0
-  bytes ballot_nonce = 4 [(width) = 32, (omittable) = true];  // xi_B in plaintext, only when opted in (Q28)
-}
-
-// ---- statements ---------------------------------------------------------------------------------
-
-message ChainCloseStatement {
-  bytes h_e = 1 [(width) = 32];
-  bytes device_key = 2 [(width) = 33];   // kind byte || H_DI
-  string device_id = 3;
-  uint32 chaining_mode = 4;
-  uint64 ballot_count = 5;
-  bytes codes_root = 6 [(width) = 32];   // MTH over the section's confirmation codes, chain order
-  bytes closing_hash = 7 [(width) = 32, (omittable) = true];  // H-bar; iff simple chaining
-  google.protobuf.Timestamp closed_at = 8;
-}
-
-message SectionSealStatement {
-  bytes h_e = 1 [(width) = 32];
-  bytes device_key = 2 [(width) = 33];
-  uint64 item_count = 3;                 // l + 2 (header and close)
-  bytes section_root = 4 [(width) = 32];
-}
-
-message PrefixCheckpointStatement {
-  bytes h_e = 1 [(width) = 32];
-  bytes device_key = 2 [(width) = 33];
-  uint64 ballot_count = 3;
-  bytes codes_root = 4 [(width) = 32];
-  google.protobuf.Timestamp at = 5;
-}
-
-message RecordStatement {
-  RecordPhase phase = 1;
-  bytes root = 2 [(width) = 32];
-  bytes h_e = 3 [(width) = 32];
-  uint32 format_major = 4;
-  uint32 format_minor = 5;
-  google.protobuf.Timestamp signed_at = 6;   // §3.7 "together with the date"
-  string signer_role = 7;
-}
-
-// ---- digest leaves ------------------------------------------------------------------------------
-
-message TocEntry {
-  SectionType section_type = 1;
-  bytes key = 2;
-  bool critical = 3;               // fixed per standard section type (design §4.5: true for every
-                                   // v2.0 type); for a type the reader does not know (vendor, or a
-                                   // later minor's), taken from the claimed TOC entry
-  uint64 item_count = 4;
-  bytes root = 5 [(width) = 32];   // the section's Merkle root
-}
-
-message ConfirmationCodeLeaf {
-  bytes code = 1 [(width) = 32];   // H_C
-}
-```
 
 Decisions behind the layout:
 
@@ -1045,28 +709,37 @@ Decisions behind the layout:
   `DeviceHeader` on decode, which also removes the "ballot names another device" failure class.
 - **`MaximumCount` is not stored.** S10a publishes the per-contest `cast_weight`, and `MaximumCount` is
   `cast_weight × MaximumValue`, computed. V9 compares `cast_weight` with the recomputed value (`9.structure`).
-- **The header holds the format version and the election facts the manifest lacks** (follow-up #9, "Only what isn't
-  in manifest"; spec §3.7 bullet 1: "Information sufficient to uniquely identify and describe the election, such as
-  date, location, election type, etc. (not otherwise included in the election manifest)"). The manifest model has
-  only an election id, contests, styles, the chaining mode and hash trimming. `ManifestSerializer` refuses unknown
-  properties, so a jurisdiction cannot put the date or location there. `election_info` is therefore the only signed
-  place for them. Its registry leaves out anything the manifest already says. It is a sorted repeated message, not a
-  `map` (S2), so its bytes are unique (D7). No verification reads it. Producer software, creation time and notes are
-  not election facts. They go in `meta.json`, outside the root, so that two writers of the same content produce one
-  root. NQ-4 confirms this reading with the user; the alternative is to extend the manifest model.
+- **The header holds the format version only** (NQ-4: "Optional manifest fields"). Spec §3.7 bullet 1 asks for
+  "Information sufficient to uniquely identify and describe the election, such as date, location, election type, etc.
+  (not otherwise included in the election manifest)". Those facts are now optional manifest fields (`electionName`,
+  `electionDate`, `electionType`, `jurisdiction`, `location`; S10b-1b), so they sit inside `ManifestFile.content` and
+  are bound into H_B, which no record-level field could be. They are informational: no verification reads them. Any
+  further fact a jurisdiction wants recorded can be a vendor property of the manifest, which the parser ignores and
+  H_B still binds (NQ-1). Producer software, creation time and notes are not election facts. They go in `meta.json`,
+  outside the root, so that two writers of the same content produce one root.
 - **`DeviceHeader.chaining_mode` repeats the manifest's mode**, the one repetition of a manifest value. Spec 8.D/16.E
   are phrased per device ("If the device used the no-chaining mode"), so the device states its mode, and the
   verifier checks that it equals the manifest's (`8.structure`/`16.structure`).
 - **The manifest is stored byte for byte as entered** (#19: "it should be output to the election record exactly as it
-  was entered"). `ManifestFile.content` is exactly the H_B input of eq. (5). The record path never re-encodes it:
-  `ManifestSerializer` only parses it (strict reading, then `Manifest.Validate`), and its writer's output has no
-  canonical status. `media_type` names the parser, `"application/vnd.electionguard.manifest+json;format=1"` for S10a's
-  reading rules. "As entered" therefore means byte for byte for any document that parser accepts (#19: "need only be
-  a valid document"). Whitespace, member order and number spelling survive. A document the parser refuses, such as one
-  that starts with a UTF-8 BOM or has an unknown property, would make the record unverifiable, so
-  `WriteSetupAsync` parses the bytes first and refuses them. It never strips or rewrites them. A carrier may also write
-  the manifest as a plain file, `setup/manifest.json`, outside the root, for people to read; a verifier that finds one
-  checks that it is byte-identical to `ManifestFile.content` (`R.container`).
+  was entered"), and its canonical form is JSON (NQ-1: "The manifest is really the only field I would ever expect a
+  vendor to provide additional data, so honestly it's canonical form should probably be json"). `ManifestFile.content`
+  is exactly the H_B input of eq. (5). The record path never re-encodes it: `ManifestSerializer` only parses it, and
+  its writer's output has no canonical status. `media_type` names the parser,
+  `"application/vnd.electionguard.manifest+json;format=1"` for `ManifestSerializer`'s reading rules: UTF-8 JSON
+  without a BOM, no comments, trailing commas or duplicate keys, the model's members matched exactly and read
+  strictly (types, required members, `Manifest.Validate`), and **unknown properties ignored** at every level (vendor
+  data, still bound by H_B through the bytes). Ignoring a value does not exempt it from being JSON text: every byte
+  of the file is well-formed UTF-8 (RFC 8259 §8.1, RFC 3629), no string or name escapes to a lone surrogate, and
+  nesting is at most 64 levels deep (the top-level object is level 1; RFC 8259 §9 lets a parser limit depth), vendor
+  values included, so whether a file is a manifest does not depend on which properties a reader knows (S10b-A review
+  round 2). The one unknown name it refuses is a near miss of a member's name
+  (another case, or with `_` or `-`), which a loosely matching reader would read as that member. "As entered"
+  therefore means byte for byte for any document that parser accepts (#19: "need only be a valid document").
+  Whitespace, member order, number spelling and vendor properties survive. A document the parser refuses, such as one
+  that starts with a UTF-8 BOM or names a key twice, would make the record unverifiable, so `WriteSetupAsync` parses
+  the bytes first and refuses them. It never strips or rewrites them. A carrier may also write the manifest as a plain
+  file, `setup/manifest.json`, outside the root, for people to read; a verifier that finds one checks that it is
+  byte-identical to `ManifestFile.content` (`R.container`).
 - **Timestamps are `google.protobuf.Timestamp`**, with D3 restricting them to non-negative seconds and whole
   milliseconds. Both candidates are canonical under the profile: `Timestamp`, because D3 leaves exactly one
   (seconds, nanos) pair per instant and W2 omits a zero `nanos`; a `uint64` of milliseconds, because a varint has one
@@ -1107,17 +780,19 @@ EGRF protobuf is 1.6 % smaller than today's protobuf-net, which also carries a d
 in base64 as `+`, 5 extra bytes each, about 1.3 KB per ballot. The proto3 JSON writers do not do this.
 
 - A pre-encrypted cast item adds (m+L)·32 B of hashes and L·m·1,024 B of vectors per contest.
-- A pre-encrypted uncast item costs (m+L)·(m·1,024 + 32) B per contest plus short codes and framing (30,912 B at
-  m = 5, L = 1). Its release adds (m+L)·m·32 B. NQ-2 is about this cost.
-- **Large items.** An uncast item grows with m² per contest: about 0.95 MB at m = 30, L = 1, and about 11.3 MB at
-  m = 100, L = 10. A multi-contest uncast ballot can therefore approach the 64 MiB frame ceiling (§5.2), which the
-  writer enforces. NQ-2's compact form removes the case.
+- A full pre-encrypted uncast item costs (m+L)·(m·1,024 + 32) B per contest plus short codes and framing (30,912 B
+  at m = 5, L = 1). Its release adds (m+L)·m·32 B.
+- A compact uncast item (NQ-2; every never-returned ballot) costs about 40 B per contest (index and χ with framing)
+  plus about 750 B per ballot (id_B, H_I, C_ξB, H_C, B_C), and its release 32 B (ξ_B) plus the locator.
+- **Large items.** A full uncast item grows with m² per contest: about 0.95 MB at m = 30, L = 1, and about 11.3 MB
+  at m = 100, L = 10. A multi-contest returned uncast ballot whose ξ_B is not released can therefore approach the
+  64 MiB frame ceiling (§5.2), which the writer enforces. Never-returned ballots are always compact, so they never do.
 
 ### 4.8 Validity layers and failure attribution (normative, so verifiers in all languages agree)
 
 Checks run in three layers, in this order, and each failure carries a fixed code:
 
-1. **Encoding** (`R.encoding`): the wire rules W1-W8 and decode rules D1-D7 (D6 failures are `R.container`). The item's leaf hash is still computed
+1. **Encoding** (`R.encoding`): the wire rules W1-W8 and decode rules D1-D6 (D6 failures are `R.container`). The item's leaf hash is still computed
    from the bytes as read, so the root check still runs. The item is then opaque, and its verifications are
    `NotEvaluable` for it.
 2. **Range** (lettered where the spec assigns a letter; #11): a fixed-width value outside Z_p or Z_q. S10a's
@@ -1223,10 +898,11 @@ SHA-256(statement).
 
 **Statements are checked as items first.** `statement` is an opaque `bytes` field, so the wire walk of the enclosing
 `SignedStatement` never enters it. Before it checks a signature or compares contents, the verifier therefore runs the
-§4.4 check and D1-D7 on `statement` as a `RecordItem`. It also checks that the set member is a statement type: 40-42
+§4.4 check and D1-D6 on `statement` as a `RecordItem`. It also checks that the set member is a statement type: 40-42
 in `device_attestation`, 43 in `record_signature`. Any failure is `R.attestation` or `R.signature`. Without this, a
-non-canonical statement, or one with an unknown field, could carry a valid signature over bytes that different
-runtimes decode differently.
+non-canonical statement, or one whose unknown fields break W6, could carry a valid signature over bytes that
+different runtimes decode differently. A statement of a newer minor with W6-conformant unknown fields is checked for
+the fields the verifier knows, and its unknown content is reported (§7).
 
 | Algorithm | Notes |
 |---|---|
@@ -1249,17 +925,19 @@ Default policy (#7): `SignaturePolicy.Report`, with `RequireValid` recommended f
 - A **representation** R has a strict decoder D_R from bytes to L (or a rejection) and an encoder E_R, with
   D_R(E_R(L)) = L.
   - **Protobuf:** D is the canonicality check of §4.4 on each stored item; the item bytes are L's bytes unchanged.
-  - **JSON:** D parses each line with a proto3 JSON parser, applies D1-D7, and encodes the message canonically.
+  - **JSON:** D parses each line with a proto3 JSON parser, applies D1-D6, and encodes the message canonically.
 - Section roots, the TOC and the phase roots are pure functions of L. So **two physical records are equivalent iff
   they decode to the same L, iff their record roots (and phases) are equal.** "If" holds by construction; "only if"
   holds because the decoders are injective and SHA-256 is collision-resistant.
 - `egrecord digest <path>` prints the phase roots of any representation, and printing the same roots is the
   equivalence check. A converter is correct iff it preserves every phase root.
 - **JSON bytes are never hashed.** A JSON reader hashes the canonical protobuf encoding of what it parsed.
-- **Opaque content survives conversion.** `VendorItem.value` and `Extension.value` are `bytes`, so they cross every
-  representation unchanged. Unknown *fields* cannot: the proto3 JSON mapping has no form for them. So a converter
-  that meets content it does not fully understand (an unknown field, oneof member or enum value) **refuses**
-  (`R.version`) rather than dropping it, and no conversion can change a root.
+- **Opaque content survives conversion.** `VendorItem.value` is `bytes`, so it crosses every representation
+  unchanged. Unknown *fields* (NQ-1) survive any protobuf-to-protobuf copy or re-encode, because readers keep them
+  (§4.4), but they cannot cross into JSON: the proto3 JSON mapping has no form for a field the converter cannot name.
+  So a converter that meets content it does not fully understand (an unknown field, oneof member or enum value)
+  **refuses** (`R.version`) to write it as JSON rather than dropping it, and no conversion can change a root. A newer
+  library converts it.
 
 ### 5.2 Segment files (`.binpb`)
 
@@ -1289,8 +967,9 @@ minimal (W4).
   | C# Google.Protobuf | check the length before `ParseDelimitedFrom`, or read frames with the library's own varint loop | no practical limit |
   | Python | the reference reader's varint loop checks it | none |
 
-  64 MiB covers every regular ballot and every pre-encrypted item up to about m = 100 options per contest (§4.7). An
-  uncast item larger than that is refused by the writer; NQ-2's compact form removes the case.
+  64 MiB covers every regular ballot and every pre-encrypted item up to about m = 100 options per contest (§4.7). A
+  full uncast item larger than that is refused by the writer; a never-returned ballot is always in the compact form,
+  so only a returned uncast ballot whose ξ_B is not released can reach the ceiling.
 
 - **Segments.** A section may be split into segments at any item boundary. Segment n+1's `first_ordinal` equals
   segment n's `first_ordinal` plus its item count; a gap or overlap is `R.container`. Segment size is the writer's
@@ -1469,25 +1148,33 @@ Follow-up #18: "Alongside, not signed".
   - MTH roots for n = 0..17 and 1,000, cross-checked with the RFC 9162 test vectors;
   - three complete small records, each as a protobuf directory, a JSON directory and a `.zip`, all with the same
     roots: regular with no chaining; simple chaining with contest data and cast, challenged and spoiled ballots;
-    pre-encrypted with cast, returned uncast and never-returned uncast ballots and their releases.
+    pre-encrypted with cast, returned uncast (full form) and never-returned uncast (compact form) ballots and their
+    releases;
+  - **newer-minor items** (NQ-1): items with unknown fields appended in canonical position, with the verdict a reader
+    of the older minor must reach (canonical, content reported) and the bytes it must re-encode them to (unchanged).
 - **Negative vectors**, one per rule, each with its expected code: an overlong varint (in a tag, a length and a
   value), fields out of order, a singular field written twice, a default-valued field written explicitly, an unknown
   field, a known field with the wrong wire type, a wrong width, an absent non-omittable width field, a timestamp with
   sub-millisecond nanos, negative seconds, negative nanos, `UNSPECIFIED` status, an undeclared enum value, a
-  `uint32` ≥ 2^31, a `uint64` ≥ 2^63, ill-formed UTF-8, an empty `RecordItem`, unordered extension tags, unordered or
-  duplicate `election_info` keys, a non-canonical `SegmentHeader`, a frame over 64 MiB, a zero-length frame, a torn
+  `uint32` ≥ 2^31, a `uint64` ≥ 2^63, ill-formed UTF-8, an empty `RecordItem`, a `RecordItem` with two fields, a
+  non-canonical `SegmentHeader`, a frame over 64 MiB, a zero-length frame, a torn
   tail (cut short, and zero-filled), a segment gap, a path that disagrees with its `SegmentHeader`, an uppercase-hex
   path, an unlisted file, a duplicate zip entry, a zip local header that disagrees with the central directory, a
   non-canonical signed statement and one with a non-statement member, and a TOC entry whose `critical` bit
-  disagrees with §4.5. JSON negatives: a duplicate member, a JSON-name and proto-name alias pair, two members of one
-  oneof, and an unknown member. Plus one per `R.*` code and join rule.
+  disagrees with §4.5. Unknown-field negatives (W6), for a reader older than the record: an unknown field before a
+  known field, unknown fields in descending order, an unknown number inside the message's declared or reserved range,
+  an unknown field with wire type 1 or 5, an unknown VARINT of 0, an unknown VARINT repeated, and a non-minimal varint
+  inside an unknown field; and for a reader at the record's minor, any unknown field. A compact uncast item whose
+  release lacks ξ_B, and a full one whose release carries it. JSON negatives: a duplicate member, a JSON-name and
+  proto-name alias pair, two members of one oneof, and an unknown member. Plus one per `R.*` code and join rule.
 - **The Python reference reader** (`test/egrf/egrf_ref.py`) is Python 3, standard library only, in the spirit of the
   KAT oracle (`test/kat/eg_kat.py`). It transcribes the schema by hand from the `.proto` into a table (field numbers,
-  types, widths), implements Method A (§4.4), the length-delimited segment reader, the Merkle tree and the phase
-  roots, and reproduces the golden roots and every negative vector's verdict. A C# test writes
-  `test/egrf/schema.json` from the compiled descriptor (custom width options included), and CI fails if the Python
-  table and that file disagree. This is the acceptance test for the formal spec: anything the Python reader needs that
-  the spec does not say is a gap in the spec. It also demonstrates G-7: no protobuf runtime is required.
+  types, widths, reserved numbers), implements Method A (§4.4, unknown fields included), the length-delimited segment
+  reader, the Merkle tree and the phase roots, and reproduces the golden roots and every negative vector's verdict.
+  A C# test (`EgrfSchemaLintTests`, S10b-2) already writes `test/egrf/schema.json` from the compiled descriptor
+  (custom width options included); CI will fail if the Python table and that file disagree. This is the acceptance
+  test for the formal spec: anything the Python reader needs that the spec does not say is a gap in the spec. It also
+  demonstrates G-7: no protobuf runtime is required.
 
 ---
 
@@ -1498,7 +1185,7 @@ Follow-up #18: "Alongside, not signed".
 | Step | Reads | Runs | Gate |
 |---|---|---|---|
 | A. Record | the carrier's file or entry list, `toc`, the header | layout and zip consistency (§5.3.1, §5.4; `R.container`); format version (`R.version`); phase and presence (`R.structure`) | An unknown major version or a layout failure stops the run. |
-| B. Setup | sections 0x0001-0x0005 | V1 against `EGParameters`; parse the manifest from `ManifestFile.content` by media type (`ManifestSerializer`, strict, then `Manifest.Validate`); V2 per guardian, in parallel; V3; V4. Build `EncryptionRecord` from claims (`ElectionPublicKeys.FromKeys`, manifest from bytes). | A V1 failure, an unparseable manifest or a V4 failure stops all cryptography (later outcomes `NotEvaluable`). Digests and structure still run to the end. |
+| B. Setup | sections 0x0001-0x0005 | V1 against `EGParameters`; parse the manifest from `ManifestFile.content` by media type (`ManifestSerializer`: known members strict, unknown properties ignored, then `Manifest.Validate`); V2 per guardian, in parallel; V3; V4. Build `EncryptionRecord` from claims (`ElectionPublicKeys.FromKeys`, manifest from bytes). | A V1 failure, an unparseable manifest or a V4 failure stops all cryptography (later outcomes `NotEvaluable`). Digests and structure still run to the end. |
 | C. Join prep | `device_attestations` and the four join sections (`contest_data_requests`, `challenged_ballot_decryptions`, `contest_data_decryptions`, `uncast_nonce_releases`) | A **framing pre-scan**: read each item's leading locator (field 1 of the inner message, within its first 60 bytes) to check sort order (`R.order`), and record the offset where each device key's run begins (O(D)). Load the attestation statements per device (O(D)). | |
 | D. Ballots | device sections, in parallel across sections | per §6.2 | Findings are collected, and the run continues. |
 | E. Tally | `encrypted_tally`, `decrypted_tally` | Merge the V9 partials and compare (9.A, 9.B), and each contest's `cast_weight` (`9.structure`). Header counts against recounted cast ballots and weight (`R.summary`). V10 per field, in parallel. V11.A-C. V11.D from the bitset of contests on submitted ballots. | |
@@ -1520,9 +1207,10 @@ For each device section, the pipeline has three stages:
   | `EncryptedBallot`, `CAST` | also: fold into this worker's `BallotAggregationVerifier` (weighted) |
   | `EncryptedBallot`, `CHALLENGED` | also: take the decryption at this locator from the section's cursor and run V13 and V14 while the ballot is in memory |
   | `EncryptedBallot`, `CAST` with contest-data requests at this locator | also: run V12 on each matching `ContestDataDecryption` |
-  | `EncryptedBallot`, `SPOILED` | nothing beyond the first row: not tallied, never decrypted |
+  | `EncryptedBallot`, `SPOILED` | nothing beyond the first row: not tallied; a decryption naming it is `13.structure` (§3.3) |
   | `PreEncryptedCastBallot` | 5.B, 6, 7, 15, 16.A-C, 17, V9 fold, 11.D |
   | `PreEncryptedUncastBallot` | 5.B, 6.A at the range layer only (§3.2), 16.A-C, 17, 19, 11.D; take the release at this locator from the cursor and run V18 |
+  | `PreEncryptedCompactUncastBallot` | 5.B, 11.D; take the release at this locator from the cursor, regenerate the vectors and ψ from its ξ_B (eqs. 113-121), compare each χ and H_C with the item's, and run 16.A-C and 18 on the regenerated content; count the item as one whose 17.A and 19.A-D hold by construction (§3.2: no displayed codes or labels are recorded) |
 
 - **Sequencer**, in position order with O(1) work per item:
   - append the leaf to the section frontier and H_C to the codes frontier;
@@ -1542,8 +1230,9 @@ For each device section, the pipeline has three stages:
   decryption failed therefore fails the record.
 - A `ChallengedBallotDecryption` that names a `CAST` or `SPOILED` ballot, or a pre-encrypting locator, is
   `13.structure`. This is the Q31 property, checked from the published record.
-- Every `PreEncryptedUncastBallot` (returned or never returned, #5) has exactly one `UncastNonceRelease` with equal
-  `h_i`, and every release names an uncast item (`18.structure`).
+- Every `PreEncryptedUncastBallot` and `PreEncryptedCompactUncastBallot` (returned or never returned, #5) has exactly
+  one `UncastNonceRelease` with equal `h_i`, and every release names an uncast item (`18.structure`). The release
+  matches the item's form (NQ-2): `contests` for a full item, `ballot_nonce` alone for a compact one (`18.structure`).
 - Every `ContestDataRequest` names a `CAST` regular ballot and a contest with b_Λ > 0, and has exactly one matching
   `ContestDataDecryption`; every decryption has exactly one matching request (`12.structure`; follow-up #10).
 - **RLA note (Q22):** the format admits a `ChallengedBallotDecryption` that leaves out whole contests, as 13.B allows.
@@ -1665,7 +1354,7 @@ prefix-checkpoint statements as they appear, and at seal runs only the remaining
 | Profile | Input phase | Runs |
 |---|---|---|
 | `Full` | final | everything |
-| `GuardianPreliminary` | aggregated | §3.6.1: V1-V9 and the request rules. It reports two sets: the ballots the guardians will open (exactly the `CHALLENGED` regular ballots, through `TallyGuardian.DecryptBallotNonce`), and the uncast pre-encrypted ballots that need a release from the out-of-scope recording tool (§1; NQ-5 asks whether guardians should open these too). Takes `ExpectedAggregatedRoot`, obtained out of band, so guardians decrypt exactly what they verified (Q36). Returns a `VerifiedAggregate` (§8.3) that tally decryption from a record requires, closing the S10a carry-over "a tally read back cannot be decrypted before Verification 9". |
+| `GuardianPreliminary` | aggregated | §3.6.1: V1-V9 and the request rules. It reports two sets: the ballots the guardians will open (exactly the `CHALLENGED` regular ballots, through `TallyGuardian.DecryptBallotNonce`), and the uncast pre-encrypted ballots that need a release (from the out-of-scope recording tool until S10b-19, after which the guardians open them from the sealed record, NQ-5). Takes `ExpectedAggregatedRoot`, obtained out of band, so guardians decrypt exactly what they verified (Q36). Returns a `VerifiedAggregate` (§8.3) that tally decryption from a record requires, closing the S10a carry-over "a tally read back cannot be decrypted before Verification 9". |
 | `BallotCorrectness` | any | for chosen locators or confirmation codes: 5.B, 6, 7, 8.A/8.B or 16.A-C/17/18/19, 13/14 where applicable, plus an inclusion proof to the root. Reads only those items, through derived offsets or a scan. |
 | `Custom` | any | any subset of 1-19 (used by the structure-only GB tests) |
 
@@ -1673,10 +1362,16 @@ prefix-checkpoint statements as they appear, and at seal runs only the remaining
 
 - **Outcome per verification** (1-19): `Passed`, `Failed`, `NotApplicable` (for example 15-19 with no pre-encrypting
   section), `NotEvaluable` (blocked by an earlier failure) or `NotRun` (outside the profile).
-- **R-codes:** `R.container`, `R.encoding`, `R.order`, `R.structure`, `R.version`, `R.extension`, `R.root`,
+- **R-codes:** `R.container`, `R.encoding`, `R.order`, `R.structure`, `R.version`, `R.root`,
   `R.summary`, `R.attestation`, `R.signature`.
-- **`Complete`** is false whenever the reader skipped a non-critical unknown section, field, oneof member or extension
-  (§7). **`Passed` requires no failures and `Complete = true`.**
+- **`Complete`** is false whenever the reader skipped content it does not understand: a non-critical unknown section,
+  an unknown field, oneof member or enum value (§7). That is informational, not a failure (NQ-1: a verifier that
+  sees a newer `format_minor` "reports that the record is newer but still verifies everything it understands"), so
+  **`Passed` means no failures**, and `Complete` is reported beside it with the record's and the reader's format
+  versions and the content not understood (`SkippedUnknownContent`). Content a reader must understand to verify is
+  never informational: an unknown critical section, or an unknown item type in a section that must verify, is a
+  `R.version` failure. `egrecord verify` exits 0 when passed and complete, 2 when passed but incomplete, 1 on any
+  failure, so a script cannot mistake one for the other.
 - **Findings** carry `SubSection` (the existing `VerificationFailedException` convention: "6.D", "13.structure",
   "R.order"), the verification number, the section, the locator, id_B in hex, the contest and field index, and a
   message. They are ordered deterministically: by step (§6.1), then by canonical record order, then by sub-section.
@@ -1684,7 +1379,9 @@ prefix-checkpoint statements as they appear, and at seal runs only the remaining
 - **Default is collect-all.** At about 1,000 ballots/s, a run that stopped at the first failure would waste hours.
   `StopOnFirstFailure` is available.
 - **Also reported:** all four phase roots, attestation and signature results, unknown content skipped, and statistics
-  (N by kind and status, per-device counts, bytes, per-step timings).
+  (N by kind and status, per-device counts, bytes, per-step timings). Among them, the number of compact uncast items,
+  stated as the items whose 17.A and 19.A-D held by construction (§3.2): the record holds no printed codes or labels
+  for them, so their V17 and V19 outcomes say nothing about what was printed.
 
 ---
 
@@ -1697,25 +1394,31 @@ prefix-checkpoint statements as they appear, and at seal runs only the remaining
 | Format minor | `RecordHeader.format_minor` | reads in compatible mode (below) |
 | Section type | new `SectionType` values within a phase band; `TocEntry.critical`, fixed per type by that minor's §4.5 table (later tallies arrive this way, §4.5) | the bit comes from the claimed TOC (§4.5). Critical: `R.version` failure. Non-critical: items digested, `Complete = false`. |
 | Item type | a new `RecordItem` oneof member | in a section it must verify: that item's checks are `NotEvaluable`, with `R.version`. In a non-critical vendor section: digested, `Complete = false`. |
-| Field | a new field number, append-only (S6) | see "Older readers" below |
-| Extension | `RecordItem.extensions` (NQ-1), `critical` per entry | critical: `R.extension`, the item is not evaluated. Non-critical: digested, reported, `Complete = false`. |
+| Field | a new field number, append-only (S6), after every older field on the wire (W6) | verifies what it knows, keeps and digests the rest, reports it, `Complete = false` (informational; "Older readers" below) |
+| Enum value | a new value of an existing enum | the checks that depend on it are `NotEvaluable` with `R.version`; the item is digested (D2) |
+| Vendor data | none in the record items (NQ-1: "Vendors should never add fields to most of the types"); vendor properties in the manifest (ignored by the parser, bound by H_B) or vendor sections | n/a |
 | Files | `SegmentHeader.magic` and `format_major` | `R.container` |
 
 Rules:
 
 - A **major** change alters an existing field's meaning or type, the profile, the digest rules or the fixed widths.
   A new spec version that changes published objects means a new major, and a new `.proto` package.
-- A **minor** change only adds: section types, oneof members, fields (numbered above the message's existing fields),
-  enum values or registered extension tags. It never changes the meaning of an existing check, and a field it adds
-  defaults to "absent" with the old meaning.
+- A **minor** change only adds: section types, oneof members, fields (numbered above every number the message
+  declared or reserved before, S6) or enum values. It never changes the meaning of an existing check, and a field it
+  adds defaults to "absent" with the old meaning.
 - **Writers MUST use the lowest representation that can carry the content.** A new field is written only when the
   content needs it (otherwise it is absent by W2), and a new oneof member only for content the old one cannot carry.
   So an old reader keeps verifying every record that does not use the new capability.
-- **Older readers.** A reader that knows minor m and reads a record of minor m' > m checks the items with Method A:
-  for an unknown field it still checks order, wire type validity, minimal varints and exact lengths, but cannot check
-  its default or width, so it digests the item as stored and sets `Complete = false`. In JSON an unknown member cannot
-  be parsed without being lost, so the reader stops with `R.version`. Neither path reports a pass with unread content
-  (G-6), and the roots computed from the protobuf representation are still exact.
+- **Older readers (NQ-1).** A reader that knows minor m and reads a record of minor m' > m checks each item with
+  Method A, or with Method B keeping unknown fields plus Method A's unknown-field rule (§4.4). For an unknown field it
+  checks the W6 placement (after every known field, ascending, above every declared or reserved number), wire type,
+  minimal varints and exact lengths; it cannot check a LEN payload or a width. The item is digested as stored, and
+  if the reader re-encodes it (a copy, a resumed writer), it keeps the unknown fields, which by W6 re-encode to the
+  same bytes, so every root survives. The reader verifies everything it understands and reports the newer minor and
+  the content it skipped (`Complete = false`, informational, §6.9). In JSON an unknown member cannot be turned into
+  canonical bytes without its field number, so a JSON reader stops with `R.version`; the protobuf representation is
+  the one to verify a newer record with. Neither path reports `Complete` with unread content (G-6), and the roots
+  computed from the protobuf representation are exact.
 - **Vendor sections** (0x8000-0xFFFD) are final-phase, digested and never verified. The library's writer marks them
   non-critical unless told otherwise, and readers take the bit from the claimed TOC (§4.5).
 - **Election options** (chaining mode, Ω, supplemental fields, b_Λ) come from the manifest. The format has no
@@ -1727,9 +1430,14 @@ Rules:
 
 ### 8.1 Codec: Google.Protobuf, generated from the normative `.proto`
 
-**Decision: Google.Protobuf runtime, with C# generated at build time from `egrf.proto` by Grpc.Tools**
-(`<Protobuf Include="..." Access="Internal" GrpcServices="None" />`; Grpc.Tools is a build-only dependency).
-protobuf-net is retired with the old DTO tree (S10b-16), so Core ends with one serialization dependency.
+**Decision: Google.Protobuf runtime, with C# generated at build time from `egrf.proto` by Grpc.Tools.** In place
+since S10b-2: `ElectionGuard.Core.csproj` references Google.Protobuf 3.34.1 and Grpc.Tools 2.80.0 (libprotoc 31.1;
+`PrivateAssets="All"`, a build-only dependency) and compiles
+`<Protobuf Include="..\..\proto\electionguard\egrf\v2\egrf.proto" ProtoRoot="..\..\proto" Access="Internal" GrpcServices="None" />`.
+The generated types are in `ElectionGuard.Core.RecordFormat.Protobuf` (not `...Core.Record...`: a namespace named
+`ElectionGuard.Core.Record` hides xUnit's `Record` class from every test in `ElectionGuard.Core.UnitTests`, which
+the first build showed). protobuf-net is retired with the old DTO tree (S10b-16), so Core ends with one
+serialization dependency.
 
 Why not protobuf-net, which Core uses today:
 
@@ -1739,9 +1447,10 @@ Why not protobuf-net, which Core uses today:
   protobuf hazards come from that model: the "add a field in both the domain type and its DTO" rule (CLAUDE.md,
   Serialization) and the dormant nonce copy at line 83.
 - **Determinism the profile can rely on.** protoc's C# generator writes fields in field-number order, omits proto3
-  defaults, writes a set oneof member even when it is default, and has `WithDiscardUnknownFields(true)` for Method B
-  (§4.4). In protobuf-net, ordering, default omission and packing are per-attribute choices, and keeping unknown
-  fields needs `Extensible`.
+  defaults, writes a set oneof member even when it is default, keeps unknown fields by default and writes them after
+  the known ones (NQ-1, §4.4; pinned by `EgrfUnknownFieldBehaviourTests`), and has `WithDiscardUnknownFields(true)`
+  for a reader at the record's own minor. In protobuf-net, ordering, default omission and packing are per-attribute
+  choices, and keeping unknown fields needs `Extensible`.
 - **The custom options are readable.** The descriptor exposes `(width)`, `(width_multiple)` and `(omittable)`, so the
   decode rules and the schema lint test read the same annotations as every other language.
 - **The proto3 JSON mapping comes with it.** `JsonFormatter` and `JsonParser` implement the mapping. protobuf-net has
@@ -1758,31 +1467,32 @@ without v1's benefit, and the JSON mapping would also be hand-written.
 
 ### 8.2 Placement (#15)
 
-- `src/ElectionGuard.Core/Record/`: the generated types, the canonicality check, the mappers, Merkle, the carriers,
-  the JSON projection, the writer and the reader.
+- `src/ElectionGuard.Core/RecordFormat/` (namespace `ElectionGuard.Core.RecordFormat`, §8.1): the generated types,
+  the canonicality check, the mappers, Merkle, the carriers, the JSON projection, the writer and the reader.
 - `src/ElectionGuard.Core/Verify/ElectionRecordVerifier.cs`: the verify-everything entry point.
 - `src/ElectionGuard.Verifier/` (new): the `egrecord` CLI (`verify | digest | convert | diff | prove | show`).
   `ElectionGuard.Administration` will be the main writer when it exists.
-- `proto/electionguard/egrf/v2/egrf.proto`: the schema, shared by every implementation.
+- `proto/electionguard/egrf/v2/egrf.proto`: the schema, shared by every implementation (in place since S10b-2).
+- `test/egrf/schema.json`: the schema table (in place since S10b-2); later the golden vectors and the Python reader.
 
 ### 8.3 API sketch
 
 ```csharp
 namespace ElectionGuard.Core.BallotEncryption;
 
-/// The values equal the record's BallotStatus enum numbers.
+/// The values equal the record's BallotStatus enum numbers. Implemented in S10b-1.
 public enum BallotStatus
 {
     Unrecorded = 0,   // in memory only: no decision yet. Never written; a writer refuses it. (was NotSubmitted)
     Cast = 1,
     Challenged = 2,
-    Spoiled = 3,      // in the record, neither cast nor challenged (#4). Not tallied, never decrypted.
+    Spoiled = 3,      // in the record, neither cast nor challenged (#4). Not tallied; not decrypted by this library's paths (§3.3).
 }
-// EncryptedBallot.RecordStatus accepts Cast, Challenged or Spoiled, once, as today.
+// EncryptedBallot.RecordStatus accepts Cast, Challenged or Spoiled, once.
 ```
 
 ```csharp
-namespace ElectionGuard.Core.Record;
+namespace ElectionGuard.Core.RecordFormat;
 
 public readonly record struct RecordFormatVersion(ushort Major, ushort Minor) { public static readonly RecordFormatVersion V2_0 = new(2, 0); }
 public enum RecordPhase : byte { Setup = 1, Sealed = 2, Aggregated = 3, Final = 4 }   // = the proto enum numbers
@@ -1848,9 +1558,9 @@ public sealed record DeviceClose(long BallotCount, ChainingField? ClosingChainin
     DateTimeOffset? ClosedAt);
 public sealed record ContestDataRequest(BallotLocator Ballot, SelectionEncryptionIdentifierHash IdentifierHash, int ContestIndex);
 public sealed record EncryptedTallyHeader(long CastBallotCount, long TotalCastWeight);
-public sealed record ElectionInfo(string Key, string Value);     // §3.7 bullet 1; registry keys or "x-" (D7)
+// §3.7 bullet 1's election facts are Manifest.ElectionName, ElectionDate, ElectionType, Jurisdiction, Location (NQ-4).
 
-public sealed record RecordSetup(RecordFormatVersion Format, IReadOnlyList<ElectionInfo> ElectionInfo, CryptographicParameters Parameters, GuardianParameters GuardianParameters,
+public sealed record RecordSetup(RecordFormatVersion Format, CryptographicParameters Parameters, GuardianParameters GuardianParameters,
     ParameterBaseHash ParameterBaseHash, ManifestFile ManifestFile, string ManifestMediaType, ElectionBaseHash ElectionBaseHash,
     IReadOnlyList<GuardianPublicView> Guardians, ElectionPublicKeys Keys, ExtendedBaseHash ExtendedBaseHash)
 {
@@ -1895,7 +1605,7 @@ public static class ElectionRecord
 public sealed class ElectionRecordWriter : IAsyncDisposable
 {
     public ValueTask WriteSetupAsync(EncryptionRecord encryptionRecord, IReadOnlyList<GuardianPublicView> guardians,
-        IReadOnlyList<ElectionInfo> electionInfo, CancellationToken ct = default);        // parses the manifest bytes first; fixes R_setup
+        CancellationToken ct = default);                                                  // parses the manifest bytes first; fixes R_setup
     public ValueTask<DeviceSectionWriter> OpenDeviceAsync(DeviceHeader header, CancellationToken ct = default);   // create or resume
     public ValueTask AddDevicePartAsync(string devicePartDirectory, CancellationToken ct = default);  // validates, copies bytes
     public ValueTask AddAttestationAsync(SignedStatement attestation, CancellationToken ct = default);
@@ -1904,7 +1614,7 @@ public sealed class ElectionRecordWriter : IAsyncDisposable
         IEnumerable<ContestDataRequest> requests, CancellationToken ct = default);             // -> R_aggregated
     public ISortedSectionWriter<DecryptedChallengedBallot> ChallengedDecryptions { get; }   // throw before R_aggregated (Q36)
     public ISortedSectionWriter<DecryptedContestData> ContestDataDecryptions { get; }
-    public ISortedSectionWriter<PreEncryptedUncastBallot> UncastNonceReleases { get; }      // must match the sealed printed item
+    public ISortedSectionWriter<PreEncryptedUncastBallot> UncastNonceReleases { get; }      // must match the sealed item and its form (NQ-2)
     public ValueTask<TableOfContents> CompleteAsync(DecryptedTally tally, CancellationToken ct = default); // -> R_final
     public ValueTask AddRecordSignatureAsync(SignedStatement signature, CancellationToken ct = default);   // any time after its phase
 }
@@ -1917,7 +1627,9 @@ public sealed class DeviceSectionWriter : IAsyncDisposable                    //
     /// (Cast, Challenged or Spoiled; Unrecorded is refused). Items are appended once, in chain order, so a device
     /// records an abandoned ballot as Spoiled before appending the next one. Does not run V6/V7.
     public ValueTask AppendAsync(EncryptedBallot ballot, CancellationToken ct = default);
-    public ValueTask AppendUncastAsync(PreEncryptedBallot printed, CancellationToken ct = default);  // returned uncast or never returned (#5)
+    /// A pre-encrypted ballot that was not cast (#5). NeverReturned and ReturnedBallotNonceReleased are written in the
+    /// compact form (NQ-2: mandatory for never-returned ballots; ξ_B is then released), ReturnedNoncesReleased in full.
+    public ValueTask AppendUncastAsync(PreEncryptedBallot printed, UncastDisposition disposition, CancellationToken ct = default);
     public ValueTask FlushAsync(bool durable, CancellationToken ct = default);
     public byte[] PrefixCheckpointStatement(ExtendedBaseHash he, DateTimeOffset at);
     public ValueTask<DeviceSeal> CloseAsync(DeviceChainRecord closing, CancellationToken ct = default);  // from DeviceChain.Close
@@ -1928,6 +1640,7 @@ public sealed record DeviceSeal(DeviceKey Key, long ItemCount, Sha256Digest Sect
     public byte[] SectionSealStatement(ExtendedBaseHash he);
 }
 public interface ISortedSectionWriter<T> { ValueTask AddAsync(T item, CancellationToken ct = default); }  // sorts and spills into locator order
+public enum UncastDisposition { NeverReturned, ReturnedBallotNonceReleased, ReturnedNoncesReleased }
 
 // ---- signatures ----------------------------------------------------------------------------------------------
 public sealed record SignedStatement(ReadOnlyMemory<byte> Statement, string Algorithm, ReadOnlyMemory<byte> KeyId,
@@ -2003,7 +1716,8 @@ public static class ElectionRecordVerifier
     reimplemented on it.
   - `SpillingIdentifierSet` (§6.5), behind `SelectionEncryptionIdentifierSet`'s 5.A message.
   - `BallotAggregationVerifier.Merge`, plus `ExportStandardForm()`/`ImportStandardForm()` for checkpoints and shards.
-  - `BallotStatus.Spoiled`, and `Unrecorded` as the new name of the in-memory zero value (S10b-1).
+  - `BallotStatus.Spoiled`, and `Unrecorded` as the new name of the in-memory zero value (S10b-1, done).
+  - The manifest's optional election facts and its tolerance of unknown properties (S10b-1b, done).
 
 ### 8.5 How the consumers use it
 
@@ -2026,9 +1740,10 @@ public static class ElectionRecordVerifier
 
 ### 9.1 Ordering and gate
 
-S10a is committed (c4f1093). S10b code starts once the user approves this design and answers NQ-1 to NQ-6 (§12).
-NQ-1 and NQ-4 shape the schema (S10b-2), NQ-2 the uncast mapper and writer (S10b-4, S10b-6), NQ-3 only S10b-13, NQ-6
-only S10b-7. NQ-5 does not block S10b: it would be a later Core step on the guardian side. Every step
+S10a is committed (c4f1093). The design is approved and NQ-1 to NQ-6 are answered (§11). Stage S10b-A implemented
+S10b-0, S10b-1, S10b-1b and S10b-2 (2026-10-09). NQ-1 and NQ-4 shaped the schema (S10b-2) and the manifest
+(S10b-1b), NQ-2 shapes the uncast mapper and writer (S10b-4, S10b-6), NQ-3 deferred S10b-13, NQ-6 is S10b-7's
+spooling, and NQ-5 is S10b-19, after S10b. Every step
 below is sized for one implementer and is one reviewable commit with the gate green: the full test suite, the KAT
 families unchanged, and for steps that touch verification or serialization a perf smoke run plus
 `compare --repeat 5` against a HEAD worktree baseline (single cold runs false-flag the allocation gate). Each step
@@ -2038,25 +1753,27 @@ updates the tracker.
 
 | Step | Content | Tests |
 |---|---|---|
-| **S10b-0** Nonce hazard (first; independent) | Delete `EncryptionNonce` from `ProtobufEncryptedValueWithProofs` and `ProtobufEncryptedValue` **and the line-83 copy** into the DTO | A reflection test that no serialization DTO has a nonce member; protobuf round trips unchanged |
-| **S10b-1** Ballot status | `BallotStatus.NotSubmitted` → `Unrecorded` (0); add `Spoiled = 3`. `RecordStatus` accepts Cast, Challenged or Spoiled, once. `EncryptedTally.AddBallot` skips Spoiled as it skips Challenged (and still rejects Unrecorded). The guardians' nonce path and V13/V14 treat Spoiled as not challenged. The existing ballot serializers carry the new value until they retire. | Aggregation excludes spoiled ballots; a spoiled ballot's nonce request is refused; `RecordStatus` is once-only across all three; V5-V8 accept a spoiled ballot; serializer round trips of each status |
-| **S10b-2** Schema and codegen | Move `egrf_v2.proto` to `proto/electionguard/egrf/v2/egrf.proto` (with the NQ-1 outcome); Google.Protobuf and Grpc.Tools in Core, generated types internal; a schema lint test enforcing S1-S8 on the compiled descriptor; a test that writes `test/egrf/schema.json` (numbers, types, labels, width options) | The lint test fails on a deliberately added map, `int32`, packed repeated scalar, out-of-order declaration, unannotated fixed-width field or regular field numbered inside a oneof's range (run against fixture descriptors) |
-| **S10b-3** Canonicality checker | `CanonicalProtobuf.Check`: Method B (discard-unknown parse with each runtime's call from §4.4, D1-D7, re-serialize, compare) and Method A (descriptor-driven wire walk); the `SegmentHeader` check (D6) and the signed-statement check (§4.9); the first golden item vectors, seeded from the feasibility run's `vectors.json` and `negatives.json`, and every negative vector of §5.7 under `test/egrf/vectors/` | Each negative vector rejected with its rule by both methods; property tests: encode-then-check always passes; every single-byte mutation of a golden item is rejected or decodes to a different item, and Methods A and B never disagree |
-| **S10b-4** Domain mappers | One mapper per item type; `RawZp`/`RawZq` and the §4.8 range table, fixed against the Verify classes' lettering; the uncast split and join (and NQ-2's compact form if accepted); `RecordSetup` | A **reflection completeness test** pins every public property of every recorded domain type to a schema field or an explicit exclusion list (nonces, the device id taken from the section, computed properties), replacing the "add it in both" hazard; domain → bytes → domain is the identity; values ≥ p and ≥ q give the lettered codes |
+| **S10b-0** Nonce hazard (first; independent). **Done (S10b-A).** | Delete `EncryptionNonce` from `ProtobufEncryptedValueWithProofs` and `ProtobufEncryptedValue` **and the line-83 copy** into the DTO | A reflection test that no serialization DTO has a nonce member; protobuf round trips unchanged |
+| **S10b-1** Ballot status. **Done (S10b-A).** | `BallotStatus.NotSubmitted` → `Unrecorded` (0); add `Spoiled = 3`. `RecordStatus` accepts Cast, Challenged or Spoiled, once. `EncryptedTally.AddBallot` skips Spoiled as it skips Challenged (and still rejects Unrecorded). The guardians' nonce path and V13/V14 treat Spoiled as not challenged. The existing ballot serializers carry the new value until they retire. | Aggregation excludes spoiled ballots; a spoiled ballot's nonce request is refused; `RecordStatus` is once-only across all three; V5-V8 accept a spoiled ballot; serializer round trips of each status |
+| **S10b-1b** Manifest (NQ-1, NQ-4). **Done (S10b-A).** | Optional `ElectionName`, `ElectionDate`, `ElectionType`, `Jurisdiction`, `Location` on `Manifest` (strings, informational, omitted from the written form when null); `ManifestSerializer` ignores unknown properties at every level, refuses near-miss member names, and keeps refusing duplicate keys, malformed JSON, wrong types and missing required members | Unknown properties at every level parse to the manifest without them while H_B differs; near misses, duplicate unknown keys and wrong types refused; the election facts round-trip and are absent from a manifest that does not set them |
+| **S10b-2** Schema and codegen. **Done (S10b-A).** | Move `egrf_v2.proto` to `proto/electionguard/egrf/v2/egrf.proto` (with the NQ-1 outcome); Google.Protobuf and Grpc.Tools in Core, generated types internal; a schema lint test enforcing S1-S8 on the compiled descriptor; a test that writes `test/egrf/schema.json` (numbers, types, labels, width options, reserved numbers) and checks every schema change against it for S6 | The lint test fails on a deliberately added map, `int32`, packed repeated scalar, out-of-order declaration, unannotated fixed-width field or regular field numbered inside a oneof's range (run against fixture descriptors); the append-only check fails on a removed, renumbered or retyped field, a field added below the highest number, and a dropped reservation; C# Google.Protobuf's unknown-field behaviour (§4.4) is pinned |
+| **S10b-3** Canonicality checker | `CanonicalProtobuf.Check`: Method B (parse keeping unknown fields, D1-D6, re-serialize, compare; a discard-unknown parse when the record's minor is not newer than the library's) and Method A (descriptor-driven wire walk, with W6's unknown-field rule for newer-minor records); the `SegmentHeader` check (D6) and the signed-statement check (§4.9); the first golden item vectors, seeded from the feasibility run's `vectors.json` and `negatives.json`, and every negative vector of §5.7 under `test/egrf/vectors/` | Each negative vector rejected with its rule by both methods; the newer-minor vectors accepted with their unknown content reported, and re-encoded to the same bytes; property tests: encode-then-check always passes; every single-byte mutation of a golden item is rejected or decodes to a different item, and Methods A and B never disagree |
+| **S10b-4** Domain mappers | One mapper per item type; `RawZp`/`RawZq` and the §4.8 range table, fixed against the Verify classes' lettering; the uncast split and join, with NQ-2's compact form (mandatory for never-returned ballots; the form follows from whether ξ_B is released); `RecordSetup` | A **reflection completeness test** pins every public property of every recorded domain type to a schema field or an explicit exclusion list (nonces, the device id taken from the section, computed properties), replacing the "add it in both" hazard; domain → bytes → domain is the identity; values ≥ p and ≥ q give the lettered codes |
 | **S10b-5** Merkle, TOC, phase roots | `MerkleFrontier`, `MerkleProofs`, `Sha256Digest`, TOC and phase-root functions, `Extends` | RFC 9162 published vectors; MTH for n = 0..17 and 1,000; inclusion and consistency proofs; frontier serialize/resume equals an uninterrupted run |
-| **S10b-6** Directory carrier: writer and reader | Delimited `.binpb` segments and `SegmentHeader`; the 64 MiB frame ceiling on both sides; the §5.3.1 layout and discovery rules; `ElectionRecordWriter` phase gates; `DeviceSectionWriter` (final status required, `AppendUncastAsync`); `ResumeAsync` with torn-tail repair, zero-filled tails included; presence rules; `election_info` (D7); the optional `setup/manifest.json` copy | Write then read gives the same domain objects (S10a's strict round-trip tests ported); segment rollover does not change roots; a torn tail is repaired and a corrupt middle item refused; decryption and release writers throw before R_aggregated; R_setup ⊑ R_sealed ⊑ R_aggregated ⊑ R_final; a manifest copy that differs is `R.container`; the manifest bytes survive byte for byte (whitespace, member order and number spelling preserved), and a manifest the parser refuses (a BOM, an unknown property) is refused by `WriteSetupAsync`; an oversized item is refused by the writer and a hostile length by the reader before allocation; every §5.3.1 layout negative |
+| **S10b-6** Directory carrier: writer and reader | Delimited `.binpb` segments and `SegmentHeader`; the 64 MiB frame ceiling on both sides; the §5.3.1 layout and discovery rules; `ElectionRecordWriter` phase gates; `DeviceSectionWriter` (final status required, `AppendUncastAsync` with its `UncastDisposition`); `ResumeAsync` with torn-tail repair, zero-filled tails included; presence rules; the optional `setup/manifest.json` copy | Write then read gives the same domain objects (S10a's strict round-trip tests ported); segment rollover does not change roots; a torn tail is repaired and a corrupt middle item refused; decryption and release writers throw before R_aggregated; R_setup ⊑ R_sealed ⊑ R_aggregated ⊑ R_final; a manifest copy that differs is `R.container`; the manifest bytes survive byte for byte (whitespace, member order, number spelling and vendor properties preserved), and a manifest the parser refuses (a BOM, a duplicate key) is refused by `WriteSetupAsync`; a never-returned uncast ballot is written compact whatever the caller passes, and a release of the wrong form is refused; an oversized item is refused by the writer and a hostile length by the reader before allocation; every §5.3.1 layout negative |
 | **S10b-7** `.zip` carrier | `System.IO.Compression` writer (STORED protobuf entries, optional DEFLATE for JSON, ZIP64) and a seekable reader that checks every local header it reads against the central directory; a non-seekable `Stream` is spooled to disk (NQ-6) | Roots equal the directory's; any entry order is accepted; a duplicate entry, a local/central mismatch, an unlisted entry and a case-folding collision are each `R.container`; a DEFLATEd JSON record verifies with sequential join cursors; a > 4 GiB synthetic entry round-trips (manual or nightly) |
 | **S10b-8** Streaming verifier pieces | `DeviceChainWalker`; `SpillingIdentifierSet`; `BallotAggregationVerifier.Merge` and standard-form export; merge cursors with run offsets | The walker agrees with `DeviceChainWalk` on every existing V8/V16 test; 5.A with planted duplicates at random positions, **adversarially skewed id_B prefixes** and a 1 MiB budget forcing spills; AVX-512 and scalar partials merged through the standard form equal one engine (`DOTNET_EnableAVX512F=0`) |
-| **S10b-9** `VerifyAllAsync` | Steps A-F, profiles, report, attestation-content checks, resumable checkpoint, `VerifiedAggregate` and the `TallyAdmin.Decrypt` overload (S10a carry-over) | One test per R-code and per join rule (a missing challenged decryption, a decryption naming a cast or spoiled ballot, a missing or stray uncast release, an unmatched contest-data request); spoiled ballots excluded from V9 and included in 5.A and 11.D; a never-returned uncast ballot passes V16-V19 with its release; V9 `NotEvaluable` after a faulted aggregator; kill-and-resume gives the same report as one run; GuardianPreliminary on an aggregated record; a run over a `.zip` given as a stream whose `Seek` throws (spooled, same report) |
-| **S10b-10** JSON projection, converter, diff | `JsonFormatter`/`JsonParser` plus duplicate-member refusal; `ConvertAsync`; `DiffAsync` | protobuf → JSON → protobuf is byte-identical; JSON → protobuf → JSON parses to the same structure (byte-identical only within one runtime, §5.5); the four representations of each golden record give identical roots and identical `VerificationReport`s, findings included; content with an unknown field is refused for conversion; JSON negatives: a duplicate member, a JSON-name/proto-name alias pair, two members of one oneof, an unknown member, a wrong decoded width, a `uint64` ≥ 2^63, negative `Timestamp` nanos, an undeclared enum name |
+| **S10b-9** `VerifyAllAsync` | Steps A-F, profiles, report, attestation-content checks, resumable checkpoint, `VerifiedAggregate` and the `TallyAdmin.Decrypt` overload (S10a carry-over) | One test per R-code and per join rule (a missing challenged decryption, a decryption naming a cast or spoiled ballot, a missing or stray uncast release, an unmatched contest-data request); spoiled ballots excluded from V9 and included in 5.A and 11.D; a never-returned uncast ballot (compact) passes V16 and V18 with its released ξ_B, is counted as an item whose 17.A and 19.A-D hold by construction (§3.2), and fails 16/18 when ξ_B regenerates a different χ or H_C; a spoiled ballot sharing id_B with a cast one fails 5.A (the record verifier collects every submitted ballot's id_B, whatever its status); a newer-minor record passes with `Complete = false` and its unknown content reported; V9 `NotEvaluable` after a faulted aggregator; kill-and-resume gives the same report as one run; GuardianPreliminary on an aggregated record; a run over a `.zip` given as a stream whose `Seek` throws (spooled, same report) |
+| **S10b-10** JSON projection, converter, diff | `JsonFormatter`/`JsonParser` plus duplicate-member refusal; `ConvertAsync`; `DiffAsync` | protobuf → JSON → protobuf is byte-identical; JSON → protobuf → JSON parses to the same structure (byte-identical only within one runtime, §5.5); the four representations of each golden record give identical roots and identical `VerificationReport`s, findings included; content with an unknown field is refused for conversion to JSON and copied unchanged protobuf to protobuf; JSON negatives: a duplicate member, a JSON-name/proto-name alias pair, two members of one oneof, an unknown member, a wrong decoded width, a `uint64` ≥ 2^63, negative `Timestamp` nanos, an undeclared enum name |
 | **S10b-11** Attestations and signatures | Statements, `IStatementSigner`, `ISignatureVerifier` (`ecdsa-p256-sha256` first; others pluggable), policies | Statements signed and verified; a tampered count, codes root or status caught (`R.attestation`); dropping trailing ballots caught under both chaining modes when a chain close exists; a missing or invalid signature under each policy |
-| **S10b-12** Python reference reader and golden records | `test/egrf/egrf_ref.py` (standard library; Method A, D1-D7, delimited segments with the frame ceiling, the §5.3.1 layout rules, Merkle, phase roots, `.zip` via `zipfile` with the local-header check), the three complete golden records in all representations, the schema-table diff against `test/egrf/schema.json` | CI runs `python test/egrf/egrf_ref.py --check`: every golden root reproduced and every negative vector's verdict matched |
-| **S10b-13** TypeScript reader (only if NQ-3 is accepted) | `test/egrf/js/`: protobuf-es generated code (binary and the proto3 JSON mapping; not protobufjs, §5.5), Method B with `readUnknownFields: false`, D1-D7, `sizeDelimitedDecodeStream` with `readMaxBytes` set, Merkle roots | Reproduces the golden roots and negative verdicts in CI |
+| **S10b-12** Python reference reader and golden records | `test/egrf/egrf_ref.py` (standard library; Method A with W6's unknown-field rule, D1-D6, delimited segments with the frame ceiling, the §5.3.1 layout rules, Merkle, phase roots, `.zip` via `zipfile` with the local-header check), the three complete golden records in all representations, the schema-table diff against `test/egrf/schema.json` | CI runs `python test/egrf/egrf_ref.py --check`: every golden root reproduced and every negative vector's verdict matched |
+| **S10b-13** TypeScript reader. **Deferred (NQ-3: "Defer").** | `test/egrf/js/`: protobuf-es generated code (binary and the proto3 JSON mapping; not protobufjs, §5.5), Method B (with `readUnknownFields: false` for records of its own minor), D1-D6, `sizeDelimitedDecodeStream` with `readMaxBytes` set, Merkle roots | Reproduces the golden roots and negative verdicts in CI |
 | **S10b-14** `ElectionGuard.Verifier` | New project; `egrecord verify | digest | convert | diff | prove | show` over the Core API | CLI tests on the golden records: exit codes, report output, `digest` equal across representations |
 | **S10b-15** Migration of the consumers | `Program.cs` as in §8.5; egperf `writeRecord`/`verifyRecord` and the serialization phase on the item codec; `ElectionGuard.Testing.Cli` emits records; `test/data/*` regenerated | Console pipeline passes; perf smoke run and `compare --repeat 5` against a HEAD worktree baseline (allocation of the Google.Protobuf parse path checked here) |
 | **S10b-16** Retire superseded code | Remove `ProtobufEncryptedBallotSerializer` and its `Protobuf*` DTO tree, the protobuf-net package, `IEncryptedBallotSerializer`, the JSON ballot serializer, `JsonElectionRecordSerializer` (**replaced** by the proto3 JSON projection; its per-object API has no use once records are read and written as a whole, and `egrecord show` prints any item as JSON), `JsonPreEncryptedBallotSerializer`, `JsonDeviceChainRecordSerializer`, `StrictBase64` and `EncryptedBallotShape` (folded into the mappers). `ManifestSerializer` stays as the manifest parser; its writer stays only as an authoring helper whose output has no canonical status. | No remaining reference; the full suite green; CLAUDE.md's Serialization bullet rewritten |
 | **S10b-17** Live tailing (may be deferred) | `FollowLiveRecord`, prefix-checkpoint checking | Tail a record while a writer appends; a checkpoint mismatch is caught |
 | **S10b-18** Documentation and publication | CLAUDE.md "Record" architecture bullet; a formal-spec skeleton generated from §4 and the `.proto`; register `width`, `width_multiple` and `omittable` in protobuf's global extension registry and replace the draft numbers 50001-50003 (a user action: it is a pull request to the protobuf project) | Review only; the lint test pins the registered numbers |
+| **S10b-19** Guardians open uncast pre-encrypted ballots (NQ-5; after S10b, needs S10b-9) | `TallyGuardian.DecryptBallotNonce` (and the administrator's combine) also opens a pre-encrypted uncast item taken from a sealed record the guardian has verified (`VerifiedAggregate`, §6.9): it decrypts C_ξB as §3.6.7 does, and the administrator publishes the release (ξ_B for a compact item; the ξ_{i,j,k} by eq. 121 for a full one) only if it regenerates the item. It refuses any id_B that is cast in that record (Q31). No issued list and no once-only state (Q35, Q36: guardians decrypt only after the record is sealed). | A never-returned ballot opened by k guardians gives a release that passes V16 and V18 (17.A and 19.A-D hold by construction on the compact item, §3.2); decide whether the guardian also refuses an id_B, H_I or C_ξB,0 that matches a spoiled ballot of the sealed record (§3.3; review round 1 of S10b-A); an id_B cast in the record is refused; a ballot not in the sealed record is refused; a wrong m_i is detected and nothing is published |
 
 **No legacy importer.** v1's S10b-9 planned importers for today's JSON ballots, device chains and pre-encrypted
 JSON. No election record has been published in those formats, and the fixtures are regenerated (S10b-15), so the
@@ -2069,7 +1786,7 @@ S10b-9 (legacy importer) → dropped; S10b-12 (retire protobuf) → S10b-16.
 
 | S10a work | What S10b does with it |
 |---|---|
-| `ManifestSerializer` (strict reading, deterministic writing) | Parsing only on the record path (#19). Its reading rules are what `media_type` `...;format=1` names. H_B is over the stored bytes as entered. The writer stays an authoring helper with no canonical status. |
+| `ManifestSerializer` (strict reading, deterministic writing) | Parsing only on the record path (#19). Its reading rules, which since S10b-1b ignore unknown properties (NQ-1), are what `media_type` `...;format=1` names. H_B is over the stored bytes as entered, vendor properties included. The writer stays an authoring helper with no canonical status. |
 | `EncryptionRecord.Manifest` parsed from `ManifestFile` | `RecordSetup.ToEncryptionRecord()` uses it. There is no second path from a record to a `Manifest`. |
 | `EncryptionTimestamp` (nullable, ms, UTC; protobuf field 14) | Maps to `encrypted_at` (`Timestamp`, D3), same semantics. Field 14 retires with the DTO tree. |
 | `JsonElectionRecordSerializer` | Replaced by the proto3 JSON projection (S10b-16). Its strict round-trip tests become templates for S10b-4 and S10b-6. |
@@ -2102,13 +1819,15 @@ S10b-9 (legacy importer) → dropped; S10b-12 (retire protobuf) → S10b-16.
 ## 10. Risks and trade-offs
 
 1. **Canonicality rests on a profile, not on the protobuf library.** A runtime that serializes in another order, or
-   keeps unknown fields, would disagree under Method B. Mitigations: Method A is normative and needs no runtime, the
-   schema lint test keeps the `.proto` inside the profile, the golden and negative vectors arbitrate between
-   runtimes, and the Python reader proves the rules are complete.
+   writes kept unknown fields anywhere but after the known ones, would disagree under Method B, and no runtime checks
+   the order or numbering of unknown fields (§4.4). Mitigations: Method A is normative and needs no runtime, the
+   schema lint test keeps the `.proto` inside the profile and its changes append-only, the golden and negative
+   vectors arbitrate between runtimes, and the Python reader proves the rules are complete.
 2. **Packed fixed-width lists are less self-describing.** A proof list is one base64 string in JSON, not an array of
    (c, v) objects. The width options and comments say how to slice it. This is the price of #3's size priority (about
    1.4 % of a ballot).
-3. **Never-returned pre-encrypted ballots are expensive** in full form (§3.2, §4.7). NQ-2 offers the compact form.
+3. **Uncast pre-encrypted ballots are expensive in full form** (§3.2, §4.7). NQ-2 makes the compact form mandatory
+   for never-returned ballots, so only returned uncast ballots whose ξ_B stays secret pay the full cost.
 4. **Device partitioning** puts grouping and print-order placement on whoever assembles the record. There is no
    global arrival order apart from `encrypted_at`. One huge device serializes only its cheap chain walk; decoding
    still runs in parallel.
@@ -2118,7 +1837,8 @@ S10b-9 (legacy importer) → dropped; S10b-12 (retire protobuf) → S10b-16.
 7. **Indices on encrypted ballots.** A ballot item is unreadable without the manifest. That is acceptable because the
    manifest is always in the record, and the tools print labels as a derived view.
 8. **JSON is about 1.4 × protobuf and cannot carry unknown fields.** Distribute GB records as protobuf. A converter
-   refuses content it does not understand rather than dropping it.
+   refuses to write content it does not understand as JSON rather than dropping it, and a JSON reader cannot verify a
+   newer-minor record; the protobuf representation can (§7).
 9. **Merkle subtleties.** RFC 9162's split rule and empty tree are easy to get wrong. They are pinned with published
    and own vectors.
 10. **`EGParameters` is process-static.** VerifyAll checks V1 against it and never swaps it, so verifying records with
@@ -2129,9 +1849,15 @@ S10b-9 (legacy importer) → dropped; S10b-12 (retire protobuf) → S10b-16.
 12. **Divergence from a future official record spec** (§3.7: "specified in a separate document"). The §3 content map
     carries over, and the format version and root-preserving converters bound the rework.
 13. **Allocation on the Google.Protobuf parse path** (§8.1). Measured in S10b-15 against the perf gate.
-14. **The frame ceiling refuses some pre-encrypted elections.** A multi-contest uncast ballot with about m ≥ 100
-    options per contest can exceed 64 MiB in full form (§4.7). The writer refuses it with a clear error. NQ-2's compact
-    form, or a later minor that splits uncast items per contest, lifts the limit.
+14. **The frame ceiling refuses some pre-encrypted elections.** A multi-contest returned uncast ballot with about
+    m ≥ 100 options per contest can exceed 64 MiB in full form (§4.7). The writer refuses it with a clear error.
+    Releasing its ξ_B (Q28's opt-in) puts it in the compact form; a later minor that splits uncast items per contest
+    would also lift the limit. Never-returned ballots are always compact (NQ-2).
+16. **Newer-minor records verify incompletely by design** (NQ-1). An older verifier reports `Passed` with
+    `Complete = false` when a record uses a later minor's fields. A later minor never changes the meaning of an
+    existing check, so what the older verifier checked stays right, but whatever the new fields carry is unchecked.
+    The report and `egrecord verify`'s exit code 2 say so; an official verification should use a verifier that knows
+    the record's minor.
 15. **The draft option numbers.** Until `width`, `width_multiple` and `omittable` have registered extension numbers
     (S10b-18), a descriptor pool that also loads another organization's 50001-50003 options could collide. The
     numbers change once, before publication. That changes no item bytes, because options are not on the wire.
@@ -2153,7 +1879,7 @@ question numbers are kept so the tracker's references still resolve.
 | #6 (Q-6) Timestamps | Follow-up: "Full precision seems fine here. ... This isn't a real concern." | §4.3 D3, §4.6 (`Timestamp`, ms, no precision setting); the privacy-risk item is removed |
 | #7 (Q-7) Attestations and signatures | "Sure": chain close recommended, section seal optional, `ecdsa-p256-sha256` mandatory, `Report` default with `RequireValid` for official runs | §4.9 |
 | #8 (Q-8) Challenged ballot with no decryption | "Yes": v1 (now v2.0) requires a decryption for every challenged ballot | §6.2 join rules, extended to uncast releases |
-| #9 (Q-9) Election info | Follow-up: "Only what isn't in manifest" | §3.1, §4.6 (`RecordHeader.election_info`, limited to facts the manifest lacks; the reading is confirmed by NQ-4) |
+| #9 (Q-9) Election info | Follow-up: "Only what isn't in manifest" | §3.1, §4.6; NQ-4 settled where: optional manifest fields, and a header with the format version only |
 | #10 (Q-10) Contest-data decryption | Follow-up: "Record the requested set" | `ContestDataRequest`, §6.2 |
 | #11 (Q-11) Out-of-range values | "Out of range values are a problem for a verifier, not the election record format." | §4.3, §4.8 |
 | #12 (Q-12) String ballot id | Follow-up: "Keep, optional" | `ballot_ref`, §4.6 |
@@ -2164,89 +1890,51 @@ question numbers are kept so the tracker's references still resolve.
 | #17 (Q-17) Tally header | "Sure" | `EncryptedTallyHeader` |
 | #18 (Q-18) Derived views | Follow-up: "Alongside, not signed" | §5.6 |
 | #19 (S10a-1) Manifest bytes | "it should be output to the election record exactly as it was entered. The canonical serialization for the manifest is not as important." | §4.6, §9.3 |
-| Profile | Follow-up: "Yes, canonical protobuf": normative `.proto`, field-number order, no maps, no unknown fields, fixed-width bytes, re-serialize to check, proto3 JSON, golden vectors and a Python reader | §4, §5.5, §5.7 |
+| Profile | Follow-up: "Yes, canonical protobuf": normative `.proto`, field-number order, no maps, no unknown fields, fixed-width bytes, re-serialize to check, proto3 JSON, golden vectors and a Python reader. "No unknown fields" is amended by NQ-1 | §4, §5.5, §5.7 |
+| NQ-1 Per-item extensions | "Vendors should never add fields to most of the types. The manifest is really the only field I would ever expect a vendor to provide additional data, so honestly it's canonical form should probably be json. Protobuf tends to be backwards compatible by default, so we should be good with future versions already. I don't think we need anything special here." | No extension list (`RecordItem` 2047 reserved, §4.6). Unknown fields allowed only after every known field, ascending, append-only numbers, kept on re-encoding (S6, W6, §4.4); a newer minor is informational (§6.9, §7). The manifest stays JSON stored byte for byte; its reader ignores unknown properties and still refuses duplicate keys and malformed JSON (§4.6; S10b-1b) |
+| NQ-2 Compact uncast form | "Compact required for unreturned" | `PreEncryptedCompactUncastBallot`; mandatory for never-returned ballots, and the form of any uncast ballot whose ξ_B is released (§3.2, §4.6, §6.2) |
+| NQ-3 JavaScript conformance reader | "Defer" | S10b-13 deferred |
+| NQ-4 Election facts | "Optional manifest fields" | `Manifest.ElectionName`/`ElectionDate`/`ElectionType`/`Jurisdiction`/`Location` (S10b-1b); `RecordHeader` = format version only (field 3 reserved) (§3.1, §4.6) |
+| NQ-5 Opening uncast pre-encrypted ballots | "Later: guardian opens from sealed record" | S10b-19, after S10b (§1, §3.2, §6.9) |
+| NQ-6 Pipe input | "Drop it" | A non-seekable input is spooled to a temporary file (§5.4, §6.3; S10b-7) |
+
+Decided while applying review round 1 of S10b-A (no user decision needed; listed so it can be overruled): **oneof
+members are messages (S8).** A set scalar member would be written as an explicit VARINT 0 (W2), which W6 tells an
+older reader never to accept in an unknown field. Restricting oneof members to messages, which `RecordItem` already
+satisfies, keeps W6's check and changes no bytes; the other fix, dropping W6's "unknown VARINT is not 0" clause, would
+weaken the check for every record. The lint enforces it.
 
 Changed after review: single-pass verification of a `.zip` from a pipe (v1's Q-14 sub-question) is dropped. It turned
-out to cost much more than the prescribed entry order (§5.4), and NQ-6 lets the user keep it anyway.
+out to cost much more than the prescribed entry order (§5.4), and NQ-6 confirmed the drop.
 
 ---
 
 ## 12. New questions
 
-These arise from the protobuf choice, the answers above and review round 1. Each has options and a recommendation.
+NQ-1 to NQ-6, asked in revision 2 with options and recommendations, are answered (2026-10-09). The answers are in
+§11 and applied throughout; revision 2's option text is in the repository history. Applying them took three readings
+that the answers did not spell out. Each is implemented or written into this design as stated, and is listed here
+for the user to confirm:
 
-- **NQ-1 Per-item extensions under "no unknown fields".**
-  - Options: (a) keep `repeated Extension extensions = 2047` on `RecordItem` (tag, critical flag, opaque bytes),
-    so a vendor can attach data to one item, and a reader that does not know a critical tag refuses to evaluate the
-    item; (b) no per-item extensions: vendor data goes only in vendor sections that reference items by locator, and
-    standard additions come only as minor-version fields.
-  - **Recommend (a).** It costs nothing when unused (an empty repeated field is absent), it survives conversion
-    because the payload is bytes, and the critical flag keeps G-6 for vendor data. The cost is one decode rule (D5)
-    and opaque base64 in JSON.
-- **NQ-2 Compact form for uncast pre-encrypted ballots whose ξ_B is released.**
-  - Context: #5 makes every never-returned printed ballot a full uncast record, (m+L)·(m·1,024 + 32) B per contest,
-    about 31 KB at m = 5, L = 1, and over 11 MB at m = 100, L = 10 (§4.7). Very large ones can pass the 64 MiB frame
-    ceiling (§5.2). A ballot's vectors, ψ and short codes are all deterministic in ξ_B (eqs. 113-121).
-  - Options: (a) always the full printed content, as §4.3.1 describes; (b) allow a compact item when the release
-    carries ξ_B: the device section keeps id_B, H_I, the style, C_ξB, per contest only (index, χ), H_C and B_C; the
-    verifier regenerates every vector, ψ and short code from ξ_B, checks χ and H_C against the item (which proves the
-    printed ballot is exactly the regenerated one), and runs V16-V19 on the regenerated content; (c) like (b), but
-    required for never-returned ballots.
-  - **Recommend (b).** About 0.8 KB instead of about 31 KB per contest, and no item comes near the frame ceiling.
-    Verification costs the same, since V18 already recomputes every encryption. Releasing ξ_B on an uncast ballot
-    reveals no voter choice: a pre-encrypted ballot encodes every option, and the voter's marks are on paper. Q28's
-    opt-in stays for selective release. (b) changes how an uncast ballot is represented, not #5's decision: the ballot
-    is still recorded as challenged and opened. Two departures go into the formal spec: from §4.3.1/§4.4's "posts ...
-    the full set of pre-encryption vectors", and the voter-facing short codes coming from derived views.
-- **NQ-3 A JavaScript conformance reader.**
-  - Options: (a) the Python reference reader only; (b) also a minimal TypeScript reader in `test/egrf/js/`
-    (protobuf-es generated code, Method B, Merkle roots) that CI runs against the golden vectors; (c) defer.
-  - **Recommend (b).** The user named a JavaScript verifier as the case that must stay easy (#13). The feasibility run
-    supports it. protobuf-es matched Python's canonical bytes for every item, and its `toJsonString` matched Python's
-    JSON byte for byte. protobufjs also writes canonical binary, but it does not implement the proto3 JSON mapping
-    (§5.5), so the reader uses protobuf-es. About 200 lines and one npm dev dependency prove it, and it doubles as a
-    second runtime for Method B. It adds Node to CI and is not a product commitment.
-- **NQ-4 Where §3.7's election-identifying facts live** (confirms follow-up #9).
-  - Context: §3.7 bullet 1 asks for "information sufficient to uniquely identify and describe the election, such as
-    date, location, election type, etc. (not otherwise included in the election manifest)". The user answered "Only
-    what isn't in manifest". The tracker recorded that as "the header carries only format settings; descriptive facts
-    live in the manifest". But the manifest model has no date, location or type field, and `ManifestSerializer`
-    refuses unknown properties. On that reading, these facts would have no signed place in the record. This revision
-    therefore reads the answer as the spec's parenthetical: the header carries those facts, but only the ones the
-    manifest does not.
-  - Options: (a) `RecordHeader.election_info`, a sorted list of (key, value) pairs from a small registry
-    (`election_name`, `election_date`, `election_type`, `jurisdiction`, `location`, `administrator`) plus `x-` vendor
-    keys, covered by the root and signatures and never verified (as now written, §4.6); (b) add optional fields for
-    these facts to the manifest model and its strict reader, so they are bound into H_B, and keep the header to the
-    format version; (c) carry none, and leave §3.7 bullet 1 to `meta.json`, outside the root.
-  - **Recommend (a).** It follows the spec's wording and needs no change to the manifest model or to H_B's input.
-    (b) is also sound, and puts the facts under H_B, but it changes the manifest schema that every encryptor reads.
-    (c) leaves a §3.7 item unsigned.
-- **NQ-5 Who opens uncast pre-encrypted ballots.**
-  - Context: v2.0 requires a nonce release for every uncast pre-encrypted ballot, never-returned ones included (#5,
-    #8). Spec p.66 derives the released nonces from ξ_B "after it has been decrypted as specified in Section 3.6.7",
-    which is a guardian decryption of C_ξB. Q35 removed the guardians' pre-encrypted nonce path from Core, along with
-    the issued list that guarded it against early opening. Q36 has since removed that concern: guardians decrypt only
-    after voting is over and the record is sealed. Today, only the out-of-scope recording tool can supply the
-    releases.
-  - Options: (a) keep it out of scope: releases come from the recording tool, or from the printer's own database;
-    (b) let `TallyGuardian.DecryptBallotNonce` also open a `PreEncryptedUncastBallot` taken from a sealed record the
-    guardian has verified (the `VerifiedAggregate` of §6.9), refusing any id_B that is cast in that record (Q31's
-    check), with no issued list and no once-only state.
-  - **Recommend (b), as a step after S10b.** It is the §3.6.7 primitive the spec names for this, Q36 makes it safe
-    without the machinery Q35 removed, and without it Core cannot complete its own records when printed ballots are
-    never returned. It does not block S10b: the format is the same either way.
-- **NQ-6 Single-pass verification from a pipe.**
-  - Context: v1 kept single-pass reading of a `.zip` from a pipe and asked whether to drop it. Review round 1 found
-    three problems. No stock zip library reads a non-seekable archive entry by entry (.NET buffers the whole input).
-    Every writer would need extra rules. And the join sections would have to be buffered without bound, about 9.6 GB
-    of uncast releases in the case worked in §5.4.
-  - Options: (a) drop it: a non-seekable input is spooled to a temporary file, and HTTP range requests count as
-    seekable (as now written, §5.4); (b) keep it, with normative writer rules (STORED entries with sizes and CRC in the
-    local header, no data descriptors, a prescribed entry order), a hand-written local-header reader in every
-    language, and join sections spilled to disk as they stream past.
-  - **Recommend (a).** It costs disk equal to the record, and only when the input cannot seek. (b) adds format rules
-    and per-language code for a case that a download followed by verification already covers.
+- **R-1 (NQ-2) When the compact form applies.** "Compact required for unreturned" makes the compact item mandatory
+  for never-returned ballots. Revision 2's option (b), which (c) extends, also allowed it for any uncast ballot whose
+  ξ_B is released. This design makes the form a function of what is released, so that no ballot has two valid
+  encodings: compact iff ξ_B is released (never-returned ballots always are), full iff it is not (§3.2). The
+  alternative is "compact iff never returned", with a returned ballot always in full even when its ξ_B is released
+  (then the full item and ξ_B are both published, and the record says which ballots came back). The main difference
+  for returned ballots (review round 1 of S10b-A): a compact item records no short codes or labels, so 17.A and
+  19.A-D hold by construction on it (§3.2), and only the voter's comparison of the paper with the derived view checks
+  what was printed. Under (a) that holds for a returned ballot whose ξ_B is released, which is the ballot a voter
+  actually audits; under (b) the full item keeps those codes and labels in the record, so V17 and V19 check them, at
+  about 31 KB per contest (m = 5, L = 1).
+- **R-2 (NQ-1) What a newer minor does to the verdict.** "Reports that the record is newer but still verifies
+  everything it understands" is read as informational: `Passed` means no failures, `Complete = false` is reported
+  beside it, and `egrecord verify` exits 2 instead of 0 (§6.9, risk 16). Revision 2 required `Complete` for `Passed`.
+  Unknown critical sections and unknown item types in sections that must verify stay `R.version` failures.
+- **R-3 (NQ-1) Near-miss manifest properties.** The manifest reader ignores unknown properties but refuses one whose
+  name equals a member's name once case, `_` and `-` are disregarded (`ChainingMode`, `chaining_mode`), because a
+  loosely matching reader in another language would read it as that member and compute with another manifest under
+  the same H_B (§4.6, S10b-1b). Ignoring those too would follow "ignores unknown properties" literally.
 
 ---
 
@@ -2259,12 +1947,12 @@ appendix records the findings that were rejected, narrowed or changed in scope, 
   a BOM is refused by `WriteSetupAsync`, because the media type's parser refuses it. The bytes are never rewritten,
   so "exactly as entered" holds for every manifest the record accepts. Relaxing `ManifestSerializer` would change
   S10a's strict reading for one byte sequence, which no one has asked for.
-- **Unknown manifest properties (review 1, #19).** Kept refused. "Need only be a valid document" is read as "valid
-  under the media type's parser". The one need for extra properties found, the §3.7 election facts, is met by
-  `election_info`. NQ-4 option (b) is the alternative.
+- **Unknown manifest properties (review 1, #19).** Revision 2 kept them refused. Superseded by NQ-1 (the manifest is
+  where vendors add data) and NQ-4 (the election facts are manifest fields): the reader now ignores them, and H_B
+  binds them through the bytes (S10b-1b).
 - **Mandatory release for every uncast item (review 1, #8 extrapolation).** Kept. §4.4 publishes the nonces of every
   uncast ballot, #5 makes never-returned ballots uncast, and #8 requires every challenged ballot's opening. Who
-  produces the release is NQ-5, not a format question.
+  produces the release is NQ-5 (the guardians, from the sealed record, in S10b-19), not a format question.
 - **V6 on uncast vectors (review 1).** Settled as 6.A at the range layer only. Spec p.65 applies V6 to "all individual
   selection encryptions within the selection vectors", but uncast vectors carry no range proofs, so 6.B-6.D cannot
   apply. Subgroup membership is implied by V18, which recomputes each α and β from the released nonces. An explicit
@@ -2291,3 +1979,12 @@ appendix records the findings that were rejected, narrowed or changed in scope, 
   true (§4.5).
 - **C# `JsonParser` rejecting unknown members (feasibility, not tested).** The design keeps the claim, which matches
   Google.Protobuf's default `IgnoreUnknownFields = false`, and pins it with a negative vector (§5.7).
+
+**S10b-A implementation review, round 1 (2026-10-09).** All eight findings were applied; none was rejected. The
+design changes: the compact form's limits on V17 and V19 (§3.2, §3.3, §6.2, §6.9, §12 R-1, and a third divergence
+for the formal spec); S8 now keeps scalars out of oneofs, so W6's "unknown VARINT is not 0" cannot reject a
+canonical newer record (§4.2.1, §4.2.2, §4.4, §11); and the spoiled-ballot wording says what actually stops a
+decryption (§3.3, §8.3, S10b-9 and S10b-19 rows). One finding was narrowed. A test that a spoiled ballot sharing id_B
+with a cast one fails 5.A cannot be written against today's API, because Verification 5.A takes identifiers, not
+ballots, and so has no status to filter on. It is added to S10b-9's tests, where the record verifier collects the
+identifiers.

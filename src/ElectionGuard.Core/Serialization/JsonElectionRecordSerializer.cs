@@ -25,7 +25,8 @@ namespace ElectionGuard.Core.Serialization;
 /// guardian index, a count and an index as JSON numbers.</para>
 ///
 /// <para><b>Decoding is strict.</b> No byte order mark, comment, trailing comma, unknown property,
-/// property named twice, property name that is not valid text, missing required property, null
+/// property named twice, byte that is not well-formed UTF-8 or string or property name that escapes
+/// to a lone surrogate (anywhere, skipped members included), missing required property, null
 /// value or null list entry (<see cref="JsonException"/>); base64 only in its canonical form
 /// (<see cref="StrictBase64"/>), every element of Z_p and Z_q exactly its width and below p or q,
 /// every hash exactly 32 bytes, each parameter exactly its width

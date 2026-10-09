@@ -80,7 +80,6 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
                     ChoiceId = s.ChoiceId,
                     Alpha = s.Alpha,
                     Beta = s.Beta,
-                    EncryptionNonce = s.EncryptionNonce,
                     Proofs = s.Proofs.Select(p => new ProtobufChallengeResponsePair
                     {
                         Challenge = p.Challenge.ToByteArray(),
@@ -362,9 +361,10 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
         public required int Weight { get; init; }
 
         /// <summary>
-        /// The recorded <see cref="BallotStatus"/> (§3.7). Not required: a ballot serialized before
-        /// it was submitted has none, and 0 (<see cref="BallotStatus.NotSubmitted"/>) is then left
-        /// off the wire.
+        /// The recorded <see cref="BallotStatus"/> (§3.7): cast, challenged or spoiled. Not
+        /// required: a ballot serialized before its status was recorded has none, and 0
+        /// (<see cref="BallotStatus.Unrecorded"/>) is then left off the wire; such a ballot cannot be
+        /// tallied ("9.structure").
         /// </summary>
         [ProtoMember(9)]
         public BallotStatus Status { get; init; }
@@ -504,32 +504,13 @@ public class ProtobufEncryptedBallotSerializer : IEncryptedBallotSerializer
         public required byte[] Alpha { get; init; }
         [ProtoMember(2)]
         public required byte[] Beta { get; init; }
-        
-        public byte[]? EncryptionNonce { get; init; }
+
+        // No nonce member, on purpose (S10b-0): an encryption nonce is a secret, and a DTO member
+        // holding one is one attribute away from putting it on the wire. The unused
+        // ProtobufEncryptedValue struct, which also had one, is gone.
 
         [ProtoMember(3)]
         public required ProtobufChallengeResponsePair[] Proofs { get; init; }
-
-        public ProtobufEncryptedValue ToEncryptedValue()
-        {
-            return new ProtobufEncryptedValue
-            {
-                Alpha = Alpha,
-                Beta = Beta,
-                EncryptionNonce = EncryptionNonce
-            };
-        }
-    }
-
-    [ProtoContract]
-    public struct ProtobufEncryptedValue
-    {
-        [ProtoMember(1)]
-        public required byte[] Alpha { get; init; }
-        [ProtoMember(2)]
-        public required byte[] Beta { get; init; }
-
-        public byte[]? EncryptionNonce { get; init; }
     }
 
     /// <summary>

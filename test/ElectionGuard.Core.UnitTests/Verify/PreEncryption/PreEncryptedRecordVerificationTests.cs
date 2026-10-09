@@ -300,7 +300,8 @@ public class PreEncryptedRecordVerificationTests
         // A pre-encrypted record is a cast ballot's; under any other status it would leave the tally
         // silently, and an uncast pre-encrypted ballot is published with its nonces (Verification 18).
         yield return ["recorded as challenged", new Func<EncryptedBallot, EncryptedBallot>(b => Copy(b, status: BallotStatus.Challenged))];
-        yield return ["recorded as not submitted", new Func<EncryptedBallot, EncryptedBallot>(b => Copy(b, status: BallotStatus.NotSubmitted))];
+        yield return ["recorded as unrecorded", new Func<EncryptedBallot, EncryptedBallot>(b => Copy(b, status: BallotStatus.Unrecorded))];
+        yield return ["recorded as spoiled", new Func<EncryptedBallot, EncryptedBallot>(b => Copy(b, status: BallotStatus.Spoiled))];
     }
 
     [Theory]

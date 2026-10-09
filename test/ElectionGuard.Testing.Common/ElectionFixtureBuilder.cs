@@ -362,7 +362,7 @@ public static class ElectionFixtureBuilder
     /// Encrypts a ballot and records it as submitted with <paramref name="status"/> (cast, by
     /// default), as Program.cs does. Pass previousConfirmationCode to chain from a prior ballot on
     /// the same device (ChainingMode.Simple); pass null for the first ballot. Pass
-    /// <see cref="BallotStatus.NotSubmitted"/> to get the encryptor's output untouched.
+    /// <see cref="BallotStatus.Unrecorded"/> to get the encryptor's output untouched.
     /// </summary>
     public static EncryptedBallot CreateEncryptedBallot(
         EncryptionRecord encryptionRecord,
@@ -374,7 +374,7 @@ public static class ElectionFixtureBuilder
     {
         var encryptor = new BallotEncryptor(encryptionRecord, deviceId, deviceHash);
         var encryptedBallot = encryptor.Encrypt(ballot, previousConfirmationCode);
-        if (status != BallotStatus.NotSubmitted)
+        if (status != BallotStatus.Unrecorded)
         {
             encryptedBallot.RecordStatus(status);
         }

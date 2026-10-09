@@ -104,16 +104,18 @@ public class EncryptedBallot
     private BallotStatus _status;
 
     /// <summary>
-    /// Whether the ballot was cast or challenged (§3.7: "the status of the ballot (cast or
-    /// challenged)"). The voter decides only after the device has shown the confirmation code, so
-    /// the encryptor leaves this at <see cref="BallotStatus.NotSubmitted"/> and whoever receives the
-    /// ballot records it once, with <see cref="RecordStatus"/>. A deserialized ballot carries
-    /// whatever its record says; the init accessor exists for that, and for copies.
+    /// Whether the ballot was cast, challenged or spoiled (§3.7: "the status of the ballot (cast or
+    /// challenged)"; <see cref="BallotStatus.Spoiled"/> is the record's third status, user decision
+    /// S10b #4). The voter decides only after the device has shown the confirmation code, so the
+    /// encryptor leaves this at <see cref="BallotStatus.Unrecorded"/> and whoever receives the ballot
+    /// records it once, with <see cref="RecordStatus"/>. A deserialized ballot carries whatever its
+    /// record says; the init accessor exists for that, and for copies.
     ///
     /// The status is not an input to any hash: it is not covered by the confirmation code.
     /// Aggregation (<see cref="Tally.EncryptedTally.AddBallot"/>) and therefore Verification 9 count
-    /// only <see cref="BallotStatus.Cast"/> ballots, skip challenged ones, and reject a ballot with
-    /// no recorded status. Verifications 5 to 8 apply to every submitted ballot whatever its status.
+    /// only <see cref="BallotStatus.Cast"/> ballots, skip challenged and spoiled ones, and reject a
+    /// ballot with no recorded status. Every ballot in the record was submitted, whatever its status,
+    /// so Verifications 5 to 8 apply to it and its contests count for 11.D.
     /// </summary>
     public BallotStatus Status
     {
@@ -122,20 +124,21 @@ public class EncryptedBallot
     }
 
     /// <summary>
-    /// Records the voter's cast-or-challenge decision. It can be made once: a ballot whose status
-    /// is already recorded throws <see cref="InvalidOperationException"/>, so a challenged ballot,
-    /// whose nonces are about to be revealed, can never become a cast one.
+    /// Records what became of the ballot: cast, challenged or spoiled. It can be recorded once: a
+    /// ballot whose status is already recorded throws <see cref="InvalidOperationException"/>, so a
+    /// challenged ballot, whose nonces are about to be revealed, can never become a cast one, and
+    /// neither can a spoiled one.
     /// </summary>
     public void RecordStatus(BallotStatus status)
     {
-        if (status is not (BallotStatus.Cast or BallotStatus.Challenged))
+        if (status is not (BallotStatus.Cast or BallotStatus.Challenged or BallotStatus.Spoiled))
         {
-            throw new ArgumentOutOfRangeException(nameof(status), status, "A ballot is recorded as cast or as challenged.");
+            throw new ArgumentOutOfRangeException(nameof(status), status, "A ballot is recorded as cast, challenged or spoiled.");
         }
 
-        if (_status != BallotStatus.NotSubmitted)
+        if (_status != BallotStatus.Unrecorded)
         {
-            throw new InvalidOperationException($"Ballot {Id} is already recorded as {_status}; the cast-or-challenge decision is final.");
+            throw new InvalidOperationException($"Ballot {Id} is already recorded as {_status}; a ballot's status is recorded once and is final.");
         }
 
         _status = status;
@@ -143,14 +146,19 @@ public class EncryptedBallot
 }
 
 /// <summary>
-/// The status of a submitted ballot in the election record (§3.7). The numeric values are part of
-/// the protobuf encoding; <see cref="NotSubmitted"/> is 0 so that a ballot whose record leaves the
-/// status out is never read as cast.
+/// The status of a ballot (§3.7). The numeric values are part of the protobuf encodings and equal
+/// the election record's <c>BallotStatus</c> enum numbers (EGRF v2); <see cref="Unrecorded"/> is 0
+/// so that a ballot whose record leaves the status out is never read as cast.
 /// </summary>
 public enum BallotStatus
 {
-    /// <summary>No cast-or-challenge decision has been recorded. Such a ballot cannot be tallied.</summary>
-    NotSubmitted = 0,
+    /// <summary>
+    /// In memory only: no decision has been recorded yet (the encryptor's output). Never valid in a
+    /// record, and a serialized ballot that carries it cannot be tallied ("9.structure"). Was
+    /// <c>NotSubmitted</c>; renamed because anything in the record was by definition submitted
+    /// (user decision S10b #4).
+    /// </summary>
+    Unrecorded = 0,
 
     /// <summary>Cast: included in the tally (Verification 9 "all cast ballots").</summary>
     Cast = 1,
@@ -162,6 +170,20 @@ public enum BallotStatus
     /// decision Q31: a status is the requester's claim).
     /// </summary>
     Challenged = 2,
+
+    /// <summary>
+    /// Submitted but neither cast nor challenged, for example a ballot the voter abandoned (user
+    /// decision S10b #4: "Anything not cast or challenged can probably be considered Spoiled").
+    /// It stays in its device's chain, counts as submitted for Verifications 5.A and 11.D, and is
+    /// checked by Verifications 5 to 8 like any ballot. It is never tallied, and it is not decrypted
+    /// by this library's paths: the nonce path and Verifications 13 and 14 accept only a challenged
+    /// ballot. That status test reads the status the requester states, so it is a sanity check, not
+    /// a protection: the guardian's view (<see cref="ElectionGuard.Core.Tally.IPublishedCastBallots"/>, user decision
+    /// Q31) protects cast ballots only, and a spoiled ballot relabelled as challenged would get its
+    /// nonce decrypted. The recorded status is protected by the election record's section seal and
+    /// signatures (S10b-6 onward).
+    /// </summary>
+    Spoiled = 3,
 }
 
 public record EncryptedContest

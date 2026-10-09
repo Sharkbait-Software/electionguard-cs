@@ -205,6 +205,22 @@ try
 
     publishedBallotFiles.Add(challengedFile);
 
+    // A ballot that is neither cast nor challenged, such as one the voter walked away from, is
+    // recorded as spoiled (S10b #4). It was submitted: it stays in the device's chain and gets
+    // Verifications 5 to 8 like any ballot, and its contests count for 11.D, but it is never tallied
+    // and never decrypted. Here the first ballot is encrypted a third time and spoiled.
+    var spoiledPlaintext = JsonSerializer.Deserialize<Ballot>(File.ReadAllBytes(challengedSource), jsonOptions)!;
+    spoiledPlaintext = spoiledPlaintext with { Id = $"{spoiledPlaintext.Id}-spoiled" };
+    var spoiledBallot = new BallotEncryptor(encryptionRecord, deviceId, deviceHash).EncryptNext(spoiledPlaintext, deviceChain);
+    spoiledBallot.RecordStatus(BallotStatus.Spoiled);
+    var spoiledFile = Path.Combine(outputDirectory, "encrypted-json-ballots", $"{spoiledPlaintext.Id}.json");
+    using (var jsonFileStream = File.Create(spoiledFile))
+    {
+        jsonBallotSerializer.Serialize(jsonFileStream, spoiledBallot);
+    }
+
+    publishedBallotFiles.Add(spoiledFile);
+
     // End of voting: the device closes its confirmation code chain (§3.4.4 eqs. 77/78 under simple
     // chaining) and publishes its ordered list of ballots with the closing hash (§3.7), read back
     // like every other record item.
@@ -266,7 +282,7 @@ try
     // 8.D/8.E, then 8.F and 8.G under simple chaining.
     new ConfirmationCodeVerification().VerifyDevices(deviceChainRecords, encryptedBallots, encryptionRecord);
 
-    // Only cast ballots are aggregated; a challenged one would be skipped here and in Verification 9.
+    // Only cast ballots are aggregated; challenged and spoiled ones are skipped here and in Verification 9.
     // The encrypted tally is published and read back; the copy read back restores each option's
     // decryption bound from its contest's published cast weight.
     var aggregated = new EncryptedTally(manifest);
@@ -298,7 +314,7 @@ try
     var tallyDecryptionVerification = new TallyDecryptionVerification();
     tallyDecryptionVerification.Verify(encryptionRecord, encryptedTally, decryptedTally);
 
-    // Verification 11, with 11.D over every submitted ballot (cast or challenged).
+    // Verification 11, with 11.D over every submitted ballot (cast, challenged or spoiled).
     var tallyContentsVerification = new TallyContentsVerification();
     tallyContentsVerification.Verify(manifest, decryptedTally, encryptedBallots);
 

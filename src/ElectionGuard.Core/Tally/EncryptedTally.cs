@@ -117,7 +117,7 @@ public class EncryptedTally
     public Manifest Manifest => _manifest;
 
     /// <summary>
-    /// The number of cast ballots added. Challenged ballots are not counted (see
+    /// The number of cast ballots added. Challenged and spoiled ballots are not counted (see
     /// <see cref="AddBallot"/>). This is not the decryption bound: a weighted ballot, or one giving
     /// an option more than 1, adds more than 1 to a count; see
     /// <see cref="EncryptedAggregateChoice.MaximumCount"/>. Published with the tally for
@@ -131,11 +131,11 @@ public class EncryptedTally
     /// raised to the ballot's weight (eq. 80). Verification 9 recomputes the aggregate through this
     /// method, so its rejections are Verification 9 failures:
     /// <list type="bullet">
-    /// <item>A <see cref="BallotStatus.Challenged"/> ballot is skipped: only cast ballots are
-    /// aggregated (§3.5, Verification 9 "all cast ballots").</item>
-    /// <item>A ballot with no recorded status (<see cref="BallotStatus.NotSubmitted"/>) is rejected
-    /// with a <see cref="VerificationFailedException"/> of sub-section "9.structure": the record
-    /// must say whether it was cast.</item>
+    /// <item>A <see cref="BallotStatus.Challenged"/> or <see cref="BallotStatus.Spoiled"/> ballot
+    /// is skipped: only cast ballots are aggregated (§3.5, Verification 9 "all cast ballots").</item>
+    /// <item>A ballot with no recorded status (<see cref="BallotStatus.Unrecorded"/>), or with a
+    /// value that is not a status, is rejected with a <see cref="VerificationFailedException"/> of
+    /// sub-section "9.structure": the record must say whether it was cast.</item>
     /// <item>A weight below 1 is rejected the same way. Eq. (80) weights are small positive
     /// integers; a weight of 0 or less used to be counted as 1 (G30).</item>
     /// <item>A ballot that does not list exactly its ballot style's contests and the manifest's
@@ -146,7 +146,7 @@ public class EncryptedTally
     /// </summary>
     public void AddBallot(EncryptedBallot encryptedBallot)
     {
-        if (encryptedBallot.Status == BallotStatus.Challenged)
+        if (encryptedBallot.Status is BallotStatus.Challenged or BallotStatus.Spoiled)
         {
             return;
         }
@@ -154,7 +154,7 @@ public class EncryptedTally
         if (encryptedBallot.Status != BallotStatus.Cast)
         {
             throw new VerificationFailedException("9.structure",
-                $"Ballot {encryptedBallot.Id} has status {encryptedBallot.Status}: only a ballot recorded as cast is aggregated, and only a challenged one is left out (§3.7, Verification 9).");
+                $"Ballot {encryptedBallot.Id} has status {encryptedBallot.Status}: only a ballot recorded as cast is aggregated, and only a challenged or spoiled one is left out (§3.7, Verification 9).");
         }
 
         if (encryptedBallot.Weight < 1)

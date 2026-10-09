@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Unicode;
 
 namespace ElectionGuard.Core.Serialization;
 
@@ -12,17 +13,29 @@ internal static class StrictJson
 {
     /// <summary>
     /// Throws <see cref="JsonException"/> if <paramref name="utf8Json"/> starts with a UTF-8 byte
-    /// order mark, or if any object in it names the same property twice (after unescaping, so
-    /// <c>"id"</c> and <c>"id"</c> are the same name). System.Text.Json on .NET 9 lets the
-    /// last duplicate win, and other JSON readers keep the first, so two conformant readers could
-    /// see two different documents in the same bytes. Comments and trailing commas are refused as
-    /// well (the reader's defaults).
+    /// order mark, if any object in it names the same property twice (after unescaping, so
+    /// <c>"id"</c> and <c>"id"</c> are the same name), or if it is not text: bytes that are
+    /// not well-formed UTF-8 (RFC 3629; RFC 8259 §8.1 requires UTF-8), or a string or property name
+    /// whose escapes leave a lone surrogate such as <c>"\uD800"</c>. System.Text.Json on .NET 9 lets
+    /// the last duplicate win, and other JSON readers keep the first, so two conformant readers could
+    /// see two different documents in the same bytes. The text checks cover every string, including
+    /// a value the deserializer later skips without decoding (an unknown manifest property, a
+    /// <c>[JsonIgnore]</c> member), so that whether a document is accepted does not depend on which
+    /// members a reader knows. Comments, trailing commas and nesting deeper than 64 levels (the
+    /// top-level value is level 1) are refused as well (the reader's defaults).
     /// </summary>
     public static void RejectAmbiguity(ReadOnlySpan<byte> utf8Json)
     {
         if (utf8Json.StartsWith((ReadOnlySpan<byte>)[0xEF, 0xBB, 0xBF]))
         {
             throw new JsonException("The document starts with a UTF-8 byte order mark; it is UTF-8 without one.");
+        }
+
+        // The reader decodes a string only when asked for it, so without this the bytes of a value
+        // nobody reads would never be checked.
+        if (!Utf8.IsValid(utf8Json))
+        {
+            throw new JsonException("The document is not well-formed UTF-8 (RFC 8259 §8.1, RFC 3629).");
         }
 
         var reader = new Utf8JsonReader(utf8Json, new JsonReaderOptions
@@ -56,16 +69,22 @@ internal static class StrictJson
                         }
 
                         break;
+                    case JsonTokenType.String when reader.ValueIsEscaped:
+                        // The bytes are well-formed UTF-8 (checked above), so only an escape can
+                        // leave a string that is not text; decoding it refuses a lone surrogate.
+                        _ = reader.GetString();
+                        break;
                 }
             }
         }
         catch (InvalidOperationException ex)
         {
-            // GetString throws InvalidOperationException for a property name that is not valid
-            // text: invalid UTF-8, or an escaped lone surrogate such as "\uD800". Only
-            // JsonSerializer.Deserialize turns the reader's exceptions into JsonException, and this
-            // runs before it, so the readers' typed-error promise needs the translation here.
-            throw new JsonException($"A property name is not valid text: {ex.Message}", ex);
+            // GetString throws InvalidOperationException for a string or property name that is not
+            // valid text: an escaped lone surrogate such as "\uD800" (invalid UTF-8 is refused
+            // above). Only JsonSerializer.Deserialize turns the reader's exceptions into
+            // JsonException, and this runs before it, so the readers' typed-error promise needs the
+            // translation here.
+            throw new JsonException($"A string or property name is not valid text (at byte {reader.TokenStartIndex}): {ex.Message}", ex);
         }
     }
 

@@ -4,14 +4,16 @@ using ElectionGuard.Core.Models;
 using ElectionGuard.Core.Serialization;
 using ElectionGuard.Core.Tally;
 using ElectionGuard.Core.Verify;
+using ElectionGuard.Core.Verify.Ballot;
 using ElectionGuard.Core.Verify.Tally;
 using ElectionGuard.Testing.Common;
 
 namespace ElectionGuard.Core.UnitTests.Tally;
 
 /// <summary>
-/// G21 (cast/challenged status), G30 (weights below 1) and G20 (Verification 9 compares the
-/// manifest's options, all of them and nothing else).
+/// G21 (cast/challenged status; S10b-1 adds spoiled and renames the in-memory zero value to
+/// unrecorded), G30 (weights below 1) and G20 (Verification 9 compares the manifest's options, all
+/// of them and nothing else).
 /// </summary>
 public class BallotStatusAndWeightTests
 {
@@ -39,38 +41,138 @@ public class BallotStatusAndWeightTests
 
         var encrypted = new BallotEncryptor(record.EncryptionRecord, "device-1", deviceHash).Encrypt(ElectionFixtureBuilder.CreateBallot(manifest), null);
 
-        Assert.Equal(BallotStatus.NotSubmitted, encrypted.Status);
+        Assert.Equal(BallotStatus.Unrecorded, encrypted.Status);
     }
 
-    [Fact]
-    public void RecordStatus_IsFinal()
+    /// <summary>The status is recorded once, whichever of the three it is, and never changes afterwards.</summary>
+    [Theory]
+    [InlineData(BallotStatus.Cast)]
+    [InlineData(BallotStatus.Challenged)]
+    [InlineData(BallotStatus.Spoiled)]
+    public void RecordStatus_IsFinal(BallotStatus first)
     {
-        var ballot = Placeholder(status: BallotStatus.NotSubmitted);
+        var ballot = Placeholder(status: BallotStatus.Unrecorded);
 
-        ballot.RecordStatus(BallotStatus.Challenged);
+        ballot.RecordStatus(first);
 
-        Assert.Equal(BallotStatus.Challenged, ballot.Status);
+        Assert.Equal(first, ballot.Status);
         Assert.Throws<InvalidOperationException>(() => ballot.RecordStatus(BallotStatus.Cast));
         Assert.Throws<InvalidOperationException>(() => ballot.RecordStatus(BallotStatus.Challenged));
-        Assert.Equal(BallotStatus.Challenged, ballot.Status);
+        Assert.Throws<InvalidOperationException>(() => ballot.RecordStatus(BallotStatus.Spoiled));
+        Assert.Equal(first, ballot.Status);
+    }
+
+    /// <summary>
+    /// The values are the election record's BallotStatus enum numbers (EGRF v2: UNSPECIFIED 0, CAST
+    /// 1, CHALLENGED 2, SPOILED 3), and both ballot serializers write these numbers.
+    /// </summary>
+    [Fact]
+    public void BallotStatus_Values_AreTheRecordFormatsEnumNumbers()
+    {
+        Assert.Equal(0, (int)BallotStatus.Unrecorded);
+        Assert.Equal(1, (int)BallotStatus.Cast);
+        Assert.Equal(2, (int)BallotStatus.Challenged);
+        Assert.Equal(3, (int)BallotStatus.Spoiled);
+        Assert.Equal(4, Enum.GetValues<BallotStatus>().Length);
+    }
+
+    /// <summary>
+    /// S10b-1: a spoiled ballot was submitted (user decision S10b #4), so it stays in its device's
+    /// chain and Verifications 5 to 8 check it like any other ballot, per ballot and per device,
+    /// and it is left out of the tally. A spoiled ballot with a broken range proof or confirmation
+    /// code fails 6.D, 7.D and 8.B, so skipping spoiled ballots in V6 to V8 fails this test. That its contests count for 11.D is
+    /// TallyContentsVerificationTests.Verify_ContestIdsFromSpoiledBallotsCount. 5.A takes
+    /// identifiers, not ballots, so it has no status to filter on; the record verifier (S10b-9)
+    /// collects them and tests that a spoiled ballot's id_B is among them.
+    /// </summary>
+    [Fact]
+    public void SpoiledBallot_InTheChain_PassesVerifications5To8_AndIsNotTallied()
+    {
+        var (manifest, manifestFile) = ElectionFixtureBuilder.CreateMinimalManifest(chainingMode: ChainingMode.Simple);
+        var guardians = ElectionFixtureBuilder.CreateGuardianSet(manifestFile: manifestFile);
+        var record = ElectionFixtureBuilder.CreateEncryptionRecord(guardians, manifest, manifestFile).EncryptionRecord;
+        var deviceHash = new VotingDeviceInformationHash(record.ExtendedBaseHash, "device-1");
+        var chain = new DeviceChain(record, "device-1");
+        var ballots = new List<EncryptedBallot>();
+        foreach (var status in new[] { BallotStatus.Cast, BallotStatus.Spoiled, BallotStatus.Cast })
+        {
+            var ballot = ElectionFixtureBuilder.CreateEncryptedBallot(record, "device-1", deviceHash, ElectionFixtureBuilder.CreateBallot(manifest), chain.PreviousConfirmationCode, status);
+            chain.Append(ballot);
+            ballots.Add(ballot);
+        }
+
+        var spoiled = ballots[1];
+        Assert.Equal(BallotStatus.Spoiled, spoiled.Status);
+        new SelectionEncryptionIdentifierVerification().Verify(ballots.Select(x => x.SelectionEncryptionIdentifier).ToList());
+        new SelectionEncryptionIdentifierVerification().Verify(spoiled.SelectionEncryptionIdentifier, spoiled.SelectionEncryptionIdentifierHash, record.ExtendedBaseHash);
+        new SelectionEncryptionsWellFormedVerification().Verify(spoiled, record);
+        new AdherenceToVoteLimitsVerification().Verify(spoiled, record);
+        new ConfirmationCodeVerification().Verify(spoiled, record);
+        new ConfirmationCodeVerification().VerifyDevices([chain.Close()], ballots, record);
+
+        // S10b-A review round 2: and a broken spoiled ballot fails them. Each check above would also
+        // pass if the verifications skipped spoiled ballots; these fail then.
+        var badSelectionProof = Relabel(spoiled, spoiled.Status, contests: WithFirstContest(spoiled, c => c with
+        {
+            Choices = [c.Choices[0] with { Proofs = [c.Choices[0].Proofs[0] with { Response = c.Choices[0].Proofs[0].Response + 1 }, .. c.Choices[0].Proofs[1..]] }, .. c.Choices[1..]],
+        }));
+        Assert.Equal("6.D", Assert.Throws<VerificationFailedException>(() => new SelectionEncryptionsWellFormedVerification().Verify(badSelectionProof, record)).SubSection);
+        var badContestProof = Relabel(spoiled, spoiled.Status, contests: WithFirstContest(spoiled, c => c with
+        {
+            Proofs = [c.Proofs[0] with { Challenge = c.Proofs[0].Challenge + 1 }, .. c.Proofs[1..]],
+        }));
+        Assert.Equal("7.D", Assert.Throws<VerificationFailedException>(() => new AdherenceToVoteLimitsVerification().Verify(badContestProof, record)).SubSection);
+        byte[] code = [.. (byte[])spoiled.ConfirmationCode];
+        code[0] ^= 0xFF;
+        var badCode = Relabel(spoiled, spoiled.Status, confirmationCode: new ConfirmationCode(code));
+        Assert.Equal("8.B", Assert.Throws<VerificationFailedException>(() => new ConfirmationCodeVerification().Verify(badCode, record)).SubSection);
+
+        var tally = ElectionFixtureBuilder.CreateEncryptedTally(manifest, [.. ballots]);
+        Assert.Equal(2, tally.BallotsCast);
+        new BallotAggregationVerification().Verify(ballots, manifest, tally);
+
+        // A tally that counts the spoiled ballot as cast: V9, which aggregates cast ballots only,
+        // finds the first option's A differs (9.A comes before the cast-weight check).
+        var countedAsCast = ElectionFixtureBuilder.CreateEncryptedTally(manifest, ballots[0], ballots[2], Relabel(spoiled, BallotStatus.Cast));
+        Assert.Equal("9.A", Assert.Throws<VerificationFailedException>(() => new BallotAggregationVerification().Verify(ballots, manifest, countedAsCast)).SubSection);
+    }
+
+    private static List<EncryptedContest> WithFirstContest(EncryptedBallot ballot, Func<EncryptedContest, EncryptedContest> mutate) =>
+        [mutate(ballot.Contests[0]), .. ballot.Contests.Skip(1)];
+
+    private static EncryptedBallot Relabel(EncryptedBallot ballot, BallotStatus status, List<EncryptedContest>? contests = null, ConfirmationCode? confirmationCode = null) => new()
+    {
+        Id = ballot.Id,
+        SelectionEncryptionIdentifier = ballot.SelectionEncryptionIdentifier,
+        SelectionEncryptionIdentifierHash = ballot.SelectionEncryptionIdentifierHash,
+        BallotStyleId = ballot.BallotStyleId,
+        DeviceId = ballot.DeviceId,
+        Contests = contests ?? ballot.Contests,
+        ConfirmationCode = confirmationCode ?? ballot.ConfirmationCode,
+        ChainingField = ballot.ChainingField,
+        EncryptedBallotNonce = ballot.EncryptedBallotNonce,
+        Weight = ballot.Weight,
+        Status = status,
+    };
+
+    [Theory]
+    [InlineData(BallotStatus.Unrecorded)]
+    [InlineData((BallotStatus)7)]
+    public void RecordStatus_AcceptsOnlyCastChallengedOrSpoiled(BallotStatus status)
+    {
+        var ballot = Placeholder(status: BallotStatus.Unrecorded);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => ballot.RecordStatus(status));
+        Assert.Equal(BallotStatus.Unrecorded, ballot.Status);
     }
 
     [Theory]
-    [InlineData(BallotStatus.NotSubmitted)]
-    [InlineData((BallotStatus)7)]
-    public void RecordStatus_AcceptsOnlyCastOrChallenged(BallotStatus status)
-    {
-        var ballot = Placeholder(status: BallotStatus.NotSubmitted);
-
-        Assert.Throws<ArgumentOutOfRangeException>(() => ballot.RecordStatus(status));
-        Assert.Equal(BallotStatus.NotSubmitted, ballot.Status);
-    }
-
-    [Fact]
-    public void AddBallot_SkipsAChallengedBallot()
+    [InlineData(BallotStatus.Challenged)]
+    [InlineData(BallotStatus.Spoiled)]
+    public void AddBallot_SkipsAChallengedOrSpoiledBallot(BallotStatus status)
     {
         var tally = new EncryptedTally(Manifest());
-        var challenged = Placeholder(status: BallotStatus.Challenged);
+        var challenged = Placeholder(status: status);
         challenged.Contests[0].Choices[0] = challenged.Contests[0].Choices[0] with { Alpha = 5, Beta = 7 };
 
         tally.AddBallot(challenged);
@@ -80,12 +182,14 @@ public class BallotStatusAndWeightTests
         Assert.Equal(0, tally.Contests["contest-1"].Choices["choice-1"].MaximumCount);
     }
 
-    [Fact]
-    public void AddBallot_WithNoRecordedStatus_FailsStructureAndAddsNothing()
+    [Theory]
+    [InlineData(BallotStatus.Unrecorded)]
+    [InlineData((BallotStatus)4)]
+    public void AddBallot_WithNoRecordedStatus_FailsStructureAndAddsNothing(BallotStatus status)
     {
         var tally = new EncryptedTally(Manifest());
 
-        var exception = Assert.Throws<VerificationFailedException>(() => tally.AddBallot(Placeholder(status: BallotStatus.NotSubmitted)));
+        var exception = Assert.Throws<VerificationFailedException>(() => tally.AddBallot(Placeholder(status: status)));
 
         Assert.Equal("9.structure", exception.SubSection);
         Assert.Equal(0, tally.BallotsCast);
@@ -113,12 +217,14 @@ public class BallotStatusAndWeightTests
         Assert.Equal(10, election.Count(decrypted, "choice-2"));
     }
 
-    [Fact]
-    public void Verification9_LeavesChallengedBallotsOut()
+    [Theory]
+    [InlineData(BallotStatus.Challenged)]
+    [InlineData(BallotStatus.Spoiled)]
+    public void Verification9_LeavesChallengedAndSpoiledBallotsOut(BallotStatus status)
     {
         var election = TallyDecryptionElection.Build(TwoOneVotes);
         var record = election.Ballots
-            .Select((ballot, i) => TallyDecryptionElection.WithWeight(ballot, 1, i == 0 ? BallotStatus.Challenged : BallotStatus.Cast))
+            .Select((ballot, i) => TallyDecryptionElection.WithWeight(ballot, 1, i == 0 ? status : BallotStatus.Cast))
             .ToList();
         var castOnly = ElectionFixtureBuilder.CreateEncryptedTally(election.Manifest, record.Skip(1).ToArray());
 
@@ -135,7 +241,7 @@ public class BallotStatusAndWeightTests
     {
         var verifier = new BallotAggregationVerifier(Manifest());
 
-        var exception = Assert.Throws<VerificationFailedException>(() => verifier.AddBallot(Placeholder(status: BallotStatus.NotSubmitted)));
+        var exception = Assert.Throws<VerificationFailedException>(() => verifier.AddBallot(Placeholder(status: BallotStatus.Unrecorded)));
 
         Assert.Equal("9.structure", exception.SubSection);
         Assert.Throws<InvalidOperationException>(() => verifier.Verify(new EncryptedTally(Manifest())));
@@ -175,7 +281,8 @@ public class BallotStatusAndWeightTests
     {
         { BallotStatus.Cast, 1 },
         { BallotStatus.Challenged, 1 },
-        { BallotStatus.NotSubmitted, 1 },
+        { BallotStatus.Spoiled, 1 },
+        { BallotStatus.Unrecorded, 1 },
         { BallotStatus.Cast, 3 },
         { BallotStatus.Cast, 0 },
     };
@@ -194,7 +301,7 @@ public class BallotStatusAndWeightTests
     [MemberData(nameof(StatusesAndWeights))]
     public void Protobuf_RoundTripsStatusAndWeight(BallotStatus status, int weight)
     {
-        // 0 is protobuf's default and is left off the wire, so NotSubmitted and weight 0 are also
+        // 0 is protobuf's default and is left off the wire, so Unrecorded and weight 0 are also
         // what a ballot without the field decodes to.
         var decoded = RoundTrip(new ProtobufEncryptedBallotSerializer(), status, weight);
 
@@ -208,7 +315,7 @@ public class BallotStatusAndWeightTests
         // A decoder decodes; Verification 9 judges. Weight 0 and no status are both rejected there.
         var tally = new EncryptedTally(Manifest());
 
-        var noStatus = RoundTrip(new ProtobufEncryptedBallotSerializer(), BallotStatus.NotSubmitted, 1);
+        var noStatus = RoundTrip(new ProtobufEncryptedBallotSerializer(), BallotStatus.Unrecorded, 1);
         var noWeight = RoundTrip(new ProtobufEncryptedBallotSerializer(), BallotStatus.Cast, 0);
 
         Assert.Equal("9.structure", Assert.Throws<VerificationFailedException>(() => tally.AddBallot(noStatus)).SubSection);
@@ -222,7 +329,7 @@ public class BallotStatusAndWeightTests
         var guardians = ElectionFixtureBuilder.CreateGuardianSet(manifestFile: manifestFile);
         var record = ElectionFixtureBuilder.CreateEncryptionRecord(guardians, manifest, manifestFile);
         var deviceHash = new VotingDeviceInformationHash(record.ExtendedBaseHash, "device-1");
-        var encrypted = ElectionFixtureBuilder.CreateEncryptedBallot(record.EncryptionRecord, "device-1", deviceHash, ElectionFixtureBuilder.CreateBallot(manifest), status: BallotStatus.NotSubmitted);
+        var encrypted = ElectionFixtureBuilder.CreateEncryptedBallot(record.EncryptionRecord, "device-1", deviceHash, ElectionFixtureBuilder.CreateBallot(manifest), status: BallotStatus.Unrecorded);
         var ballot = TallyDecryptionElection.WithWeight(encrypted, weight, status);
 
         using var stream = new MemoryStream();

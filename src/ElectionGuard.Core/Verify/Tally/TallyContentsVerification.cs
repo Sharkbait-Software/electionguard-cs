@@ -13,8 +13,10 @@ namespace ElectionGuard.Core.Verify.Tally;
 /// submitted ballot occurs in the tally.
 ///
 /// Labels are the manifest's ids (<see cref="Contest.Id"/>, <see cref="Choice.Id"/>), which
-/// <see cref="Manifest.Validate"/> keeps unique. "Submitted" ballots are cast and challenged ones
-/// alike: 11.D is about which contests were voted on, not which were counted.
+/// <see cref="Manifest.Validate"/> keeps unique. "Submitted" ballots are every ballot in the record:
+/// cast, challenged and spoiled ones alike (user decision S10b #4: "If we have it in the election
+/// record at all, it was by definition submitted"). 11.D is about which contests were voted on, not
+/// which were counted.
 /// </summary>
 public class TallyContentsVerification
 {

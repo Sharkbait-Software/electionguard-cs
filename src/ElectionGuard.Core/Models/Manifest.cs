@@ -18,6 +18,37 @@ public record Manifest
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public HashTrimmingFunction? HashTrimmingFunction { get; init; }
 
+    // §3.7, first item of the election record: "Information sufficient to uniquely identify and
+    // describe the election, such as date, location, election type, etc. (not otherwise included in
+    // the election manifest)". User decision NQ-4 (2026-10-09): these facts are optional manifest
+    // fields, so they are bound into H_B through the manifest file's bytes, and the election
+    // record's header carries only the format version. They are informational: no verification
+    // reads them, and no library computation depends on them. Each is omitted from the written form
+    // when null, so a manifest without them serializes exactly as before.
+
+    /// <summary>The election's name, for people (§3.7). Optional and informational.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ElectionName { get; init; }
+
+    /// <summary>
+    /// The date of the election (§3.7). Optional, informational free text, not parsed; an RFC 3339
+    /// full-date (<c>YYYY-MM-DD</c>) is recommended, and a multi-day election may give a range.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ElectionDate { get; init; }
+
+    /// <summary>The type of election, for example "general" or "primary" (§3.7). Optional and informational.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ElectionType { get; init; }
+
+    /// <summary>The jurisdiction holding the election (§3.7). Optional and informational.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Jurisdiction { get; init; }
+
+    /// <summary>Where the election takes place (§3.7). Optional and informational.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Location { get; init; }
+
     /// <summary>
     /// §3.1.3 Indices: a contest index is the contest's 1-based position in the manifest's contest
     /// list, and an option index is the option's 1-based position in its contest's option list.

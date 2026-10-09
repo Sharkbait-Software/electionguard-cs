@@ -10,6 +10,19 @@
 
   <ItemGroup>
     <PackageReference Include="protobuf-net" Version="3.2.52" />
+    <!--
+      The election record format (EGRF v2): C# generated at build time from the one normative schema,
+      proto/electionguard/egrf/v2/egrf.proto at the repository root, which every other
+      implementation shares. Grpc.Tools ships protoc and is a build-only dependency; no gRPC services
+      are generated. The generated types are internal: the public API stays the domain types, and
+      mappers (a later S10b step) convert at the boundary.
+    -->
+    <PackageReference Include="Google.Protobuf" Version="3.34.1" />
+    <PackageReference Include="Grpc.Tools" Version="2.80.0" PrivateAssets="All" IncludeAssets="runtime; build; native; contentfiles; analyzers; buildtransitive" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Protobuf Include="..\..\proto\electionguard\egrf\v2\egrf.proto" ProtoRoot="..\..\proto" Access="Internal" GrpcServices="None" Link="RecordFormat\Proto\egrf.proto" />
   </ItemGroup>
 
   <ItemGroup>
