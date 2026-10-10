@@ -1,4 +1,5 @@
 using ElectionGuard.Core.BallotEncryption;
+using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.Models;
 using ElectionGuard.Core.Tally;
 
@@ -40,8 +41,123 @@ public class BallotAggregationVerifier
     /// Starts an empty recomputation over the contests and options of <paramref name="manifest"/>.
     /// </summary>
     public BallotAggregationVerifier(Manifest manifest)
+        : this(manifest, allowAvx512: true)
     {
-        _expected = new EncryptedTally(manifest);
+    }
+
+    /// <summary>With <paramref name="allowAvx512"/> false the recomputation runs on the scalar engine (a test seam; see <see cref="EncryptedTally"/>).</summary>
+    internal BallotAggregationVerifier(Manifest manifest, bool allowAvx512)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        _expected = new EncryptedTally(manifest, allowAvx512);
+    }
+
+    /// <summary>Whether an addition threw, so that <see cref="Verify"/> refuses to run (see the class remarks).</summary>
+    public bool IsFaulted => _faulted;
+
+    /// <summary>
+    /// The recomputation so far in standard form (design §6.7, §6.8): per contest its cast weight and
+    /// per field (A, B) as ordinary residues mod p, b(A, 512) and b(B, 512), plus the counts and
+    /// whether the verifier is faulted. The running products inside carry engine-specific Montgomery
+    /// drift (R differs between the AVX-512 and the scalar engine; <c>ModPProduct</c>), so this is the
+    /// only form that may leave the process: a checkpoint or another machine's shard.
+    /// </summary>
+    public BallotAggregationPartial ExportStandardForm()
+    {
+        var contests = _expected.Manifest.Contests.Select(contest =>
+        {
+            var aggregate = _expected.Contests[contest.Id];
+            var choices = contest.VerifiableFields().Select(field =>
+            {
+                var choice = aggregate.Choices[field.Id];
+                return new BallotAggregationPartial.Choice(field.Id, choice.A.ToByteArray(), choice.B.ToByteArray());
+            }).ToList();
+            return new BallotAggregationPartial.Contest(contest.Id, aggregate.CastWeight, choices);
+        }).ToList();
+        return new BallotAggregationPartial(_faulted, _expected.BallotsCast, _expected.TotalCastWeight, contests);
+    }
+
+    /// <summary>A verifier continuing from <paramref name="partial"/>, which must be over <paramref name="manifest"/>'s contests and fields.</summary>
+    public static BallotAggregationVerifier ImportStandardForm(Manifest manifest, BallotAggregationPartial partial)
+    {
+        var verifier = new BallotAggregationVerifier(manifest);
+        verifier.Merge(partial);
+        return verifier;
+    }
+
+    /// <summary>
+    /// Multiplies <paramref name="other"/>'s recomputation into this one (design §6.7: the V9 partials
+    /// of workers or shards commute and merge), through the standard form, so the two may run on
+    /// different engines. A faulted operand faults the result.
+    /// </summary>
+    public void Merge(BallotAggregationVerifier other)
+    {
+        ArgumentNullException.ThrowIfNull(other);
+        Merge(other.ExportStandardForm());
+    }
+
+    /// <summary>
+    /// Multiplies a standard-form partial into this recomputation: each field's (A, B), each contest's
+    /// cast weight and the counts. Throws <see cref="ArgumentException"/>, changing nothing, unless the
+    /// partial holds exactly this manifest's contests and fields with 512-byte values below p. A
+    /// faulted partial faults this verifier.
+    /// </summary>
+    public void Merge(BallotAggregationPartial partial)
+    {
+        ArgumentNullException.ThrowIfNull(partial);
+        var manifest = _expected.Manifest;
+        var values = new List<(EncryptedTally.EncryptedAggregateChoice Choice, IntegerModP A, IntegerModP B)>();
+        if (partial.Contests.Count != manifest.Contests.Count)
+        {
+            throw new ArgumentException($"The partial holds {partial.Contests.Count} contests; the manifest has {manifest.Contests.Count}.", nameof(partial));
+        }
+
+        for (int i = 0; i < manifest.Contests.Count; i++)
+        {
+            var contest = manifest.Contests[i];
+            var given = partial.Contests[i];
+            var fields = contest.VerifiableFields().ToList();
+            if (given.ContestId != contest.Id || given.Choices.Count != fields.Count || given.CastWeight < 0)
+            {
+                throw new ArgumentException($"The partial's contest {i} is not manifest contest {contest.Id} with its {fields.Count} fields.", nameof(partial));
+            }
+
+            for (int j = 0; j < fields.Count; j++)
+            {
+                var choice = given.Choices[j];
+                if (choice.ChoiceId != fields[j].Id)
+                {
+                    throw new ArgumentException($"The partial's field {j} of contest {contest.Id} is {choice.ChoiceId}, not {fields[j].Id}.", nameof(partial));
+                }
+
+                values.Add((_expected.Contests[contest.Id].Choices[choice.ChoiceId], Residue(choice.A, contest.Id, choice.ChoiceId), Residue(choice.B, contest.Id, choice.ChoiceId)));
+            }
+        }
+
+        foreach (var (choice, a, b) in values)
+        {
+            choice.AProduct.Multiply(a);
+            choice.BProduct.Multiply(b);
+        }
+
+        foreach (var given in partial.Contests)
+        {
+            _expected.Contests[given.ContestId].CastWeight += given.CastWeight;
+        }
+
+        _expected.BallotsCast += partial.BallotsAdded;
+        _expected.TotalCastWeight += partial.WeightAdded;
+        _faulted |= partial.Faulted;
+
+        static IntegerModP Residue(byte[] bytes, string contestId, string choiceId)
+        {
+            if (bytes is not { Length: 512 } || new System.Numerics.BigInteger(bytes, isUnsigned: true, isBigEndian: true) >= EGParameters.P)
+            {
+                throw new ArgumentException($"The partial's value for contest {contestId}, field {choiceId} is not 512 bytes below p.", nameof(partial));
+            }
+
+            return new IntegerModP(bytes);
+        }
     }
 
     /// <summary>
@@ -246,4 +362,19 @@ public class BallotAggregationVerifier
             }
         }
     }
+}
+
+/// <summary>
+/// A Verification 9 recomputation in standard form (<see cref="BallotAggregationVerifier.ExportStandardForm"/>):
+/// the counts, whether it is faulted, and per manifest contest, in manifest order, the cast weight and
+/// per verifiable field, in manifest order, (A, B) as 512-byte big-endian residues mod p. Engine
+/// independent, so it may cross a process or machine boundary (design §6.7) or be checkpointed (§6.8).
+/// </summary>
+public sealed record BallotAggregationPartial(bool Faulted, int BallotsAdded, long WeightAdded, IReadOnlyList<BallotAggregationPartial.Contest> Contests)
+{
+    /// <summary>One contest: its label, its cast weight and its fields.</summary>
+    public sealed record Contest(string ContestId, long CastWeight, IReadOnlyList<Choice> Choices);
+
+    /// <summary>One verifiable field: its label and b(A, 512), b(B, 512).</summary>
+    public sealed record Choice(string ChoiceId, byte[] A, byte[] B);
 }

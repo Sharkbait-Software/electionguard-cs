@@ -452,6 +452,8 @@ public class RecordDirectoryCarrierTests
         { "the parameters section holding two items", RecordCodes.Structure, "holds 2 items; it holds exactly one" },
         { "a ballot item made non-canonical", RecordCodes.Encoding, "EncryptedBallot.weight (5) follows field" },
         { "the header made major 3", RecordCodes.Version, "this reader reads major 2" },
+        { "a TOC entry naming a section kind v2 does not define", RecordCodes.Version, "a new section kind comes with a new format major" },
+        { "two TOC entries out of canonical order", RecordCodes.Root, "The claimed table of contents is not one" },
     };
 
     [Theory]
@@ -476,6 +478,14 @@ public class RecordDirectoryCarrierTests
                 var tocFrames = Frames(File.ReadAllBytes(tocPath));
                 tocFrames[2] = parameters[1];
                 File.WriteAllBytes(tocPath, Join(tocFrames));
+                break;
+            case "two TOC entries out of canonical order":
+                RewriteToc(directory, entries => (entries[0], entries[1]) = (entries[1], entries[0]));
+                break;
+            case "a TOC entry naming a section kind v2 does not define":
+                // A later tally kind (design §4.5's old example, 0x0203), in canonical order. User
+                // decision NQ-7: a new section kind comes only with a new format major.
+                RewriteToc(directory, entries => entries.Insert(entries.FindIndex(x => (int)x.SectionType > 0x0203), new Pb.TocEntry { SectionType = (Pb.SectionType)0x0203, ItemCount = 1, Root = ByteString.CopyFrom(new byte[32]) }));
                 break;
             case "a TOC entry naming the TOC's own type":
                 RewriteToc(directory, entries => entries[^1].SectionType = Pb.SectionType.Toc);
@@ -568,6 +578,92 @@ public class RecordDirectoryCarrierTests
     }
 
     /// <summary>
+    /// User decision NQ-7 ("Bump the major version"; design §7): a genuine record of a later major,
+    /// with every segment header at major 3, its record_header at major 3 and a file of a new section
+    /// kind at a path v2 does not list, is refused as R.version, not as the unlisted path's or D6's
+    /// R.container: the header section's segment header at v2's path is read first.
+    /// </summary>
+    [Theory]
+    [InlineData(RecordEncoding.Protobuf)]
+    [InlineData(RecordEncoding.Json)]
+    public async Task ARecordOfALaterMajor_IsRVersion_BeforeItsNewPathsAndHeaders(RecordEncoding encoding)
+    {
+        string directory = await WrittenRegular(encoding);
+        string extension = encoding == RecordEncoding.Json ? ".jsonl" : ".binpb";
+        foreach (string file in Directory.EnumerateFiles(directory, "*" + extension, SearchOption.AllDirectories))
+        {
+            if (encoding == RecordEncoding.Json)
+            {
+                var lines = File.ReadAllText(file).Split('\n').ToList();
+                var header = System.Text.Json.Nodes.JsonNode.Parse(lines[0])!;
+                header["formatMajor"] = 3;
+                lines[0] = header.ToJsonString();
+                if (Path.GetFileName(file) == "header" + extension)
+                {
+                    var item = System.Text.Json.Nodes.JsonNode.Parse(lines[1])!;
+                    item["recordHeader"]!["formatMajor"] = 3;
+                    lines[1] = item.ToJsonString();
+                }
+
+                File.WriteAllText(file, string.Join('\n', lines));
+            }
+            else
+            {
+                var frames = Frames(File.ReadAllBytes(file));
+                var header = Pb.SegmentHeader.Parser.ParseFrom(Payload(frames[0]));
+                header.FormatMajor = 3;
+                frames[0] = Frame(header.ToByteArray());
+                if (Path.GetFileName(file) == "header" + extension)
+                {
+                    var item = Pb.RecordItem.Parser.ParseFrom(Payload(frames[1]));
+                    item.RecordHeader.FormatMajor = 3;
+                    frames[1] = Frame(item.ToByteArray());
+                }
+
+                File.WriteAllBytes(file, Join(frames, raw: true));
+            }
+        }
+
+        // A file of a section kind v2 does not define, at a path v2 does not list.
+        string newKind = Path.Combine(directory, "final", "precinct_tallies" + extension);
+        File.Copy(Path.Combine(directory, "setup", "parameters" + extension), newKind);
+
+        var failure = await Assert.ThrowsAsync<VerificationFailedException>(async () => await ElectionRecord.OpenAsync(directory));
+        Assert.True(failure.SubSection == RecordCodes.Version, $"{failure.SubSection} {failure.Message}");
+        Assert.Contains("EGRF major 3", failure.Message);
+
+        // The same record in a zip: its central directory lists the new path too, and the header is
+        // still read first.
+        var zipped = await Assert.ThrowsAsync<VerificationFailedException>(async () => await (await ElectionRecord.OpenAsync(ZipOf(directory))).DisposeAsync());
+        Assert.True(zipped.SubSection == RecordCodes.Version, $"zip: {zipped.SubSection} {zipped.Message}");
+        Assert.Contains("EGRF major 3", zipped.Message);
+
+        // The same file alone, in a v2 record, is still the unlisted path it is, in either carrier.
+        string v2 = await WrittenRegular(encoding);
+        File.Copy(Path.Combine(v2, "setup", "parameters" + extension), Path.Combine(v2, "final", "precinct_tallies" + extension));
+        var unlisted = await Assert.ThrowsAsync<VerificationFailedException>(async () => await ElectionRecord.OpenAsync(v2));
+        Assert.Equal(RecordCodes.Container, unlisted.SubSection);
+        var unlistedZip = await Assert.ThrowsAsync<VerificationFailedException>(async () => await (await ElectionRecord.OpenAsync(ZipOf(v2))).DisposeAsync());
+        Assert.True(unlistedZip.SubSection == RecordCodes.Container, $"zip: {unlistedZip.SubSection} {unlistedZip.Message}");
+        Assert.Contains("precinct_tallies", unlistedZip.Message);
+    }
+
+    /// <summary>A zip of every file of <paramref name="directory"/>, each stored under its relative path.</summary>
+    private static string ZipOf(string directory)
+    {
+        string zip = Path.Combine(TempDirectory("zipped"), "record.zip");
+        using (var archive = System.IO.Compression.ZipFile.Open(zip, System.IO.Compression.ZipArchiveMode.Create))
+        {
+            foreach (string file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal))
+            {
+                System.IO.Compression.ZipFileExtensions.CreateEntryFromFile(archive, file,Path.GetRelativePath(directory, file).Replace('\\', '/'), System.IO.Compression.CompressionLevel.NoCompression);
+            }
+        }
+
+        return zip;
+    }
+
+    /// <summary>
     /// The reader's frame ceiling holds before any allocation or read of the frame's bytes: a length
     /// of 64 MiB + 1, or a fifth varint byte, is refused while reading the length; a length of exactly
     /// 64 MiB goes on to read its bytes (here, a stream that fails any read past the length).
@@ -650,14 +746,19 @@ public class RecordDirectoryCarrierTests
     }
 
     /// <summary>
-    /// The line rules of design §5.5: every line, the last included, ends with a line feed (a last
-    /// line without one is a torn tail); one carriage return before it is removed; an empty line is
-    /// no item. All but the accepted rows are <c>R.container</c>.
+    /// The line rules of design §5.5: a line ends with a line feed, except that the last one may lack
+    /// it (user decision 2026-10-10, "Optional", following jsonlines.org; until then "a\nb" was refused
+    /// as a torn tail); one carriage return before the end of a line is removed; an empty line is no
+    /// item. All but the accepted rows are <c>R.container</c>. A last line cut short is refused by its
+    /// parse (<c>R.encoding</c>; <see cref="AJsonRecord_WhoseLastLineLacksItsLineFeed_ReadsTheSame_AndOneCutShortIsREncoding"/>).
     /// </summary>
     [Theory]
     [InlineData("a\nb\n", "a|b", null)]
     [InlineData("a\r\nb\r\n", "a|b", null)]
-    [InlineData("a\nb", "a", "the file ends inside a line")]
+    [InlineData("a\nb", "a|b", null)]
+    [InlineData("a\r\nb\r", "a|b", null)]
+    [InlineData("a", "a", null)]
+    [InlineData("a\n\n", "a", "an empty line")]
     [InlineData("a\n\nb\n", "a", "an empty line")]
     [InlineData("a\n\r\n", "a", "an empty line")]
     public async Task LineReader_AppliesTheLineRules(string text, string accepted, string? refusal)
@@ -683,6 +784,49 @@ public class RecordDirectoryCarrierTests
             Assert.Equal(RecordCodes.Container, refused.SubSection);
             Assert.Contains(refusal, refused.Message);
         }
+    }
+
+    /// <summary>
+    /// Design §5.5 (user decision 2026-10-10, "Optional"): a JSON record whose files' last lines lack
+    /// their line feed reads to the same TOC; a last line cut short by a crash does not parse and is
+    /// refused as <c>R.encoding</c>.
+    /// </summary>
+    [Fact]
+    public async Task AJsonRecord_WhoseLastLineLacksItsLineFeed_ReadsTheSame_AndOneCutShortIsREncoding()
+    {
+        string directory = await WrittenRegular(RecordEncoding.Json);
+        TableOfContents expected;
+        await using (var reader = await ElectionRecord.OpenAsync(directory))
+        {
+            expected = await ElectionRecord.CheckClaimedTocAsync(reader);
+        }
+
+        // Every section file and the TOC without its final line feed (CRLF files would lose "\r\n").
+        foreach (var file in Directory.EnumerateFiles(directory, "*.jsonl", SearchOption.AllDirectories))
+        {
+            byte[] bytes = File.ReadAllBytes(file);
+            Assert.Equal((byte)'\n', bytes[^1]);
+            File.WriteAllBytes(file, bytes[..^1]);
+        }
+
+        await using (var reader = await ElectionRecord.OpenAsync(directory))
+        {
+            await reader.ReadSetupAsync();
+            Assert.Equal(expected.Entries, (await ElectionRecord.CheckClaimedTocAsync(reader)).Entries);
+        }
+
+        // The device segment's last line (its close) cut in half: no longer one JSON value.
+        string segment = Directory.GetDirectories(Path.Combine(directory, "devices")).Select(x => Path.Combine(x, "00000000.jsonl")).MaxBy(x => new FileInfo(x).Length)!;
+        byte[] all = File.ReadAllBytes(segment);
+        int lastLine = Array.LastIndexOf(all, (byte)'\n') + 1;
+        File.WriteAllBytes(segment, all[..(lastLine + (all.Length - lastLine) / 2)]);
+        var failure = await Assert.ThrowsAsync<VerificationFailedException>(async () =>
+        {
+            await using var reader = await ElectionRecord.OpenAsync(directory);
+            await ElectionRecord.CheckClaimedTocAsync(reader);
+        });
+        Assert.Equal(RecordCodes.Encoding, failure.SubSection);
+        Assert.Contains("00000000.jsonl", failure.Message);
     }
 
     /// <summary>
@@ -1166,6 +1310,10 @@ public class RecordDirectoryCarrierTests
         public IAsyncEnumerable<RecordItemBytes> ReadSectionAsync(SectionKey section, long fromOrdinal = 0, CancellationToken ct = default) => inner.ReadSectionAsync(section, fromOrdinal, ct);
 
         public IAsyncEnumerable<RecordItemBytes> ReadSignaturesAsync(CancellationToken ct = default) => inner.ReadSignaturesAsync(ct);
+
+        public IReadOnlyList<string> SignatureFiles => inner.SignatureFiles;
+
+        public IAsyncEnumerable<RecordItemBytes> ReadSignatureFileAsync(string file, CancellationToken ct = default) => inner.ReadSignatureFileAsync(file, ct);
 
         public ValueTask DisposeAsync() => inner.DisposeAsync();
     }

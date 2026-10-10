@@ -67,7 +67,7 @@ public static class BallotStructure
         }
     }
 
-    private static VerificationFailedException Failure(int verification, string violation)
+    internal static VerificationFailedException Failure(int verification, string violation)
     {
         return new VerificationFailedException(
             $"{verification}.{SubSectionSuffix}",
@@ -519,6 +519,61 @@ public static class BallotStructure
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// The first violation of a compact uncast item's printed structure (design §4.4: "ascending index;
+    /// exactly the style's contests"), or null: the election uses pre-encrypted ballots, the ballot
+    /// style is in the manifest, the contest indices ascend strictly and are exactly that style's
+    /// contests' manifest indices, and B_C is 36 bytes. It is what 16.C needs to mean anything before
+    /// the ballot nonce ξ_B is released: the vectors, and so the rest of
+    /// <see cref="FindViolation(PreEncryptedBallot, Manifest)"/>, are regenerated from ξ_B.
+    /// </summary>
+    internal static string? FindCompactUncastViolation(string ballotId, string ballotStyleId, IReadOnlyList<int> contestIndices, ChainingField chainingField, Manifest manifest)
+    {
+        if (manifest.HashTrimmingFunction is null)
+        {
+            return $"Pre-encrypted ballot {ballotId}: the manifest names no hash-trimming function, so the election does not use pre-encrypted ballots (§4.1.5).";
+        }
+
+        var style = FindBallotStyle(manifest, ballotStyleId);
+        if (style is null)
+        {
+            return $"Pre-encrypted ballot {ballotId} names ballot style {ballotStyleId}, which is not in the manifest.";
+        }
+
+        var manifestContests = manifest.Contests;
+        Span<bool> inStyle = Flags(manifestContests.Count, stackalloc bool[MaxStackAllocCount]);
+        if (MarkStyleContests(style, manifestContests, inStyle) is string styleViolation)
+        {
+            return styleViolation;
+        }
+
+        Span<bool> onBallot = Flags(manifestContests.Count, stackalloc bool[MaxStackAllocCount]);
+        for (int i = 0; i < contestIndices.Count; i++)
+        {
+            int index = contestIndices[i];
+            if (i > 0 && contestIndices[i - 1] >= index)
+            {
+                return $"The contests of uncast ballot {ballotId} are not in strictly ascending index order (contest index {index} after {contestIndices[i - 1]}).";
+            }
+
+            int position = manifestContests.FindIndex(x => x.Index == index);
+            if (position < 0)
+            {
+                return $"Ballot {ballotId} lists contest index {index}, which is not in the manifest.";
+            }
+
+            if (!inStyle[position])
+            {
+                return $"Ballot {ballotId} lists contest {manifestContests[position].Id}, which is not on its ballot style {style.Id}.";
+            }
+
+            onBallot[position] = true;
+        }
+
+        return MissingStyleContest(ballotId, style, manifestContests, inStyle, onBallot)
+            ?? ChainingFieldViolation(ballotId, chainingField);
     }
 
     private static BallotStyle? FindBallotStyle(Manifest manifest, string ballotStyleId)

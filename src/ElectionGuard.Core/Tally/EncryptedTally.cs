@@ -10,17 +10,30 @@ namespace ElectionGuard.Core.Tally;
 public class EncryptedTally
 {
     public EncryptedTally(Manifest manifest)
+        : this(manifest, allowAvx512: true)
+    {
+    }
+
+    /// <summary>
+    /// With <paramref name="allowAvx512"/> false every running product uses the scalar Montgomery
+    /// engine even where AVX-512F is available (<see cref="ModPProduct"/>), so that tests can merge
+    /// partials built on the two engines through the standard form.
+    /// </summary>
+    internal EncryptedTally(Manifest manifest, bool allowAvx512)
     {
         _manifest = manifest;
+        _allowAvx512 = allowAvx512;
 
         // One aggregate per verifiable field of each contest: its selectable options and the
         // supplemental fields it declares (§3.1.3 p.19, §3.3.9 "allow verifiable tallies that show
         // the total numbers of undervotes, null votes, overvotes, or used write-in fields"), keyed by
         // label. Option and field labels are unique within a contest (Manifest.Validate).
-        Contests = _manifest.Contests.ToDictionary(x => x.Id, x => CreateAggregateContest(x));
+        Contests = _manifest.Contests.ToDictionary(x => x.Id, x => CreateAggregateContest(x, allowAvx512));
     }
 
-    private static EncryptedAggregateContest CreateAggregateContest(Contest contest)
+    private readonly bool _allowAvx512 = true;
+
+    private static EncryptedAggregateContest CreateAggregateContest(Contest contest, bool allowAvx512)
     {
         var aggregate = new EncryptedAggregateContest
         {
@@ -32,6 +45,7 @@ public class EncryptedTally
         {
             aggregate.Choices.Add(field.Id, new EncryptedAggregateChoice
             {
+                ScalarEngine = !allowAvx512,
                 ChoiceId = field.Id,
                 MaximumValue = MaximumOptionValue(contest, field),
                 Contest = aggregate,
@@ -241,7 +255,7 @@ public class EncryptedTally
         Parallel.ForEach(
             Partitioner.Create(0, encryptedBallots.Count, AddBallotsRangeSize),
             options,
-            () => new EncryptedTally(_manifest),
+            () => new EncryptedTally(_manifest, _allowAvx512),
             (range, _, partial) =>
             {
                 for (int i = range.Item1; i < range.Item2; i++)
@@ -304,7 +318,7 @@ public class EncryptedTally
         Parallel.ForEach(
             Partitioner.Create(encryptedBallots, EnumerablePartitionerOptions.NoBuffering),
             options,
-            () => pool.TryTake(out var partial) ? partial : new EncryptedTally(_manifest),
+            () => pool.TryTake(out var partial) ? partial : new EncryptedTally(_manifest, _allowAvx512),
             (encryptedBallot, _, partial) =>
             {
                 partial.AddBallot(encryptedBallot);
@@ -443,9 +457,26 @@ public class EncryptedTally
             set => BProduct.Reset(value);
         }
 
-        internal ModPProduct AProduct { get; } = new(1);
+        internal ModPProduct AProduct { get; private set; } = new(1);
 
-        internal ModPProduct BProduct { get; } = new(1);
+        internal ModPProduct BProduct { get; private set; } = new(1);
+
+        /// <summary>
+        /// A test seam: true keeps both running products on the scalar Montgomery engine even where
+        /// AVX-512F is available (<see cref="EncryptedTally(Manifest, bool)"/>). Set before
+        /// <see cref="A"/> and <see cref="B"/> in an initializer.
+        /// </summary>
+        internal bool ScalarEngine
+        {
+            init
+            {
+                if (value)
+                {
+                    AProduct = new ModPProduct(1, allowAvx512: false);
+                    BProduct = new ModPProduct(1, allowAvx512: false);
+                }
+            }
+        }
 
         public bool IsZero()
         {

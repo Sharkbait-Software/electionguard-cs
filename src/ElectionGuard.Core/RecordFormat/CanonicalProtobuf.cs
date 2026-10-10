@@ -96,7 +96,7 @@ public static class CanonicalProtobuf
         }
 
         var parsed = RecordItem.Parser.ParseFrom(item.ToArray());
-        (SignedStatement? signed, string code, int[] members) = parsed.ItemCase switch
+        (Protobuf.SignedStatement? signed, string code, int[] members) = parsed.ItemCase switch
         {
             RecordItem.ItemOneofCase.DeviceAttestation => (parsed.DeviceAttestation, "R.attestation", new[] { 40, 41, 42 }),
             RecordItem.ItemOneofCase.RecordSignature => (parsed.RecordSignature, "R.signature", new[] { 43 }),
@@ -310,7 +310,7 @@ public static class CanonicalProtobuf
                     bool int32 = value <= int.MaxValue || value >= 0xFFFF_FFFF_8000_0000UL;
                     if (!enumShape.IsDeclaredNonZero(number))
                     {
-                        if (readerOlder && number != 0 && int32)
+                        if (readerOlder && number != 0 && int32 && enumShape.MayGrowInAMinor)
                         {
                             UnknownContent = true;
                         }
@@ -600,7 +600,7 @@ public static class CanonicalProtobuf
                         var enumShape = EgrfSchema.Instance.Enum(field.TypeName);
                         if (!enumShape.IsDeclaredNonZero(number))
                         {
-                            if (readerOlder && number != 0)
+                            if (readerOlder && number != 0 && enumShape.MayGrowInAMinor)
                             {
                                 UnknownContent = true;
                             }

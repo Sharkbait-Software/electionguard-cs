@@ -516,12 +516,27 @@ public class TallyAdmin
     /// run one after another, each round's per-option work on up to
     /// <paramref name="maxDegreeOfParallelism"/> threads (-1, the default, for no limit), so 1
     /// keeps the whole decryption on one thread.
-    /// <para>A tally read back from a record
-    /// (<see cref="ElectionGuard.Core.Serialization.JsonElectionRecordSerializer.DeserializeEncryptedTally"/>) must pass
-    /// Verification 9 (<see cref="ElectionGuard.Core.Verify.Tally.BallotAggregationVerification"/>) against the cast
-    /// ballots before it is decrypted: its decryption bounds come from the published cast weights,
-    /// which only Verification 9 checks, and a forged weight widens the discrete-log search (up to
-    /// the <see cref="int.MaxValue"/> limit, beyond which decryption refuses).</para>
+    /// <para>This overload decrypts a tally read from an election record, which only a
+    /// <see cref="ElectionGuard.Core.Verify.VerifiedAggregate"/> carries: it exists once
+    /// <see cref="ElectionGuard.Core.Verify.ElectionRecordVerifier.VerifyAggregatedAsync"/> has run
+    /// Verification 9 against the record's cast ballots. A tally read back must not be decrypted before
+    /// that: its decryption bounds come from the published cast weights, which only Verification 9
+    /// checks, and a forged weight widens the discrete-log search (up to the <see cref="int.MaxValue"/>
+    /// limit, beyond which decryption refuses). The same holds for a tally read with the JSON
+    /// serializer (<see cref="ElectionGuard.Core.Serialization.JsonElectionRecordSerializer.DeserializeEncryptedTally"/>),
+    /// which must pass <see cref="ElectionGuard.Core.Verify.Tally.BallotAggregationVerification"/> first.</para>
+    /// </summary>
+    public DecryptedTally Decrypt(IReadOnlyList<TallyGuardian> guardians, ElectionGuard.Core.Verify.VerifiedAggregate aggregate, int maxDegreeOfParallelism = -1)
+    {
+        ArgumentNullException.ThrowIfNull(aggregate);
+        return Decrypt(guardians, aggregate.EncryptedTally, aggregate.EncryptionRecord, maxDegreeOfParallelism);
+    }
+
+    /// <summary>
+    /// <see cref="Decrypt(IReadOnlyList{TallyGuardian}, EncryptedTally, EncryptionRecord, int)"/>
+    /// for a tally this process aggregated itself. A tally read from an election record goes through
+    /// the overload that takes a <see cref="ElectionGuard.Core.Verify.VerifiedAggregate"/>, which only
+    /// <see cref="ElectionGuard.Core.Verify.ElectionRecordVerifier.VerifyAggregatedAsync"/> gives.
     /// </summary>
     public DecryptedTally Decrypt(IReadOnlyList<TallyGuardian> guardians, EncryptedTally encryptedTally, EncryptionRecord encryptionRecord, int maxDegreeOfParallelism = -1)
     {

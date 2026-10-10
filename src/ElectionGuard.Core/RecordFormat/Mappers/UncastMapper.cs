@@ -155,6 +155,59 @@ internal static class UncastMapper
         }
     }
 
+    /// <summary>
+    /// The domain uncast ballot of a full printed item alone, before its release exists (a guardian
+    /// run of the aggregated prefix) or when a final record lacks it: every vector, ψ, χ, short code
+    /// and label is on the item, so Verifications 6 (6.A), 16 (16.A-16.C), 17 and 19 are checked on it
+    /// at once. It carries no released nonces (<see cref="PreEncryptedUncastBallot.Contests"/> empty),
+    /// so Verification 18 waits for the release. A compact item has no vectors until its ξ_B is
+    /// released, so it has no counterpart.
+    /// </summary>
+    public static RecordDecoded<PreEncryptedUncastBallot> FromPrinted(Pb.PreEncryptedUncastBallot item, string deviceId)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        var context = new RecordDecodeContext();
+        string id = BallotMapper.Id(item.BallotRef, item.IdB);
+        RequirePrintedOrder(item, id, context);
+        return context.Result(new PreEncryptedUncastBallot { Ballot = PrintedBallot(item, id, deviceId, context), BallotNonce = null, Contests = [] });
+    }
+
+    private static void RequirePrintedOrder(Pb.PreEncryptedUncastBallot item, string id, RecordDecodeContext context)
+    {
+        RequireAscending(item.Contests, x => x.Index, context, "16.structure", $"The contests of uncast ballot {id}");
+        foreach (var contest in item.Contests)
+        {
+            RequireAscending(contest.Selections, x => x.SelectionIndex, context, "16.structure", $"The vectors of uncast ballot {id}, contest {contest.Index}");
+        }
+    }
+
+    /// <summary>The printed content of a full uncast item as the domain ballot.</summary>
+    private static PreEncryptedBallot PrintedBallot(Pb.PreEncryptedUncastBallot item, string id, string deviceId, RecordDecodeContext context) => new()
+    {
+        Id = id,
+        BallotStyleId = item.BallotStyle,
+        SelectionEncryptionIdentifier = SelectionEncryptionIdentifier.FromCanonicalBytes(Require(item.IdB, 32, "id_B")),
+        SelectionEncryptionIdentifierHash = SelectionEncryptionIdentifierHash.FromCanonicalBytes(RequireArray(item.HI, 32, "H_I")),
+        EncryptedBallotNonce = BallotNonce(item.EncryptedBallotNonce, context, $"uncast ballot {id}", RecordValueRanges.UncastBallotNonce),
+        Contests = item.Contests.Select(contest => new PreEncryptedContest
+        {
+            ContestId = contest.Label,
+            ContestIndex = (int)contest.Index,
+            Selections = contest.Selections.Select(selection => new PreEncryptedSelection
+            {
+                SelectionIndex = (int)selection.SelectionIndex,
+                ChoiceId = selection.OptionLabel.Length == 0 ? null : selection.OptionLabel,
+                Vector = Vector(selection.Vector, context, $"uncast ballot {id}, contest {contest.Label}, vector {selection.SelectionIndex}"),
+                SelectionHash = SelectionHash.FromCanonicalBytes(RequireArray(selection.Psi, 32, "ψ")),
+                ShortCode = new ShortCode(selection.ShortCode),
+            }).ToList(),
+            ContestHash = ContestHash.FromCanonicalBytes(RequireArray(contest.ContestHash, 32, "χ")),
+        }).ToList(),
+        ChainingField = ChainingField.FromCanonicalBytes(Require(item.ChainingField, ChainingField.ByteLength, "B_C")),
+        ConfirmationCode = ConfirmationCode.FromCanonicalBytes(RequireArray(item.ConfirmationCode, 32, "H_C")),
+        DeviceId = deviceId,
+    };
+
     private static PreEncryptedUncastBallot JoinFull(Pb.PreEncryptedUncastBallot item, Pb.UncastNonceRelease opening, string deviceId, RecordDecodeContext context)
     {
         string id = BallotMapper.Id(item.BallotRef, item.IdB);
@@ -164,40 +217,9 @@ internal static class UncastMapper
             context.Add("18.structure", $"Uncast ballot {id} is in the full form, so its release carries the nonces ξ_i,j,k and not ξ_B (user decision R-1).");
         }
 
-        RequireAscending(item.Contests, x => x.Index, context, "16.structure", $"The contests of uncast ballot {id}");
-        foreach (var contest in item.Contests)
-        {
-            RequireAscending(contest.Selections, x => x.SelectionIndex, context, "16.structure", $"The vectors of uncast ballot {id}, contest {contest.Index}");
-        }
-
+        RequirePrintedOrder(item, id, context);
         RequireAscending(opening.Contests, x => x.Index, context, "18.structure", $"The released contests of uncast ballot {id}");
-
-        var ballot = new PreEncryptedBallot
-        {
-            Id = id,
-            BallotStyleId = item.BallotStyle,
-            SelectionEncryptionIdentifier = SelectionEncryptionIdentifier.FromCanonicalBytes(Require(item.IdB, 32, "id_B")),
-            SelectionEncryptionIdentifierHash = SelectionEncryptionIdentifierHash.FromCanonicalBytes(RequireArray(item.HI, 32, "H_I")),
-            EncryptedBallotNonce = BallotNonce(item.EncryptedBallotNonce, context, $"uncast ballot {id}", RecordValueRanges.UncastBallotNonce),
-            Contests = item.Contests.Select(contest => new PreEncryptedContest
-            {
-                ContestId = contest.Label,
-                ContestIndex = (int)contest.Index,
-                Selections = contest.Selections.Select(selection => new PreEncryptedSelection
-                {
-                    SelectionIndex = (int)selection.SelectionIndex,
-                    ChoiceId = selection.OptionLabel.Length == 0 ? null : selection.OptionLabel,
-                    Vector = Vector(selection.Vector, context, $"uncast ballot {id}, contest {contest.Label}, vector {selection.SelectionIndex}"),
-                    SelectionHash = SelectionHash.FromCanonicalBytes(RequireArray(selection.Psi, 32, "ψ")),
-                    ShortCode = new ShortCode(selection.ShortCode),
-                }).ToList(),
-                ContestHash = ContestHash.FromCanonicalBytes(RequireArray(contest.ContestHash, 32, "χ")),
-            }).ToList(),
-            ChainingField = ChainingField.FromCanonicalBytes(Require(item.ChainingField, ChainingField.ByteLength, "B_C")),
-            ConfirmationCode = ConfirmationCode.FromCanonicalBytes(RequireArray(item.ConfirmationCode, 32, "H_C")),
-            DeviceId = deviceId,
-        };
-
+        var ballot = PrintedBallot(item, id, deviceId, context);
         var released = new List<PreEncryptedReleasedContest>();
         foreach (var contest in ballot.Contests)
         {

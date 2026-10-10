@@ -156,7 +156,6 @@ internal static class DeviceChainWalk
 
         string deviceId = device.DeviceId ?? throw Structure(scheme, "a device record has no device id.");
         var mode = encryptionRecord.Manifest.ChainingMode;
-        var extendedBaseHash = encryptionRecord.ExtendedBaseHash;
 
         // Structure: the record's shape, then that its list accounts for exactly this device's ballots.
         if (device.BallotKind != scheme.BallotKind)
@@ -211,50 +210,22 @@ internal static class DeviceChainWalk
             }
         }
 
-        // 8.C (16.D): the device information hash, computed from S_device.
-        var deviceHash = scheme.DeviceHash(extendedBaseHash, deviceId);
-        if (deviceHash != device.DeviceInformationHash)
+        // The lettered checks, on the streaming walker the record verifier uses (8.C and 8.F at the
+        // start, 8.D/8.E per link in chain order, 8.G at the close), stopping at the first failure.
+        var walker = new DeviceChainWalker(scheme, encryptionRecord);
+        Throw(walker.Begin(deviceId, device.DeviceInformationHash, device.BallotKind, device.ChainingMode, device.InitialHash));
+        foreach (var link in listed)
         {
-            throw new VerificationFailedException(scheme.DeviceHashSubSection, $"The device information hash recorded for device {deviceId} is not H(H_E; {(scheme.BallotKind == DeviceChainBallotKind.PreEncrypted ? "0x43" : "0x2A")}, S_device).");
+            Throw(walker.Next(link.BallotId, link.ConfirmationCode, link.ChainingField));
         }
 
-        // 8.F (16.G): the initialization code H_0, once per device.
-        if (mode != ChainingMode.None)
+        Throw(walker.End(device.ClosingChainingField, device.ClosingHash));
+
+        static void Throw(VerificationFailedException? failure)
         {
-            if (device.InitialHash != scheme.InitialHash(deviceHash, extendedBaseHash))
+            if (failure is not null)
             {
-                throw new VerificationFailedException(scheme.InitialHashSubSection, $"The initial hash code H_0 recorded for device {deviceId} is not H(H_E; {(scheme.BallotKind == DeviceChainBallotKind.PreEncrypted ? "0x42" : "0x29")}, B_C,0) with B_C,0 = 0x00000001 || H_DI.");
-            }
-        }
-
-        // 8.D/8.E (16.E/16.F): each ballot's chaining field, in chain order.
-        ConfirmationCode? previous = null;
-        for (int j = 0; j < listed.Count; j++)
-        {
-            var link = listed[j];
-            var expected = scheme.ChainingField(mode, deviceHash, extendedBaseHash, previous);
-            if (link.ChainingField != expected)
-            {
-                throw mode == ChainingMode.None
-                    ? new VerificationFailedException(scheme.NoChainingSubSection, $"Ballot {link.BallotId} on device {deviceId} does not carry the no-chaining field B_C = 0x00000000 || H_DI of its device.")
-                    : new VerificationFailedException(scheme.SimpleChainingSubSection, $"Ballot {link.BallotId}, ballot {j + 1} on device {deviceId}, does not carry B_C,{j + 1} = 0x00000001 || H_{j} ({(j == 0 ? "the initial hash code H_0" : $"the confirmation code of ballot {listed[j - 1].BallotId}")}).");
-            }
-
-            previous = link.ConfirmationCode;
-        }
-
-        // 8.G (16.H): the chain close over the final confirmation code H_ℓ, once per device.
-        if (mode != ChainingMode.None)
-        {
-            var closing = scheme.Closing(deviceHash, extendedBaseHash, previous!.Value);
-            if (device.ClosingChainingField != closing)
-            {
-                throw new VerificationFailedException(scheme.ClosingSubSection, $"The final input byte array recorded for device {deviceId} is not 0x00000001 || H(H_E; {(scheme.BallotKind == DeviceChainBallotKind.PreEncrypted ? "0x44" : "0x2B")}, H_ℓ, B_C,0) over its last listed ballot {listed[^1].BallotId}.");
-            }
-
-            if (device.ClosingHash != scheme.ClosingHash(closing, extendedBaseHash))
-            {
-                throw new VerificationFailedException(scheme.ClosingSubSection, $"The closing hash recorded for device {deviceId} is not H(H_E; {(scheme.BallotKind == DeviceChainBallotKind.PreEncrypted ? "0x42" : "0x29")}, B_C) over its final input byte array.");
+                throw failure;
             }
         }
     }

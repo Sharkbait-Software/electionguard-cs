@@ -52,6 +52,15 @@ public interface IElectionRecordReader : IAsyncDisposable
 
     /// <summary>The record signatures (the signatures pseudo-section, outside every root), file by file.</summary>
     IAsyncEnumerable<RecordItemBytes> ReadSignaturesAsync(CancellationToken ct = default);
+
+    /// <summary>The signature files (outside every root; anyone can add one), in name order.</summary>
+    IReadOnlyList<string> SignatureFiles { get; }
+
+    /// <summary>
+    /// The record signatures of one of <see cref="SignatureFiles"/>, so that a file that cannot be read
+    /// (<c>R.container</c>, <c>R.encoding</c>) does not hide the files after it.
+    /// </summary>
+    IAsyncEnumerable<RecordItemBytes> ReadSignatureFileAsync(string file, CancellationToken ct = default);
 }
 
 /// <summary>A device section (design §4.5): its header, its ballot items in chain order, and its close.</summary>
@@ -59,7 +68,11 @@ public interface IDeviceSectionReader
 {
     DeviceKey Key { get; }
 
-    /// <summary>The <c>device_header</c>, the section's first item; it must name the section's key.</summary>
+    /// <summary>
+    /// The <c>device_header</c>, the section's first item; it must name the section's key, compared on its
+    /// wire kind number and H_DI, or it is the device's structure code (8.structure, or 16.structure for a
+    /// pre-encrypting device), a kind this library does not declare included.
+    /// </summary>
     ValueTask<DeviceHeader> ReadHeaderAsync(CancellationToken ct = default);
 
     /// <summary>The ballot items, ordinals 1..ℓ (an item's ordinal is its chain position, its locator's position).</summary>
@@ -118,6 +131,7 @@ internal sealed class ElectionRecordReader : IElectionRecordReader
     {
         try
         {
+            await RequireLibraryMajorAsync(source, ct).ConfigureAwait(false);
             var reader = Layout(source, checkPresence);
             await reader.ReadFormatAsync(ct).ConfigureAwait(false);
             await reader.ReadClaimedTocAsync(ct).ConfigureAwait(false);
@@ -127,6 +141,87 @@ internal sealed class ElectionRecordReader : IElectionRecordReader
         {
             source.Dispose();
             throw;
+        }
+    }
+
+    /// <summary>
+    /// How a record of another format major is recognized (user decision NQ-7, design §7): by the
+    /// segment header of its header section at v2's path (<c>setup/header/00000000.binpb</c> or
+    /// <c>.jsonl</c>), read before the layout and D6 checks, which would refuse first what such a record
+    /// may hold (a new section kind's files at a path v2 does not list, every segment header at its own
+    /// major) as <c>R.container</c>. Magic "EGRF" with a format_major other than this library's is
+    /// <c>R.version</c>. A header that is absent or does not parse falls through to the ordinary checks,
+    /// which report it under their own codes.
+    /// </summary>
+    private static async ValueTask RequireLibraryMajorAsync(IRecordSource source, CancellationToken ct)
+    {
+        foreach (var encoding in new[] { RecordEncoding.Protobuf, RecordEncoding.Json })
+        {
+            string path = RecordLayout.SegmentPath(SectionKey.Of(RecordSectionType.Header), 0, encoding);
+            if (!source.Files.Contains(path, StringComparer.Ordinal))
+            {
+                continue;
+            }
+
+            (string? Magic, ulong? Major) header;
+            try
+            {
+                await using var raw = source.OpenRead(path);
+                await using var stream = new BufferedStream(raw, 1 << 16);
+                header = encoding == RecordEncoding.Json
+                    ? await new LineReader(stream, path).NextAsync(ct).ConfigureAwait(false) is { } line ? JsonMajor(line) : (null, null)
+                    : await SegmentFraming.ReadFrameAsync(stream, path, ct).ConfigureAwait(false) is { } frame ? ProtobufMajor(frame) : (null, null);
+            }
+            catch (Exception ex) when (ex is VerificationFailedException or IOException or InvalidDataException)
+            {
+                continue;
+            }
+
+            if (header is { Magic: "EGRF", Major: { } major } && major != RecordFormatVersion.Library.Major)
+            {
+                throw RecordCodes.Failure(RecordCodes.Version, $"The record is EGRF major {major} ({path}'s segment header); this reader reads major {RecordFormatVersion.Library.Major} (design §7).");
+            }
+        }
+
+        static (string?, ulong?) ProtobufMajor(byte[] frame)
+        {
+            try
+            {
+                var parsed = Pb.SegmentHeader.Parser.ParseFrom(frame);
+                return (parsed.Magic, parsed.FormatMajor);
+            }
+            catch (Google.Protobuf.InvalidProtocolBufferException)
+            {
+                return (null, null);
+            }
+        }
+
+        static (string?, ulong?) JsonMajor(byte[] line)
+        {
+            try
+            {
+                using var document = System.Text.Json.JsonDocument.Parse(line);
+                var root = document.RootElement;
+                if (root.ValueKind != System.Text.Json.JsonValueKind.Object
+                    || !root.TryGetProperty("magic", out var magic) || magic.ValueKind != System.Text.Json.JsonValueKind.String
+                    || !root.TryGetProperty("formatMajor", out var major))
+                {
+                    return (null, null);
+                }
+
+                // proto3 JSON writes a uint32 as a number and accepts it as a string too.
+                ulong? value = major.ValueKind switch
+                {
+                    System.Text.Json.JsonValueKind.Number when major.TryGetUInt64(out ulong n) => n,
+                    System.Text.Json.JsonValueKind.String when ulong.TryParse(major.GetString(), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out ulong n) => n,
+                    _ => null,
+                };
+                return (magic.GetString(), value);
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                return (null, null);
+            }
         }
     }
 
@@ -247,6 +342,15 @@ internal sealed class ElectionRecordReader : IElectionRecordReader
         var entries = new List<TocEntry>();
         await foreach (var item in ReadSegmentAsync(TocPath, new SectionKey((RecordSectionType)0xFFFE, []), 0, Format.Minor, ct).ConfigureAwait(false))
         {
+            // A section kind this reader does not know comes only with a new format major (user
+            // decision NQ-7, "Bump the major version"; design §7): an entry naming one is refused as
+            // R.version, at any minor and before the item's own checks, which would report the
+            // undeclared SectionType value as D2. Vendor types are the one open range (§4.5).
+            if (UnknownSectionKind(item.Bytes.Span) is { } unknown)
+            {
+                throw RecordCodes.Failure(RecordCodes.Version, $"TOC item {item.Ordinal} names section type 0x{unknown:x4}, a section kind EGRF {RecordFormatVersion.Library.Major}.{RecordFormatVersion.Library.Minor} does not define; a new section kind comes with a new format major (design §7, NQ-7).");
+            }
+
             if (!item.Check.IsCanonical)
             {
                 throw RecordCodes.Failure(RecordCodes.Encoding, $"TOC item {item.Ordinal} is not canonical ({item.Check.Rule}): {item.Check.Message}");
@@ -275,6 +379,32 @@ internal sealed class ElectionRecordReader : IElectionRecordReader
         {
             throw RecordCodes.Failure(RecordCodes.Root, $"The claimed table of contents is not one: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// The section type a <c>toc_entry</c> item names when it is neither a type of this library's
+    /// format nor a vendor type (a section kind of a later major, NQ-7); null otherwise, and for
+    /// bytes that do not parse (the item's own checks report those).
+    /// </summary>
+    internal static ushort? UnknownSectionKind(ReadOnlySpan<byte> item)
+    {
+        Pb.RecordItem parsed;
+        try
+        {
+            parsed = Pb.RecordItem.Parser.ParseFrom(item);
+        }
+        catch (Google.Protobuf.InvalidProtocolBufferException)
+        {
+            return null;
+        }
+
+        if (parsed.ItemCase != Pb.RecordItem.ItemOneofCase.TocEntry)
+        {
+            return null;
+        }
+
+        int type = (int)parsed.TocEntry.SectionType;
+        return type is > 0 and < RecordSections.FirstVendorType && !RecordSections.IsStandard((RecordSectionType)type) ? (ushort)type : null;
     }
 
     public async ValueTask<RecordSetup> ReadSetupAsync(CancellationToken ct = default)
@@ -417,14 +547,24 @@ internal sealed class ElectionRecordReader : IElectionRecordReader
     {
         foreach (var path in _signatureFiles)
         {
-            await foreach (var item in ReadSegmentAsync(path, new SectionKey((RecordSectionType)0xFFFF, []), 0, Format.Minor, ct).ConfigureAwait(false))
+            await foreach (var item in ReadSignatureFileAsync(path, ct).ConfigureAwait(false))
             {
                 yield return item;
             }
         }
     }
 
-    internal IReadOnlyList<string> SignatureFiles => _signatureFiles;
+    public IReadOnlyList<string> SignatureFiles => _signatureFiles;
+
+    public IAsyncEnumerable<RecordItemBytes> ReadSignatureFileAsync(string file, CancellationToken ct = default)
+    {
+        if (!_signatureFiles.Contains(file, StringComparer.Ordinal))
+        {
+            throw new ArgumentException($"The record has no signature file {file}.", nameof(file));
+        }
+
+        return ReadSegmentAsync(file, new SectionKey((RecordSectionType)0xFFFF, []), 0, Format.Minor, ct);
+    }
 
     /// <summary>The segment files of <paramref name="section"/>, in order.</summary>
     internal IReadOnlyList<string> SegmentPaths(SectionKey section) => _segments[section];
@@ -433,7 +573,8 @@ internal sealed class ElectionRecordReader : IElectionRecordReader
     /// One segment file: its header (D6, path agreement, first ordinal; <c>R.container</c>), then its
     /// items. Protobuf: frames, each length checked before allocation. JSON: lines, each parsed to its
     /// canonical bytes; a line that is not one item is <c>R.encoding</c>, one over the frame ceiling
-    /// <c>R.container</c>, and the file must end with a line feed (a torn tail otherwise).
+    /// <c>R.container</c>. The last line's line feed is optional (§5.5); a last line cut short does
+    /// not parse (<c>R.encoding</c>).
     /// </summary>
     internal async IAsyncEnumerable<RecordItemBytes> ReadSegmentAsync(string path, SectionKey section, long firstOrdinal, ushort minor, [EnumeratorCancellation] CancellationToken ct)
     {
@@ -526,18 +667,27 @@ internal sealed class ElectionRecordReader : IElectionRecordReader
         new(DeviceKey.KindOf(key[0]) ?? throw new ArgumentException("Not a device key.", nameof(key)), VotingDeviceInformationHash.FromCanonicalBytes(key[1..].ToArray()));
 
     /// <summary>
-    /// Reads lines by design §5.5's line rules with a bounded buffer: every line ends with '\n' (a
-    /// final line without it is a torn tail), one '\r' before it is removed, an empty line and a line
-    /// over <see cref="RecordJson.MaxLineLength"/> bytes are refused; all <c>R.container</c>.
+    /// Reads lines by design §5.5's line rules with a bounded buffer: a line ends with '\n', except
+    /// that the file's last line may lack it (jsonlines.org; user decision 2026-10-10, "Optional"),
+    /// one '\r' before the end of a line is removed, and an empty line or a line over
+    /// <see cref="RecordJson.MaxLineLength"/> bytes is refused (<c>R.container</c>). A last line a
+    /// crash cut short is refused by its parse (<c>R.encoding</c>), since a cut JSON value does not
+    /// parse.
     /// </summary>
     internal sealed class LineReader(Stream stream, string path)
     {
         private readonly byte[] _buffer = new byte[1 << 16];
         private int _start;
         private int _end;
+        private bool _ended;
 
         public async ValueTask<byte[]?> NextAsync(CancellationToken ct)
         {
+            if (_ended)
+            {
+                return null;
+            }
+
             MemoryStream? partial = null;
             while (true)
             {
@@ -556,18 +706,7 @@ internal sealed class ElectionRecordReader : IElectionRecordReader
                     }
 
                     _start = newline + 1;
-                    if (line.Length > RecordJson.MaxLineLength)
-                    {
-                        throw TooLong();
-                    }
-
-                    int length = line.Length > 0 && line[^1] == (byte)'\r' ? line.Length - 1 : line.Length;
-                    if (length == 0)
-                    {
-                        throw RecordCodes.Failure(RecordCodes.Container, $"{path}: an empty line, which is no item (§5.5).");
-                    }
-
-                    return length == line.Length ? line : line[..length];
+                    return Line(line);
                 }
 
                 if (_end > _start)
@@ -584,14 +723,30 @@ internal sealed class ElectionRecordReader : IElectionRecordReader
                 _end = await stream.ReadAsync(_buffer, ct).ConfigureAwait(false);
                 if (_end == 0)
                 {
-                    if (partial is { Length: > 0 })
-                    {
-                        throw RecordCodes.Failure(RecordCodes.Container, $"{path}: the file ends inside a line (a torn tail; every line ends with a line feed, §5.5).");
-                    }
+                    _ended = true;
 
-                    return null;
+                    // The last line without its line feed (§5.5; jsonlines.org): a line like any
+                    // other. A last line a crash cut short does not parse, and the caller refuses it
+                    // as R.encoding.
+                    return partial is { Length: > 0 } ? Line(partial.ToArray()) : null;
                 }
             }
+        }
+
+        private byte[] Line(byte[] line)
+        {
+            if (line.Length > RecordJson.MaxLineLength)
+            {
+                throw TooLong();
+            }
+
+            int length = line.Length > 0 && line[^1] == (byte)'\r' ? line.Length - 1 : line.Length;
+            if (length == 0)
+            {
+                throw RecordCodes.Failure(RecordCodes.Container, $"{path}: an empty line, which is no item (§5.5).");
+            }
+
+            return length == line.Length ? line : line[..length];
         }
 
         private Exception TooLong() =>
@@ -616,13 +771,15 @@ internal sealed class ElectionRecordReader : IElectionRecordReader
                     throw new VerificationFailedException(StructureCode, $"Device section {Section}'s first item is member {(int)parsed.ItemCase}, not device_header (§4.5).");
                 }
 
-                var header = DeviceMapper.FromItem(parsed.DeviceHeader);
-                if (header.Key != Key)
+                // Compared on the wire values first: v2's layout has a section only for a declared
+                // kind, so a header of another kind (a later minor's, design §7) is a header that does
+                // not match its section, and never reaches FromItem.
+                if (!DeviceMapper.NamesKey(parsed.DeviceHeader, Key))
                 {
-                    throw new VerificationFailedException(StructureCode, $"Device section {Section}'s header names kind {header.Kind} and H_DI {header.DeviceInformationHash}, not the section's key (§4.5).");
+                    throw new VerificationFailedException(StructureCode, DeviceMapper.KeyMismatch(Section, parsed.DeviceHeader));
                 }
 
-                return header;
+                return DeviceMapper.FromItem(parsed.DeviceHeader);
             }
 
             throw new VerificationFailedException(StructureCode, $"Device section {Section} holds no item (§4.5: a device_header first).");

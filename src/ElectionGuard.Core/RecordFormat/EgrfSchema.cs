@@ -114,4 +114,12 @@ internal sealed record EnumShape(string FullName, IReadOnlySet<long> Values)
     /// </summary>
     public bool IsDeclaredNonZero(long value) =>
         value != 0 && (Values.Contains(value) || (FullName == EgrfSchema.SectionTypeName && value is >= RecordSections.FirstVendorType and <= RecordSections.LastVendorType));
+
+    /// <summary>
+    /// Whether a later minor may declare a value of this enum, so that a reader older than the record
+    /// reports an undeclared one as content not understood rather than D2. Every enum but
+    /// <c>SectionType</c>: a new section kind comes only with a new format major (user decision NQ-7),
+    /// so an undeclared non-vendor section type is D2 at any reader age.
+    /// </summary>
+    public bool MayGrowInAMinor => FullName != EgrfSchema.SectionTypeName;
 }

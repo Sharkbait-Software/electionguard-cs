@@ -109,33 +109,49 @@ public static class ElectionRecord
     public static async ValueTask<TableOfContents> CheckClaimedTocAsync(IElectionRecordReader record, CancellationToken ct = default)
     {
         var computed = await ComputeTocAsync(record, -1, ct).ConfigureAwait(false);
-        if (record.ClaimedToc is not { } claimed)
+        if (record.ClaimedToc is { } claimed && ClaimedTocDifferences(computed.Entries, claimed) is { Count: > 0 } differences)
         {
-            return computed;
-        }
-
-        var claimedBySection = claimed.Entries.ToDictionary(x => new SectionKey(x.Type, x.Key.Span));
-        foreach (var entry in computed.Entries)
-        {
-            var section = new SectionKey(entry.Type, entry.Key.Span);
-            if (!claimedBySection.Remove(section, out var stated))
-            {
-                throw RecordCodes.Failure(RecordCodes.Root, $"Section {section} has files but no entry in the claimed TOC (§5.3.1).");
-            }
-
-            if (!stated.Equals(entry))
-            {
-                throw RecordCodes.Failure(RecordCodes.Root, $"Section {section}: the claimed TOC states {stated.ItemCount} items, root {stated.Root}, critical {stated.Critical}; the record holds {entry.ItemCount}, root {entry.Root}, critical {entry.Critical} (§4.5, §4.9).");
-            }
-        }
-
-        if (claimedBySection.Count > 0)
-        {
-            throw RecordCodes.Failure(RecordCodes.Root, $"The claimed TOC names section {claimedBySection.Keys.Order().First()}, which has no files (§5.3.1).");
+            throw RecordCodes.Failure(RecordCodes.Root, differences[0].Message);
         }
 
         return computed;
     }
+
+    /// <summary>
+    /// Every way the claimed TOC differs from the <paramref name="computed"/> entries (each an
+    /// <c>R.root</c> failure), in canonical section order: a section with files and no claimed entry,
+    /// an entry whose count, root or critical bit differs, then each claimed section with no files.
+    /// With <paramref name="upTo"/>, only sections of that phase or earlier are compared (a verifier
+    /// of an aggregated prefix). <see cref="CheckClaimedTocAsync"/> throws the first; the record
+    /// verifier reports them all.
+    /// </summary>
+    internal static IReadOnlyList<(SectionKey Section, string Message)> ClaimedTocDifferences(IEnumerable<TocEntry> computed, TableOfContents claimed, RecordPhase? upTo = null)
+    {
+        var claimedBySection = claimed.Entries.Where(x => upTo is null || x.Phase <= upTo).ToDictionary(x => new SectionKey(x.Type, x.Key.Span));
+        var differences = new List<(SectionKey, string)>();
+        foreach (var entry in computed.Where(x => upTo is null || x.Phase <= upTo))
+        {
+            var section = new SectionKey(entry.Type, entry.Key.Span);
+            if (!claimedBySection.Remove(section, out var stated))
+            {
+                differences.Add((section, $"Section {section} has files but no entry in the claimed TOC (§5.3.1)."));
+            }
+            else if (!stated.Equals(entry))
+            {
+                differences.Add((section, $"Section {section}: the claimed TOC states {stated.ItemCount} items, root {stated.Root}, critical {stated.Critical}; the record holds {entry.ItemCount}, root {entry.Root}, critical {entry.Critical} (§4.5, §4.9)."));
+            }
+        }
+
+        foreach (var section in claimedBySection.Keys.Order())
+        {
+            differences.Add((section, $"The claimed TOC names section {section}, which has no files (§5.3.1)."));
+        }
+
+        return differences;
+    }
+
+    /// <summary>The critical bit of <paramref name="section"/> in <paramref name="record"/> (§4.5): fixed for a standard type, the claimed TOC's for a vendor one (false without one).</summary>
+    internal static bool CriticalBitOf(IElectionRecordReader record, SectionKey section) => CriticalOf(record, section);
 
     /// <summary>
     /// Converts <paramref name="source"/> to <paramref name="encoding"/> in <paramref name="carrier"/>

@@ -18,6 +18,19 @@ internal sealed class RecordBallotIndex
     /// <summary>The locators of each H_I (as lowercase hex); more than one when two ballots share id_B, a 5.A failure.</summary>
     private readonly Dictionary<string, List<BallotLocator>> _byIdentifierHash = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// An index of one ballot, at <paramref name="locator"/>: the record verifier's streaming join
+    /// (design §6.3) decodes each final-phase item next to the one ballot its locator names, so it
+    /// never holds the O(N) index.
+    /// </summary>
+    public static RecordBallotIndex Single(BallotLocator locator, string ballotId, SelectionEncryptionIdentifierHash identifierHash)
+    {
+        var index = new RecordBallotIndex();
+        index._byLocator[locator] = (ballotId, identifierHash);
+        index._byIdentifierHash[Key(identifierHash)] = [locator];
+        return index;
+    }
+
     /// <summary>Adds a device section's ballots, in chain order: the i-th is at position i.</summary>
     public void AddDevice(DeviceKey device, IEnumerable<(string BallotId, SelectionEncryptionIdentifierHash IdentifierHash)> ballots)
     {

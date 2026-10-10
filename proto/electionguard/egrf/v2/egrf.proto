@@ -67,6 +67,8 @@ extend google.protobuf.FieldOptions {
 
 // Section types. The phase is min(type >> 8, 3): 0 setup, 1 voting (sealed), 2 aggregated, 3 final.
 // 32768-65533 are vendor sections (final phase); proto3 enums are open, so they travel as numbers.
+// A new standard section type needs a new format major (user decision NQ-7): minor versions add
+// only fields (a new RecordItem member is a field).
 enum SectionType {
   SECTION_TYPE_UNSPECIFIED = 0;
   SECTION_TYPE_HEADER = 1;
@@ -510,8 +512,9 @@ message TocEntry {
   SectionType section_type = 1;
   bytes key = 2;
   bool critical = 3;               // fixed per standard section type (design §4.5: true for every
-                                   // v2.0 type); for a type the reader does not know (vendor, or a
-                                   // later minor's), taken from the claimed TOC entry
+                                   // v2.0 type); for a vendor type, taken from the claimed TOC
+                                   // entry. A new standard type comes only with a new format major
+                                   // (user decision NQ-7); a v2 reader refuses one (R.version)
   uint64 item_count = 4;
   bytes root = 5 [(width) = 32];   // the section's Merkle root
 }

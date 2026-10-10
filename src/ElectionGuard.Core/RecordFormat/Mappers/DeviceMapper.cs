@@ -13,6 +13,32 @@ namespace ElectionGuard.Core.RecordFormat.Mappers;
 /// </summary>
 internal static class DeviceMapper
 {
+    /// <summary>
+    /// Whether <paramref name="kind"/> is a device kind of this library's format. A canonical item of a
+    /// newer minor may carry one it does not declare (<c>DeviceKind</c> may grow in a minor; design §7
+    /// "Enum value"); in a ballot locator its readers report that as <c>R.version</c> before
+    /// <see cref="FromItem(Pb.BallotLocator?)"/>, which refuses it. A device header is checked by
+    /// <see cref="NamesKey"/> instead: v2's layout has no section for such a kind.
+    /// </summary>
+    public static bool IsDeclared(Pb.DeviceKind kind) => DeviceKey.KindOf((long)kind) is not null;
+
+    /// <summary>
+    /// Whether a device header names its section's key (design §4.5), compared on the wire values: the
+    /// raw <c>DeviceKind</c> number and H_DI. v2's layout names a device section only for a declared
+    /// kind (§5.3.1: <c>regular-</c>, <c>pre-encrypting-</c>), so a header of any other kind is a
+    /// header that does not match its section, never an exception. Check it before
+    /// <see cref="FromItem(Pb.DeviceHeader)"/>.
+    /// </summary>
+    public static bool NamesKey(Pb.DeviceHeader header, DeviceKey key)
+    {
+        ArgumentNullException.ThrowIfNull(header);
+        return (long)header.Kind == key.KindByte && header.HDi.Span.SequenceEqual((byte[])key.DeviceInformationHash);
+    }
+
+    /// <summary>The device structure finding's message for a header that does not name its section's key.</summary>
+    public static string KeyMismatch(SectionKey section, Pb.DeviceHeader header) =>
+        $"Device section {section}'s header names kind {(int)header.Kind} and H_DI {Convert.ToHexStringLower(header.HDi.Span)}, not the section's key (§4.5).";
+
     public static Pb.RecordItem ToItem(DeviceHeader header)
     {
         ArgumentNullException.ThrowIfNull(header);

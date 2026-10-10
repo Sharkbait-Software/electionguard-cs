@@ -34,6 +34,8 @@ internal static class RecordCarrierElections
         public required List<(EncryptedBallot Ballot, DecryptedContestData Data)> ContestData { get; init; }
         public required (EncryptedBallot Ballot, DecryptedChallengedBallot Decrypted) Challenged { get; init; }
 
+        public required IReadOnlyList<TallyGuardian> Guardians { get; init; }
+
         public Manifest Manifest => Record.Manifest;
 
         public IEnumerable<EncryptedBallot> Ballots => Devices.SelectMany(x => x.Ballots);
@@ -110,6 +112,7 @@ internal static class RecordCarrierElections
         return new Regular
         {
             Record = record,
+            Guardians = guardians,
             Devices = devices,
             Tally = tally,
             Decrypted = admin.Decrypt(guardians, tally, record),
@@ -161,7 +164,9 @@ internal static class RecordCarrierElections
     }
 
     /// <summary>Writes the regular election through every phase; returns the writer's TOC per phase.</summary>
-    public static async Task<Dictionary<RecordPhase, TableOfContents>> WriteAsync(Regular election, string directory, RecordEncoding encoding, ElectionRecordWriterOptions? options = null)
+    /// <param name="signer">When given, every device's chain close and section seal are attested and the
+    /// final root signed (design §4.9), all by this signer.</param>
+    public static async Task<Dictionary<RecordPhase, TableOfContents>> WriteAsync(Regular election, string directory, RecordEncoding encoding, ElectionRecordWriterOptions? options = null, IStatementSigner? signer = null)
     {
         var tocs = new Dictionary<RecordPhase, TableOfContents>();
         await using var writer = ElectionRecord.Create(directory, encoding, options);
@@ -174,7 +179,12 @@ internal static class RecordCarrierElections
                 await device.AppendAsync(ballot);
             }
 
-            await device.CloseAsync(ClosedAt);
+            var seal = await device.CloseAsync(ClosedAt);
+            if (signer is not null)
+            {
+                await writer.AddAttestationAsync(await signer.SignAsync(seal!.ChainCloseStatement(election.Record.ExtendedBaseHash)));
+                await writer.AddAttestationAsync(await signer.SignAsync(seal.SectionSealStatement(election.Record.ExtendedBaseHash)));
+            }
         }
 
         tocs[RecordPhase.Sealed] = await writer.SealVotingAsync();
@@ -189,6 +199,11 @@ internal static class RecordCarrierElections
 
         await writer.AddChallengedDecryptionAsync(election.Challenged.Ballot, election.Challenged.Decrypted);
         tocs[RecordPhase.Final] = await writer.CompleteAsync(election.Decrypted);
+        if (signer is not null)
+        {
+            await writer.AddRecordSignatureAsync(await signer.SignAsync(RecordStatements.Record(RecordPhase.Final, tocs[RecordPhase.Final].Root, election.Record.ExtendedBaseHash, ClosedAt.AddHours(1), "administrator")));
+        }
+
         return tocs;
     }
 

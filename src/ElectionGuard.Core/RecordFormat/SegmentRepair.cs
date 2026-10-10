@@ -217,7 +217,11 @@ internal static class SegmentRepair
             }
         }
 
-        // Whatever follows the last line feed (a partial line, or zeros) is the torn tail.
+        // Whatever follows the last line feed (a partial line, or zeros) is the torn tail. A reader
+        // accepts a last line without its line feed when it parses (§5.5, "Optional"), but this
+        // library's writer ends every line, so here an unterminated line is one the crash stopped
+        // before its line feed reached the disk: it was never flushed (DeviceSectionWriter.FlushAsync
+        // writes whole lines), so no ballot that a device reported recorded is lost by cutting it.
         return (Math.Max(header, 0), header < 0 ? 0 : lineStart);
     }
 

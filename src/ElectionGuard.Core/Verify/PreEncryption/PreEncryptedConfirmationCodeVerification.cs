@@ -133,6 +133,37 @@ public class PreEncryptedConfirmationCodeVerification
         VerifyConfirmationCodeAndChain(ballot.Id, ballot.DeviceId, selectionEncryptionIdentifierHash, contestHashes, ballot.ChainingField, ballot.ConfirmationCode, deviceInformationHash, encryptionRecord, previousConfirmationCode);
     }
 
+    /// <summary>
+    /// The part of Verification 16 a compact uncast item allows before its ballot nonce ξ_B is
+    /// released (a guardian run of the aggregated prefix, or a final record missing the release;
+    /// design §6.9, NQ-10): the item lists χ for exactly its ballot style's contests, in ascending
+    /// index ("16.structure", <see cref="BallotStructure.FindCompactUncastViolation"/>); then 16.C,
+    /// H_C = H(H_I; 0x42, χ_1, ..., χ_mB, B_C) over the printed χ (spec p.65; eq. 116), and 16.D-16.F
+    /// as for any ballot. 16.A and 16.B recompute ψ and χ from the vectors, which are regenerated from
+    /// ξ_B, so they wait for the release; the caller reports Verification 16 not evaluable for them.
+    /// </summary>
+    internal void VerifyCompactBeforeRelease(
+        string ballotId,
+        string deviceId,
+        string ballotStyleId,
+        SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash,
+        IReadOnlyList<(int ContestIndex, ContestHash ContestHash)> contestHashes,
+        ChainingField chainingField,
+        ConfirmationCode confirmationCode,
+        VotingDeviceInformationHash deviceInformationHash,
+        EncryptionRecord encryptionRecord,
+        ConfirmationCode? previousConfirmationCode)
+    {
+        ArgumentNullException.ThrowIfNull(contestHashes);
+        ArgumentNullException.ThrowIfNull(encryptionRecord);
+        if (BallotStructure.FindCompactUncastViolation(ballotId, ballotStyleId, contestHashes.Select(x => x.ContestIndex).ToList(), chainingField, encryptionRecord.Manifest) is string violation)
+        {
+            throw BallotStructure.Failure(16, violation);
+        }
+
+        VerifyConfirmationCodeAndChain(ballotId, deviceId, selectionEncryptionIdentifierHash, contestHashes.ToList(), chainingField, confirmationCode, deviceInformationHash, encryptionRecord, previousConfirmationCode);
+    }
+
     /// <summary>16.C over the contest hashes, then 16.D-16.F for one ballot.</summary>
     private static void VerifyConfirmationCodeAndChain(
         string ballotId,

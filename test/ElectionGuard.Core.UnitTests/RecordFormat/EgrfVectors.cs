@@ -157,7 +157,6 @@ internal static class EgrfVectors
         new("EncryptedField with unknown field 4 inside a contest", null, 1, "item", Ballot(IdB, HI, Style, Status, Weight, L(7, V(1, 1), L(2, L(1, Fill(512, 1)), L(2, Fill(512, 2)), L(3, Fill(128, 3)), V(4, 9)), L(3, Fill(128, 4)), L(7, Fill(32, 5))), Code, Chaining, Nonce)),
         new("RecordItem member 60, an item type this reader does not know", null, 1, "item", Item(60, V(1, 5))),
         new("EncryptedBallot with status 4, an enum value a later minor declares", null, 1, "item", Ballot(IdB, HI, Style, V(4, 4), Weight, ContestOne, Code, Chaining, Nonce)),
-        new("SectionType 0x0203 in a segment header, a later minor's section", null, 1, "segmentHeader", Cat(S(1, "EGRF"), V(2, 2), V(3, 0x0203))),
     ];
 
     /// <summary>Negative vectors: one or more per profile rule, each breaking exactly that rule.</summary>
@@ -238,6 +237,10 @@ internal static class EgrfVectors
             new("segment header of format major 3", "D6", 0, "segmentHeader", Cat(S(1, "EGRF"), V(2, 3), V(3, 257))),
             new("non-canonical segment header (fields out of order)", "D6", 0, "segmentHeader", Cat(V(2, 2), S(1, "EGRF"), V(3, 257))),
             new("segment header without a section type", "D6", 0, "segmentHeader", Cat(S(1, "EGRF"), V(2, 2))),
+            // A new section kind comes only with a new format major (user decision NQ-7), so an
+            // undeclared non-vendor SectionType is D2 even for a reader older than the record.
+            new("segment header naming section type 0x0203 in a newer-minor record", "D6", 1, "segmentHeader", Cat(S(1, "EGRF"), V(2, 2), V(3, 0x0203))),
+            new("toc_entry naming section type 0x0203 in a newer-minor record", "D2", 1, "item", Item(50, V(1, 0x0203), V(4, 1), L(5, Fill(32, 9)))),
             // §4.9 signed statements
             new("device attestation over a non-canonical statement", "R.attestation", 0, "signedStatement", Item(15, L(1, [.. statement, .. V(9, 0)]), S(2, "ecdsa-p256-sha256"))),
             new("device attestation over a non-statement member (record_header)", "R.attestation", 0, "signedStatement", Item(15, L(1, HeaderItem(V(1, 2))), S(2, "ecdsa-p256-sha256"))),

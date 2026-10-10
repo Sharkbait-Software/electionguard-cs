@@ -802,7 +802,7 @@ public class RecordZipCarrierTests
     }
 
     /// <summary>A stream that reads forward only (a pipe, say): CanSeek is false and Seek throws.</summary>
-    private sealed class ForwardOnlyStream(Stream inner) : Stream
+    internal sealed class ForwardOnlyStream(Stream inner) : Stream
     {
         public override bool CanRead => true;
         public override bool CanSeek => false;

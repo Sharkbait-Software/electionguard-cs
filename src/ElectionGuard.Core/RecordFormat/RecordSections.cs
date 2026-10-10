@@ -68,7 +68,9 @@ public static class RecordSections
 
     /// <summary>
     /// The critical bit a TOC entry of a standard type must carry: true for every v2.0 type (design
-    /// §4.5). Null for any other type, whose bit a reader takes from the claimed TOC entry.
+    /// §4.5). Null for any other type: a vendor type, whose bit a reader takes from the claimed TOC
+    /// entry. No other type reaches a v2 reader: a new standard section kind comes with a new format
+    /// major (user decision NQ-7), and the reader refuses a TOC entry naming one as <c>R.version</c>.
     /// </summary>
     public static bool? FixedCritical(RecordSectionType type) => IsStandard(type) ? true : null;
 }

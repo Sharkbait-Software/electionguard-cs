@@ -40,8 +40,37 @@ public enum UncastDisposition
     ReturnedNoncesReleased,
 }
 
-/// <summary>A closed device section's digests (design §8.3): what a chain-close or section-seal statement commits to.</summary>
-public sealed record DeviceSeal(DeviceKey Key, long ItemCount, Sha256Digest SectionRoot, Sha256Digest CodesRoot);
+/// <summary>
+/// A closed device section's digests and close (design §8.3, §4.9): what a chain-close or
+/// section-seal statement commits to. <see cref="ChainCloseStatement"/> and
+/// <see cref="SectionSealStatement"/> give the canonical bytes to sign (S8b: signing the chain close
+/// at close time stops anyone who can rewrite the record from dropping trailing ballots and
+/// recomputing the close, under either chaining mode).
+/// </summary>
+public sealed record DeviceSeal(DeviceKey Key, long ItemCount, Sha256Digest SectionRoot, Sha256Digest CodesRoot)
+{
+    /// <summary>S_device.</summary>
+    public string DeviceId { get; init; } = "";
+
+    public ChainingMode ChainingMode { get; init; }
+
+    /// <summary>ℓ, the ballot items in the section (<see cref="ItemCount"/> is ℓ + 2).</summary>
+    public long BallotCount => ItemCount - 2;
+
+    /// <summary>H̄ under simple chaining; null under no chaining.</summary>
+    public ConfirmationCode? ClosingHash { get; init; }
+
+    /// <summary>The close's time, if recorded.</summary>
+    public DateTimeOffset? ClosedAt { get; init; }
+
+    /// <summary>The canonical bytes of this device's <c>ChainCloseStatement</c> under H_E <paramref name="extendedBaseHash"/> (design §4.9).</summary>
+    public byte[] ChainCloseStatement(ExtendedBaseHash extendedBaseHash) =>
+        RecordStatements.ChainClose(extendedBaseHash, Key, DeviceId, ChainingMode, BallotCount, CodesRoot, ClosingHash, ClosedAt);
+
+    /// <summary>The canonical bytes of this device's <c>SectionSealStatement</c> under H_E <paramref name="extendedBaseHash"/> (design §4.9).</summary>
+    public byte[] SectionSealStatement(ExtendedBaseHash extendedBaseHash) =>
+        RecordStatements.SectionSeal(extendedBaseHash, Key, ItemCount, SectionRoot);
+}
 
 /// <summary>
 /// Writes an election record into a directory (design §5.3, §8.3), phase by phase, so that an
@@ -67,6 +96,7 @@ public sealed partial class ElectionRecordWriter : IAsyncDisposable
 {
     private readonly object _lock = new();
     private readonly SemaphoreSlim _finalGate = new(1, 1);
+    private readonly SemaphoreSlim _signatureGate = new(1, 1);
     private readonly DirectoryRecordSink _sink;
     private readonly ElectionRecordWriterOptions _options;
     private readonly List<TocEntry> _entries = [];
@@ -74,6 +104,7 @@ public sealed partial class ElectionRecordWriter : IAsyncDisposable
     private readonly HashSet<SectionKey> _closedDevices = [];
     private readonly Dictionary<Sha256Digest, BallotEntry> _ballots = [];
     private readonly Dictionary<(Sha256Digest IdentifierHash, int Contest), bool> _requests = [];
+    private readonly HashSet<(string Device, int Member, Sha256Digest Statement, string Item)> _attestations = [];
     private SortedSpool? _challenged;
     private SortedSpool? _contestData;
     private SortedSpool? _releases;
@@ -252,21 +283,188 @@ public sealed partial class ElectionRecordWriter : IAsyncDisposable
     }
 
     /// <summary>
-    /// Seals voting: every opened device must be closed. Writes the device attestations section
-    /// (empty: attestations are S10b-11's) and fixes R_sealed.
+    /// Adds a device attestation (design §4.9): a chain-close, section-seal or prefix-checkpoint
+    /// statement, signed by the device or the collector receiving from it, written into the
+    /// <c>device_attestations</c> section when voting is sealed (inside R_sealed; nothing may be added
+    /// to it afterwards, so late countersignatures go in the detached signatures layer). Refused
+    /// (<see cref="ArgumentException"/>) unless the item is canonical with a statement of member 40-42
+    /// (<see cref="CanonicalProtobuf.CheckSignedStatement"/>), under this election's H_E, for a device
+    /// the writer opened, and not added before. The writer checks no signature and no statement content
+    /// beyond that; the verifier checks both. Attestations are kept in memory until the seal, so after
+    /// <see cref="ResumeAsync"/> they must be added again. A device that then closes with no ballots has
+    /// no section (Q25), so its attestations are dropped when it closes.
+    /// </summary>
+    public ValueTask AddAttestationAsync(SignedStatement attestation, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(attestation);
+        RequirePhase(RecordPhase.Setup, "add a device attestation");
+        byte[] item = attestation.ToDeviceAttestationItem();
+        var check = CanonicalProtobuf.CheckSignedStatement(item, RecordFormatVersion.Library.Minor);
+        if (!check.IsCanonical)
+        {
+            throw new ArgumentException($"The attestation is not a canonical signed statement ({check.Rule}): {check.Message}", nameof(attestation));
+        }
+
+        var statement = Pb.RecordItem.Parser.ParseFrom(attestation.Statement.Span);
+        var (he, deviceKey) = statement.ItemCase switch
+        {
+            Pb.RecordItem.ItemOneofCase.ChainCloseStatement => (statement.ChainCloseStatement.HE, statement.ChainCloseStatement.DeviceKey),
+            Pb.RecordItem.ItemOneofCase.SectionSealStatement => (statement.SectionSealStatement.HE, statement.SectionSealStatement.DeviceKey),
+            _ => (statement.PrefixCheckpointStatement.HE, statement.PrefixCheckpointStatement.DeviceKey),
+        };
+
+        if (!he.Span.SequenceEqual((byte[])Record.ExtendedBaseHash))
+        {
+            throw new ArgumentException("The attestation's statement is under another election's H_E.", nameof(attestation));
+        }
+
+        var section = new SectionKey(RecordSectionType.Device, deviceKey.Span);
+        lock (_lock)
+        {
+            if (!_openDevices.ContainsKey(section) && !_closedDevices.Contains(section))
+            {
+                throw new ArgumentException($"The attestation names device {section}, which the writer has not opened.", nameof(attestation));
+            }
+
+            var key = (Convert.ToHexStringLower(deviceKey.Span), (int)statement.ItemCase, attestation.StatementDigest, Convert.ToHexStringLower(item));
+            if (!_attestations.Add(key))
+            {
+                throw new ArgumentException("The record already holds this attestation.", nameof(attestation));
+            }
+        }
+
+        return ValueTask.CompletedTask;
+    }
+
+    /// <summary>
+    /// Adds a detached record signature (design §4.9; §3.7 "together with the date"): a signed
+    /// <c>RecordStatement</c> over a phase root this writer has fixed, under this election's H_E and
+    /// this library's format version, written to <c>signatures/&lt;phase&gt;-&lt;SHA-256(statement)&gt;</c>
+    /// outside every root, so it may be added at any later time (another signer of the same statement
+    /// joins its file). Refused (<see cref="ArgumentException"/>) unless canonical, of member 43, and
+    /// naming the root the writer returned for that phase. The signature itself is not checked here.
+    /// Adds through one writer are serialized (the file is read, merged and replaced); writers in
+    /// different processes adding to the same record must coordinate among themselves.
+    /// </summary>
+    public async ValueTask AddRecordSignatureAsync(SignedStatement signature, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(signature);
+        await _signatureGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await AddRecordSignatureLockedAsync(signature, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _signatureGate.Release();
+        }
+    }
+
+    private async ValueTask AddRecordSignatureLockedAsync(SignedStatement signature, CancellationToken ct)
+    {
+        byte[] item = signature.ToRecordSignatureItem();
+        var check = CanonicalProtobuf.CheckSignedStatement(item, RecordFormatVersion.Library.Minor);
+        if (!check.IsCanonical)
+        {
+            throw new ArgumentException($"The record signature is not a canonical signed statement ({check.Rule}): {check.Message}", nameof(signature));
+        }
+
+        var statement = Pb.RecordItem.Parser.ParseFrom(signature.Statement.Span).RecordStatement;
+        var phase = (RecordPhase)(int)statement.Phase;
+        var toc = Toc;
+        if (toc is null || Phase is null || phase > Phase || !statement.Root.Span.SequenceEqual(toc.PhaseRoot(phase).ToArray()))
+        {
+            throw new ArgumentException($"The record statement names phase {phase} with a root that is not the one this writer fixed for it.", nameof(signature));
+        }
+
+        if (!statement.HE.Span.SequenceEqual((byte[])Record.ExtendedBaseHash) || statement.FormatMajor != RecordFormatVersion.Library.Major || statement.FormatMinor != RecordFormatVersion.Library.Minor)
+        {
+            throw new ArgumentException("The record statement names another election's H_E or another format version.", nameof(signature));
+        }
+
+        string path = RecordLayout.SignaturePath(phase, signature.StatementDigest, Encoding);
+        string full = Path.Combine(_sink.Root, path);
+        var items = new List<byte[]>();
+        if (File.Exists(full))
+        {
+            await using var stream = new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.Read);
+            var lines = Encoding == RecordEncoding.Json ? new ElectionRecordReader.LineReader(stream, path) : null;
+            bool header = true;
+            while (true)
+            {
+                byte[]? existing = lines is null
+                    ? await SegmentFraming.ReadFrameAsync(stream, path, ct).ConfigureAwait(false)
+                    : await lines.NextAsync(ct).ConfigureAwait(false) is { } line ? (header ? line : RecordJson.ParseItem(line, RecordFormatVersion.Library.Minor)) : null;
+                if (existing is null)
+                {
+                    break;
+                }
+
+                if (header)
+                {
+                    header = false;
+                    continue;
+                }
+
+                if (existing.AsSpan().SequenceEqual(item))
+                {
+                    throw new ArgumentException("The record already holds this signature.", nameof(signature));
+                }
+
+                items.Add(existing);
+            }
+        }
+
+        items.Add(item);
+        System.IO.Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+        // One fixed name (the adds are serialized), so a temporary file a crash left is replaced by the
+        // next add rather than left in the record; a failed write removes its own.
+        string temporary = full + ".tmp";
+        try
+        {
+            await using (var stream = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None))
+            {
+                await WritePseudoSectionAsync(stream, Pb.SectionType.Signatures, items, Encoding, ct).ConfigureAwait(false);
+                stream.Flush(flushToDisk: true);
+            }
+
+            File.Move(temporary, full, overwrite: true);
+        }
+        catch
+        {
+            File.Delete(temporary);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Seals voting: every opened device must be closed. Writes the device attestations section (the
+    /// attestations added, ascending by device key, statement member and SHA-256 of the statement,
+    /// design §4.5) and fixes R_sealed.
     /// </summary>
     public async ValueTask<TableOfContents> SealVotingAsync(CancellationToken ct = default)
     {
         RequirePhase(RecordPhase.Setup, "seal voting");
+        List<Pb.RecordItem> attestations;
         lock (_lock)
         {
             if (_openDevices.Count > 0)
             {
                 throw new InvalidOperationException($"{_openDevices.Count} device(s) are still open; close every device before sealing voting ({string.Join(", ", _openDevices.Values.Select(x => x.Header.DeviceId))}).");
             }
+
+            // Every attestation names a closed device with a section: AddAttestationAsync takes one
+            // only for an opened device, and a device that closes empty drops its own (DeviceClosed).
+            attestations = _attestations
+                .OrderBy(x => x.Device, StringComparer.Ordinal)
+                .ThenBy(x => x.Member)
+                .ThenBy(x => x.Statement)
+                .ThenBy(x => x.Item, StringComparer.Ordinal)
+                .Select(x => Pb.RecordItem.Parser.ParseFrom(Convert.FromHexString(x.Item)))
+                .ToList();
         }
 
-        await WriteSectionAsync(SectionKey.Of(RecordSectionType.DeviceAttestations), [], ct).ConfigureAwait(false);
+        await WriteSectionAsync(SectionKey.Of(RecordSectionType.DeviceAttestations), attestations, ct).ConfigureAwait(false);
         return await FixPhaseAsync(RecordPhase.Sealed, ct).ConfigureAwait(false);
     }
 
@@ -559,6 +757,14 @@ public sealed partial class ElectionRecordWriter : IAsyncDisposable
                 _closedDevices.Add(section);
                 _entries.Add(entry);
             }
+            else
+            {
+                // Q25: a device that appended nothing has no section, so nothing attests to it; the
+                // attestations added while it was open (a prefix checkpoint at count 0) are dropped
+                // rather than left to block the seal.
+                string key = Convert.ToHexStringLower(section.Key.Span);
+                _attestations.RemoveWhere(x => x.Device == key);
+            }
         }
     }
 
@@ -681,23 +887,27 @@ public sealed partial class ElectionRecordWriter : IAsyncDisposable
     }
 
     /// <summary>Writes the TOC pseudo-section (type 0xFFFE) to <paramref name="stream"/>.</summary>
-    internal static async ValueTask WriteTocAsync(Stream stream, TableOfContents toc, RecordEncoding encoding, CancellationToken ct)
+    internal static ValueTask WriteTocAsync(Stream stream, TableOfContents toc, RecordEncoding encoding, CancellationToken ct) =>
+        WritePseudoSectionAsync(stream, Pb.SectionType.Toc, toc.Entries.Select(x => x.ToRecordItemBytes()), encoding, ct);
+
+    /// <summary>Writes a pseudo-section file (the TOC, 0xFFFE, or a signatures file, 0xFFFF): its segment header, then its items.</summary>
+    internal static async ValueTask WritePseudoSectionAsync(Stream stream, Pb.SectionType type, IEnumerable<byte[]> items, RecordEncoding encoding, CancellationToken ct)
     {
-        var header = new Pb.SegmentHeader { Magic = "EGRF", FormatMajor = RecordFormatVersion.Library.Major, SectionType = Pb.SectionType.Toc };
+        var header = new Pb.SegmentHeader { Magic = "EGRF", FormatMajor = RecordFormatVersion.Library.Major, SectionType = type };
         if (encoding == RecordEncoding.Protobuf)
         {
             await SegmentFraming.WriteFrameAsync(stream, header.ToByteArray(), ct).ConfigureAwait(false);
-            foreach (var entry in toc.Entries)
+            foreach (var item in items)
             {
-                await SegmentFraming.WriteFrameAsync(stream, entry.ToRecordItemBytes(), ct).ConfigureAwait(false);
+                await SegmentFraming.WriteFrameAsync(stream, item, ct).ConfigureAwait(false);
             }
         }
         else
         {
             await WriteLineAsync(RecordJson.FormatSegmentHeader(header)).ConfigureAwait(false);
-            foreach (var entry in toc.Entries)
+            foreach (var item in items)
             {
-                await WriteLineAsync(RecordJson.FormatItem(entry.ToRecordItemBytes(), default)).ConfigureAwait(false);
+                await WriteLineAsync(RecordJson.FormatItem(item, default)).ConfigureAwait(false);
             }
         }
 
@@ -842,7 +1052,7 @@ public sealed class DeviceSectionWriter : IAsyncDisposable
     /// Closes the device: under simple chaining the close carries B-bar_C and H-bar (eqs. 77/78, or
     /// 118/120), computed from the last confirmation code. Returns the seal, or null for a device that
     /// appended nothing, whose section is removed (Q25: a device that encrypted nothing has no
-    /// section). <paramref name="closedAt"/> is UTC to the millisecond, if recorded.
+    /// section) with any attestation added for it. <paramref name="closedAt"/> is UTC to the millisecond, if recorded.
     /// </summary>
     public async ValueTask<DeviceSeal?> CloseAsync(DateTimeOffset? closedAt = null, CancellationToken ct = default)
     {
@@ -861,8 +1071,23 @@ public sealed class DeviceSectionWriter : IAsyncDisposable
         await _section.AppendAsync(DeviceMapper.ToItem(new DeviceClose(Count, closingField, closingHash, closedAt)), ct).ConfigureAwait(false);
         var entry = await _section.CompleteAsync(critical: true, ct).ConfigureAwait(false);
         _record.DeviceClosed(this, entry);
-        return new DeviceSeal(Key, entry.ItemCount, entry.Root, _codes.Root());
+        return new DeviceSeal(Key, entry.ItemCount, entry.Root, _codes.Root())
+        {
+            DeviceId = Header.DeviceId,
+            ChainingMode = Header.ChainingMode,
+            ClosingHash = closingHash,
+            ClosedAt = closedAt,
+        };
     }
+
+    /// <summary>
+    /// The canonical bytes of a <c>PrefixCheckpointStatement</c> over this device's ballots so far
+    /// (design §4.9, optional): a mid-election commitment to the first <see cref="Count"/> codes, to
+    /// be signed or posted to a bulletin board at <paramref name="at"/>. Flush the section
+    /// (<see cref="FlushAsync"/>, durable) before publishing it.
+    /// </summary>
+    public byte[] PrefixCheckpointStatement(ExtendedBaseHash extendedBaseHash, DateTimeOffset at) =>
+        RecordStatements.PrefixCheckpoint(extendedBaseHash, Key, Count, _codes.Root(), at);
 
     /// <summary>B-bar_C and H-bar under simple chaining (eqs. 77/78, or 118/120 for pre-encrypted ballots); null under no chaining.</summary>
     private (ChainingField? Field, ConfirmationCode? Hash) Closing()
