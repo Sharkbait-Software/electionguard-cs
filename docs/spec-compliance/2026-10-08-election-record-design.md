@@ -32,6 +32,14 @@ holds cast and spoiled ballots, and a nonce request matching either is refused (
 (`CanonicalProtobuf`, §4.4), the domain mappers with the range table fixed (§4.8) and the Merkle tree, TOC and phase
 roots (§4.9) are in `src/ElectionGuard.Core/RecordFormat/`; the vectors are in `test/egrf/vectors/` (§5.7).
 
+**Revision 5 (2026-10-10, stage S10b-C): the carriers, the JSON projection and V14's labeling.** S10b-6 (directory
+carrier: the phase-gated writer, the streaming reader, `ResumeAsync` with torn-tail repair), S10b-7 (the `.zip`
+carrier with this library's own zip reader, which checks local headers against the central directory; non-seekable
+input spooled) and S10b-10 (the proto3 JSON projection with duplicate, alias and two-oneof-member refusal;
+`ConvertAsync`; `DiffAsync`) are implemented. §8.3 lists where the build differs from the sketch. The user answered
+the V14 question ("14.structure for mismatches", §4.6, §12): 14.B and 14.D are presence checks, and a pairing of
+index and label that is not the manifest's is `14.structure`.
+
 Revision 2 summary (kept for the tracker's references):
 
 **Review round 1 and the feasibility proof are applied** (same day). Two design reviews and a four-runtime
@@ -712,15 +720,16 @@ Decisions behind the layout:
 - **Encrypted items carry indices; plaintext items carry index and label.** The spec's hashes bind contest and option
   indices (eqs. 59, 62, 70, 115). Labels on encrypted ballots would add 5-10 % per ballot, and no verification reads
   them there. Where a verification checks text (V11 tally, V14 challenged decryption, V19 uncast), the item carries
-  both: the index drives V13's ciphertext lookup, and the label is compared in V14, so a mislabelled field fails 14.D
+  both: the index drives V13's ciphertext lookup, and the label is compared in V14, so a mislabelled field fails V14
   rather than surfacing as a 13.x crypto failure against the wrong ciphertext. The domain decryption carries both
-  (`DecryptedChallengedContest.Index`, `DecryptedChallengedField.Index`, S10b-B review round 1). V14 requires each
-  manifest label at its own index: a contest's under 14.B, a field's under 14.D (two labels swapped, or an index
-  moved to another field); a label that is no manifest label fails 14.C first, as the spec orders the checks. An
-  index moved to another field also opens the wrong ciphertext, so it fails 13.B as well. The at-index rule goes
-  beyond the letter of 14.B and 14.D (each manifest label "appears"/"occurs"; the spec's decryption has no index), and
-  without it a label paired with another contest's or field's index would pass both V13 and V14. Whether it is
-  reported under 14.B/14.D, as built, or as 14.structure is open for the user (S10b-B review round 2).
+  (`DecryptedChallengedContest.Index`, `DecryptedChallengedField.Index`, S10b-B review round 1). 14.B and 14.D are the
+  spec's presence checks (each manifest label "appears"/"occurs"); a label that is no manifest label fails 14.A or
+  14.C first, as the spec orders the checks. After them, V14 requires each manifest label at its own index, and each
+  field in the list of its kind (option or supplemental field): a contest or field whose (index, label) pairing is not
+  the manifest's (two labels swapped, or an index moved) is **`14.structure`** (user decision 2026-10-10, "14.structure
+  for mismatches"; S10b-C, which changed S10b-B's 14.B/14.D reporting). An index moved to another field also opens
+  the wrong ciphertext, so it fails 13.B as well. Without the pairing rule a label paired with another contest's or
+  field's index would pass both V13 (by index) and V14 (by label).
 - **Lists inside an item are in ascending index order** where the schema says so (a ballot's contests, an uncast
   ballot's contests and vectors, a challenged decryption's contests, a release's contests). Out of order, the same
   content would have a second encoding and leaf hash. The decoders report it (§4.8 layer 3); a repeated index is a
@@ -868,8 +877,10 @@ Checks run in three layers, in this order, and each failure carries a fixed code
 3. **Structure** (`N.structure`): counts fixed by the manifest (k, k+1, R+1, L+1, m+L, the style's contests),
    required messages and strings (a missing `encrypted_ballot_nonce`, `ballot_style` or `device_id`; a contest-data
    request or decryption with no `ballot` locator 12.structure, a challenged ballot decryption with none 13.structure:
-   an absent message is canonical, since D1 and D2 cover only bytes and enum fields), the section placement
-   rules of §4.5, and today's `BallotStructure` rules. A list inside an item that the schema orders by ascending index
+   an absent message is canonical, since D1 and D2 cover only bytes and enum fields), a challenged ballot
+   decryption's contest or field whose (index, label) pairing is not the manifest's 14.structure (after V14's
+   presence checks 14.A-14.D; user decision 2026-10-10, §4.6), the section placement rules of §4.5, and today's
+   `BallotStructure` rules. A list inside an item that the schema orders by ascending index
    and that is out of order (an index below its predecessor's) is reported by the decoder under the structure code of
    the verification that reads the list in that order: a regular ballot's contests 8.structure (H_C, eq. 59), a cast
    pre-encrypted ballot's 16.structure (eq. 116; V8 does not apply), an uncast ballot's printed contests and a
@@ -1040,10 +1051,31 @@ minimal (W4).
 - **Torn tails.** A crash mid-append leaves at most one torn trailing frame, whose length varint is cut short or runs
   past the end of the file. Some filesystems also leave the file extended with zero bytes after a crash. Each 0x00
   would read as a zero-length frame, which is never valid, so `ResumeAsync` treats a trailing run of zero bytes as part
-  of the torn tail. It truncates the tail and rebuilds the frontier by rescanning. The previous H_C for `DeviceChain`
-  is recovered from the last complete item. A corrupt middle item, or a zero-length frame followed by anything other
-  than zeros, is not repaired: the section stays unsealable until an operator decides (deliberate). A verifier never
-  repairs anything; for it a zero-length frame anywhere is `R.container`.
+  of the torn tail, together with what precedes it in the torn frame: the first bytes of a length varint (which then
+  read as a length that is not minimal), a whole length whose frame is all zeros (no item is all zeros, since
+  field number 0 is never valid), or a whole length and the first part of its frame, the rest of the frame zeros
+  (the file's new size committed, its last pages not): a last frame that ends in a zero byte, is not canonical
+  (as a `SegmentHeader` when it is the segment's first frame) and is followed only by zeros (S10b-C review
+  round 3). It truncates the tail and rebuilds the frontier by rescanning. A zero-filled hole that happens to leave a
+  canonical item (zeros inside a `bytes` field) cannot be told from data; a device that must not lose a ballot
+  flushes it to the disk (`DeviceSectionWriter.FlushAsync(durable: true)`) before it reports the ballot recorded. The previous H_C for `DeviceChain`
+  is recovered from the last complete item. A crash at a segment rollover can leave the section's newest segment
+  empty, or with its segment header torn (cut short or zero-filled): that segment, and only the newest, is removed,
+  and the writer continues the previous segment, so the next append rolls over again and writes the header (S10b-C
+  review round 1). A corrupt middle item, a segment other than the newest without a complete header, or a
+  zero-length frame, a length that is not minimal (W4) or a frame of zeros followed by anything other than zeros, is
+  not repaired: the section stays unsealable until an operator decides (deliberate). Nor is a section the TOC does
+  not list removed unless it is a section of the next phase, which an unfinished seal or completion leaves (a device
+  section after voting was sealed, a vendor section or another phase's section is refused and kept; S10b-C review
+  round 2). A verifier never repairs anything; for it a zero-length frame or a length that is not minimal anywhere is
+  `R.container`.
+- **A returned phase root is durable** (the library's writer; S10b-C review round 3). Every segment is flushed to
+  the disk when it rolls over and when its section is completed, and the TOC is written to a temporary file that is
+  flushed to the disk before it is renamed over the previous one, all before the writer returns the phase's TOC. So
+  after a power failure the TOC on disk is the old one or the new one, and every section it lists is whole. The
+  plain manifest copy is flushed with the setup. .NET has no portable way to flush a directory, so on POSIX the
+  rename itself is as durable as the filesystem's metadata journaling makes it; if it is lost, the old TOC is found,
+  and the resumed writer redoes the step (the sections of the next phase are removed as unfinished).
 
 ### 5.3 Directory carrier (reference layout)
 
@@ -1091,9 +1123,14 @@ logical record, and anything outside it is an error rather than something a read
 - **No unlisted files.** A file or zip entry outside `derived/` and not in the layout is `R.container`. The layout
   includes `toc.<ext>`, `signatures/`, `meta.json` and `setup/manifest.json`. Files inside `derived/` are never
   read during verification.
-- **Names are exact.** Paths use `/`, are relative, and contain no `.` or `..` segment, no backslash and no empty
-  segment. They are compared byte for byte. Two names that are equal under Unicode case folding are `R.container`,
-  because they collide when extracted on Windows or macOS.
+- **Names are exact.** Every name of a record, `derived/` included (and, in a zip, a directory entry's name without
+  its trailing `/`), consists of printable ASCII bytes 0x20-0x7E other than `\` and `:`; anything else, a control
+  character, DEL or any non-ASCII byte included, is `R.container` (S10b-C review round 3: a name outside the
+  layout's own alphabet can only be under `derived/`, and refusing the rest keeps two readers from decoding a zip name
+  as CP437 and as UTF-8, and from folding case by different Unicode tables). Paths use `/`, are relative (no leading
+  `/`), and contain no `.` or `..` segment and no empty segment. They are compared byte for byte. Two names that are
+  equal ignoring ASCII case are `R.container`, because they collide when extracted on Windows or macOS (the names
+  being ASCII, that is Unicode case folding too).
 - **The TOC never decides membership.** The sections are the ones the layout finds. A required section that is
   missing is `R.structure`. A section in the claimed TOC that has no files, or files with no TOC entry, is `R.root`.
 - **JSON items obey the frame ceiling too.** A `.jsonl` line whose canonical protobuf encoding exceeds 64 MiB is
@@ -1110,9 +1147,25 @@ logical record, and anything outside it is an error rather than something a read
   STORED entries only.
 - **Zip consistency (normative).** The central directory is authoritative for the set of entries. For every entry it
   reads, a reader checks that the local header agrees with the central directory: name, method, sizes and CRC-32,
-  taking ZIP64 extra fields into account. Any disagreement is `R.container`, so no reader can see different content
-  from another reader. Duplicate entry names, encrypted entries and methods other than STORED and DEFLATE are
-  `R.container`. Directory entries are optional and ignored. Every other entry follows §5.3.1.
+  taking ZIP64 extra fields into account. One exception, for streaming writers: when the local header's
+  general-purpose flag bit 3 (data descriptor) is set, its CRC-32, compressed size and size may all three be 0, and
+  are then not compared; any other local values must agree. In every case the central directory's CRC-32 and sizes
+  govern, and the entry's data must match them as it is read (`R.container` otherwise). A data descriptor is
+  never read and never decides anything, so a reader that reads it and one that does not reach the same verdict
+  (S10b-C review round 3). Any disagreement is `R.container`, so no reader can see different content from another
+  reader. Entry names follow §5.3.1 byte for byte: a name with a byte outside 0x20-0x7E is refused before it is
+  decoded, whatever the UTF-8 flag (bit 11) says. Duplicate entry names, encrypted entries and methods other than STORED and DEFLATE are
+  `R.container`. Readers also locate the central directory and count its entries in different ways (Python's
+  `zipfile` walks it by its size and places it by the end record's offset; others walk it by the entry count), so
+  these are `R.container` too (S10b-C review round 1): a central directory that does not fill exactly the bytes from
+  its offset to the (ZIP64) end-of-central-directory record; one that holds bytes after its stated number of entries;
+  end-record entry counts that disagree (this disk, total); a ZIP64 end record that is not just before its locator
+  (with no extensible data), or whose values differ from 32-bit fields that are not the ZIP64 marker; a ZIP64 marker
+  without a locator; and an end record that is not the last end-record signature of the archive (a signature in the
+  comment). Directory entries are optional and otherwise ignored, but they follow §5.3.1's naming rules (the name
+  without its trailing `/`, case folding against every other name included) and may not carry or hide data: STORED,
+  both sizes 0, not encrypted, with a local header that agrees, or the archive is `R.container` (S10b-C review
+  round 2). Every other entry follows §5.3.1.
 - **No `.7z`, no tar.** The user asked for `.7z` only "if .7z would save significant space". Measured on
   current-format ballots (2026-10-09), the cryptographic payload is incompressible (deflate 1.000, LZMA 1.002), and on
   JSON LZMA beats deflate by half a percent (0.609 against 0.612). `.7z` saves nothing worth a second format, and
@@ -1156,6 +1209,18 @@ Each `.jsonl` file's first line is the `SegmentHeader` and every following line 
 
   Two JSON files are equivalent when they parse to the same items, which is the same thing as the same canonical
   bytes. JSON text is never hashed, compared byte for byte across runtimes, or signed.
+- **Lines (normative; S10b-C review round 3).** What the parsed structure is read from is fixed, so that every
+  reader splits a file into the same items:
+  - A `.jsonl` file is a sequence of lines, each ended by a line feed (0x0A), **the last one included**. A file whose
+    last byte is not a line feed is `R.container`: it is a torn tail (§5.2), and a reader cannot tell it from an
+    unterminated last line. This is stricter than jsonlines.org, which makes the final line feed optional; a writer
+    of another runtime must end its last line.
+  - One carriage return (0x0D) just before a line feed is removed, so CRLF files read as LF files.
+  - An empty line (nothing, or only that carriage return, before the line feed) is `R.container`. Any other line
+    must parse as one JSON value (whitespace around it is JSON's own), else `R.encoding`.
+  - A line longer than 128 MiB (2^27 bytes, without its line feed) is `R.container` before it is parsed, whatever it
+    holds; within that, a line whose canonical protobuf encoding exceeds 64 MiB is `R.container` too (§5.3.1).
+  - Text that is not UTF-8, a byte-order mark included, fails JSON parsing: `R.encoding`.
 - **The library's writer** emits one item per line, LF line endings and members in field-number order, so `diff` is
   meaningful. Its lines are compact: C# re-writes `JsonFormatter`'s output through `Utf8JsonWriter` with indentation
   off. How non-ASCII characters are escaped is not specified.
@@ -1203,6 +1268,10 @@ Follow-up #18: "Alongside, not signed".
   `merkle-rfc9162.json` (the Certificate Transparency reference roots for 0..8 leaves and its inclusion and consistency
   proofs, transcribed from transparency-dev/merkle). The first two are generated by the C# tests from synthetic byte
   patterns (`EGRF_WRITE_VECTORS=1` rewrites them); the feasibility run's draft-schema vectors were not reused.
+  The layout, framing, torn-tail, zip and JSON negatives below are C# tests since S10b-C
+  (`RecordDirectoryCarrierTests`, `RecordZipCarrierTests`, `RecordResumeTests`, `RecordJsonProjectionTests`). They
+  are whole records rather than items, so their files come with the golden records in S10b-12, where the Python
+  reader must reproduce them too.
 - **Golden vectors** (`test/egrf/vectors/`):
   - every item type: canonical bytes (hex), proto3 JSON and leaf hash. The JSON is compared by structure: parse
     both sides and compare members and values. The feasibility run's comparison matched C# against Python for 31 of
@@ -1222,7 +1291,11 @@ Follow-up #18: "Alongside, not signed".
   `uint32` ≥ 2^31, a `uint64` ≥ 2^63, ill-formed UTF-8, an empty `RecordItem`, a `RecordItem` with two fields, a
   non-canonical `SegmentHeader`, a frame over 64 MiB, a zero-length frame, a torn
   tail (cut short, and zero-filled), a segment gap, a path that disagrees with its `SegmentHeader`, an uppercase-hex
-  path, an unlisted file, a duplicate zip entry, a zip local header that disagrees with the central directory, a
+  path, an unlisted file, a name under `derived/` with a byte outside 0x20-0x7E, a `:` or a `\` (in a directory and
+  in a zip), a duplicate zip entry, a zip local header that disagrees with the central directory, a zip local header
+  with bit 3 set and only some of its CRC-32 and sizes zero (with the positive: all three zero, the archive read),
+  a `.jsonl` file whose last line has no line feed, an empty line, a line one byte over 128 MiB (with the positive:
+  CRLF line endings read as LF), a
   non-canonical signed statement and one with a non-statement member, and a TOC entry whose `critical` bit
   disagrees with §4.5. Unknown-field negatives (W6), for a reader older than the record: an unknown field before a
   known field, unknown fields in descending order, an unknown number inside the message's declared or reserved range,
@@ -1735,6 +1808,39 @@ public interface ISignatureVerifier { string Algorithm { get; } SignatureCheck V
 (`PreEncryptedCastBallot` items are appended through `AppendAsync(EncryptedBallot)`, since a cast pre-encrypted
 ballot is an `EncryptedBallot` with `PreEncryptedContests`, S9.)
 
+**As built (S10b-C, the carriers; differences from the sketch above).**
+
+- Record-level failures are `VerificationFailedException` with the R-code as `SubSection` (`RecordCodes`), as
+  `VerifySummary`'s `R.summary` already was, so every failure reads the same way.
+- `RecordItemBytes(Bytes, Ordinal, Check)` carries the item's `CanonicalCheck`: a reader hands on a non-canonical
+  protobuf item with the bytes as read (§4.8 layer 1), and its consumer decides. Framing, layout and segment-header
+  failures throw `R.container` at once. A JSON line that does not parse throws `R.encoding`, since it has no bytes to
+  digest.
+- `IElectionRecordReader` also exposes `Format`, `Phase`, `Sections` and `ReadSignaturesAsync`. `IsSeekable` is gone:
+  every input is seekable, because a non-seekable stream is spooled. `ReadSectionFromAsync(locator)` (join cursors)
+  is S10b-8's. `IDeviceSectionReader` is not disposable: it holds nothing between calls.
+- `ElectionRecord.Create` (synchronous) and `ResumeAsync`, `ComputeTocAsync`, and `CheckClaimedTocAsync` (recompute,
+  compare with the claimed TOC entry by entry: `R.root`). `ConvertAsync(..., deflateJson, segmentSizeBytes)` streams
+  section by section. It is sequential; `maxDegreeOfParallelism` is kept for the shape. It takes only a reader that
+  `OpenAsync` returned: the files outside every root (signatures, `meta.json`, the manifest copy) are not on
+  `IElectionRecordReader`, so another implementation is refused (`ArgumentException`) rather than converted without
+  them (S10b-C review round 3; S10b-11 may put them on the interface).
+- Writer: `WriteSetupAsync(EncryptionRecord | RecordSetup)`; `OpenDeviceAsync(deviceId, kind)` computes the header
+  (or `OpenDeviceAsync(DeviceHeader)`, checked against eq. 72/119, the manifest's mode and eq. 74/117). The final-phase
+  items go through `AddChallengedDecryptionAsync(ballot, decrypted)`, `AddContestDataDecryptionAsync(ballot,
+  decrypted)` and `AddUncastReleaseAsync(uncast)`, not `ISortedSectionWriter` properties: the writer locates the
+  ballot by H_I in its own index (`Locate(H_I)`; about 100 B per ballot) and sorts through a spilling external sort.
+  They may be called concurrently: they and `CompleteAsync` take turns through one gate (S10b-C review round 3).
+  `CompleteAsync` refuses while a challenged ballot, an uncast ballot or a request lacks its item (#8, #5, #10), and,
+  as a backstop, when a join section's spool does not hold one item per mark.
+- `DeviceSectionWriter.AppendAsync`/`AppendUncastAsync` return the ballot's `BallotLocator`. `CloseAsync(closedAt)`
+  computes B̄_C and H̄ itself; `CloseAsync(DeviceChainRecord, closedAt)` checks `DeviceChain.Close`'s record against
+  the section (codes root included). A device that appended nothing has its section removed, and `CloseAsync`
+  returns null (Q25).
+- Not built here: `AddDevicePartAsync`, `AddAttestationAsync` and `AddRecordSignatureAsync` (the attestations
+  section is written empty; S10b-11), `FlushAsync`'s prefix checkpoint statement and the `DeviceSeal` statement
+  builders (S10b-11), and vendor sections in the writer (the reader reads them).
+
 ```csharp
 namespace ElectionGuard.Core.Verify;
 
@@ -1843,11 +1949,11 @@ updates the tracker.
 | **S10b-3** Canonicality checker. **Done (S10b-B).** | `CanonicalProtobuf.Check`: Method B (parse keeping unknown fields, D1-D6, re-serialize, compare; a discard-unknown parse when the record's minor is not newer than the library's) and Method A (descriptor-driven wire walk, with W6's unknown-field rule for newer-minor records); the `SegmentHeader` check (D6) and the signed-statement check (§4.9); the first golden item vectors and every negative vector of §5.7 under `test/egrf/vectors/` (regenerated from the current schema in S10b-B: the feasibility run's `vectors.json` and `negatives.json` were built against the draft schema, so only their rule list was kept) | Each negative vector rejected with its rule by both methods; the newer-minor vectors accepted with their unknown content reported, and re-encoded to the same bytes; property tests: encode-then-check always passes; every single-byte mutation of a golden item is rejected or decodes to a different item, and Methods A and B never disagree |
 | **S10b-4** Domain mappers. **Done (S10b-B).** | One mapper per item type; `RawZp`/`RawZq` and the §4.8 range table, fixed against the Verify classes' lettering; the uncast split and join, with NQ-2's compact form (mandatory for never-returned ballots; the form follows from whether ξ_B is released); `RecordSetup` | A **reflection completeness test** pins every public property of every recorded domain type to a schema field or an explicit exclusion list (nonces, the device id taken from the section, computed properties), replacing the "add it in both" hazard; domain → bytes → domain is the identity; values ≥ p and ≥ q give the lettered codes |
 | **S10b-5** Merkle, TOC, phase roots. **Done (S10b-B).** | `MerkleFrontier`, `MerkleProofs`, `Sha256Digest`, TOC and phase-root functions, `Extends` | RFC 9162 published vectors; MTH for n = 0..17 and 1,000; inclusion and consistency proofs; frontier serialize/resume equals an uninterrupted run |
-| **S10b-6** Directory carrier: writer and reader | Delimited `.binpb` segments and `SegmentHeader`; the 64 MiB frame ceiling on both sides; the §5.3.1 layout and discovery rules; `ElectionRecordWriter` phase gates; `DeviceSectionWriter` (final status required, `AppendUncastAsync` with its `UncastDisposition`); `ResumeAsync` with torn-tail repair, zero-filled tails included; presence rules; the optional `setup/manifest.json` copy | Write then read gives the same domain objects (S10a's strict round-trip tests ported); segment rollover does not change roots; a torn tail is repaired and a corrupt middle item refused; decryption and release writers throw before R_aggregated; R_setup ⊑ R_sealed ⊑ R_aggregated ⊑ R_final; a manifest copy that differs is `R.container`; the manifest bytes survive byte for byte (whitespace, member order, number spelling and vendor properties preserved), and a manifest the parser refuses (a BOM, a duplicate key) is refused by `WriteSetupAsync`; a never-returned uncast ballot is written compact whatever the caller passes, and a release of the wrong form is refused; an oversized item is refused by the writer and a hostile length by the reader before allocation; every §5.3.1 layout negative |
-| **S10b-7** `.zip` carrier | `System.IO.Compression` writer (STORED protobuf entries, optional DEFLATE for JSON, ZIP64) and a seekable reader that checks every local header it reads against the central directory; a non-seekable `Stream` is spooled to disk (NQ-6) | Roots equal the directory's; any entry order is accepted; a duplicate entry, a local/central mismatch, an unlisted entry and a case-folding collision are each `R.container`; a DEFLATEd JSON record verifies with sequential join cursors; a > 4 GiB synthetic entry round-trips (manual or nightly) |
+| **S10b-6** Directory carrier: writer and reader. **Done (S10b-C).** | Delimited `.binpb` segments and `SegmentHeader`; the 64 MiB frame ceiling on both sides; the §5.3.1 layout and discovery rules; `ElectionRecordWriter` phase gates; `DeviceSectionWriter` (final status required, `AppendUncastAsync` with its `UncastDisposition`); `ResumeAsync` with torn-tail repair, zero-filled tails included; presence rules; the optional `setup/manifest.json` copy; as built, §8.3 "As built" | Write then read gives the same domain objects (S10a's strict round-trip tests ported); segment rollover does not change roots; a torn tail is repaired and a corrupt middle item refused; decryption and release writers throw before R_aggregated; R_setup ⊑ R_sealed ⊑ R_aggregated ⊑ R_final; a manifest copy that differs is `R.container`; the manifest bytes survive byte for byte (whitespace, member order, number spelling and vendor properties preserved), and a manifest the parser refuses (a BOM, a duplicate key) is refused by `WriteSetupAsync`; a never-returned uncast ballot is written compact whatever the caller passes, and a release of the wrong form is refused; an oversized item is refused by the writer and a hostile length by the reader before allocation; every §5.3.1 layout negative |
+| **S10b-7** `.zip` carrier. **Done (S10b-C),** except the > 4 GiB entry (manual, not run) and the DEFLATEd join with sequential cursors (S10b-9 verifies; the reader already streams DEFLATEd entries). | `System.IO.Compression` writer (STORED protobuf entries, optional DEFLATE for JSON, ZIP64) and a seekable reader that checks every local header it reads against the central directory; a non-seekable `Stream` is spooled to disk (NQ-6) | Roots equal the directory's; any entry order is accepted; a duplicate entry, a local/central mismatch, an unlisted entry and a case-folding collision are each `R.container`; a DEFLATEd JSON record verifies with sequential join cursors; a > 4 GiB synthetic entry round-trips (manual or nightly) |
 | **S10b-8** Streaming verifier pieces | `DeviceChainWalker`; `SpillingIdentifierSet`; `BallotAggregationVerifier.Merge` and standard-form export; merge cursors with run offsets | The walker agrees with `DeviceChainWalk` on every existing V8/V16 test; 5.A with planted duplicates at random positions, **adversarially skewed id_B prefixes** and a 1 MiB budget forcing spills; AVX-512 and scalar partials merged through the standard form equal one engine (`DOTNET_EnableAVX512F=0`) |
 | **S10b-9** `VerifyAllAsync` | Steps A-F, profiles, report, attestation-content checks, resumable checkpoint, `VerifiedAggregate` and the `TallyAdmin.Decrypt` overload (S10a carry-over) | One test per R-code and per join rule (a missing challenged decryption, a decryption naming a cast or spoiled ballot, a missing or stray uncast release, an unmatched contest-data request); spoiled ballots excluded from V9 and included in 5.A and 11.D; a never-returned uncast ballot (compact) passes V16 and V18 with its released ξ_B, is counted as an item whose 17.A and 19.A-D hold by construction (§3.2), and fails 16/18 when ξ_B regenerates a different χ or H_C; a spoiled ballot sharing id_B with a cast one fails 5.A (the record verifier collects every submitted ballot's id_B, whatever its status); a newer-minor record passes with `Complete = false` and its unknown content reported; V9 `NotEvaluable` after a faulted aggregator; kill-and-resume gives the same report as one run; GuardianPreliminary on an aggregated record; a run over a `.zip` given as a stream whose `Seek` throws (spooled, same report) |
-| **S10b-10** JSON projection, converter, diff | `JsonFormatter`/`JsonParser` plus duplicate-member refusal; `ConvertAsync`; `DiffAsync` | protobuf → JSON → protobuf is byte-identical; JSON → protobuf → JSON parses to the same structure (byte-identical only within one runtime, §5.5); the four representations of each golden record give identical roots and identical `VerificationReport`s, findings included; content with an unknown field is refused for conversion to JSON and copied unchanged protobuf to protobuf; JSON negatives: a duplicate member, a JSON-name/proto-name alias pair, two members of one oneof, an unknown member, a wrong decoded width, a `uint64` ≥ 2^63, negative `Timestamp` nanos, an undeclared enum name |
+| **S10b-10** JSON projection, converter, diff. **Done (S10b-C),** except identical `VerificationReport`s (S10b-9; the four representations have identical roots and no difference). | `JsonFormatter`/`JsonParser` plus duplicate-member refusal; `ConvertAsync`; `DiffAsync` | protobuf → JSON → protobuf is byte-identical; JSON → protobuf → JSON parses to the same structure (byte-identical only within one runtime, §5.5); the four representations of each golden record give identical roots and identical `VerificationReport`s, findings included; content with an unknown field is refused for conversion to JSON and copied unchanged protobuf to protobuf; JSON negatives: a duplicate member, a JSON-name/proto-name alias pair, two members of one oneof, an unknown member, a wrong decoded width, a `uint64` ≥ 2^63, negative `Timestamp` nanos, an undeclared enum name |
 | **S10b-11** Attestations and signatures | Statements, `IStatementSigner`, `ISignatureVerifier` (`ecdsa-p256-sha256` first; others pluggable), policies | Statements signed and verified; a tampered count, codes root or status caught (`R.attestation`); dropping trailing ballots caught under both chaining modes when a chain close exists; a missing or invalid signature under each policy |
 | **S10b-12** Python reference reader and golden records | `test/egrf/egrf_ref.py` (standard library; Method A with W6's unknown-field rule, D1-D6, delimited segments with the frame ceiling, the §5.3.1 layout rules, Merkle, phase roots, `.zip` via `zipfile` with the local-header check), the three complete golden records in all representations, the schema-table diff against `test/egrf/schema.json` | CI runs `python test/egrf/egrf_ref.py --check`: every golden root reproduced and every negative vector's verdict matched |
 | **S10b-13** TypeScript reader. **Deferred (NQ-3: "Defer").** | `test/egrf/js/`: protobuf-es generated code (binary and the proto3 JSON mapping; not protobufjs, §5.5), Method B (with `readUnknownFields: false` for records of its own minor), D1-D6, `sizeDelimitedDecodeStream` with `readMaxBytes` set, Merkle roots | Reproduces the golden roots and negative verdicts in CI |
@@ -2021,6 +2127,25 @@ that the answers did not spell out. The user answered them on 2026-10-09 (tracke
   name equals a member's name once case, `_` and `-` are disregarded (`ChainingMode`, `chaining_mode`), because a
   loosely matching reader in another language would read it as that member and compute with another manifest under
   the same H_B (§4.6, S10b-1b). Ignoring those too would follow "ignores unknown properties" literally.
+- **V14 labeling (S10b-B review round 2).** *Answered 2026-10-10, "14.structure for mismatches": 14.B and 14.D are
+  pure label-presence checks, and a decrypted contest or field whose (index, label) pairing does not match the
+  manifest is `14.structure` (applied in S10b-C; §4.6).* As asked: (a) keep the at-index rule under 14.B (contest) and
+  14.D (field), as S10b-B built it, or (b) keep 14.B/14.D as presence checks and report the pairing as 14.structure.
+- **NQ-7 Where a later minor's standard section type lives (S10b-C review round 2; open).** §4.5 ("Several tallies")
+  and §7 ("Section type") promise that a v2.0 reader digests a non-critical standard section type that a later minor
+  adds (for example `tally_definitions`, 0x0203) and reports `Complete = false` (R-2). But §5.3.1 derives every path
+  from the types the reader knows and makes any other file `R.container`, so such a section, whatever its path, stops
+  a v2.0 reader at open. The code follows §5.3.1 (`RecordLayout.Parse`); `CriticalOf` and the TOC reader already
+  allow unknown types. The path is interoperable (every reader in every language must find the same sections), so it
+  is the user's choice:
+  - (a) *Recommended.* A generic path for standard types now, in v2.0: a standard type a minor adds lives at
+    `sections/<type as 4 hex digits>[-<key hex>]/<8-digit>.<ext>`, like a vendor section. A reader accepts that path
+    only for a standard type it does not know (one it knows at its own path is `R.container`), takes the critical bit
+    from the claimed TOC (§4.5), and fails a critical one with `R.version` and digests a non-critical one with
+    `Complete = false` (§7). Paths stay a function of type and key.
+  - (b) The same rule with the phase directory in front (`aggregated/0203/...`, `final/0305-<key>/...`), so the tree
+    stays grouped by phase; the sealed phase has no directory today, so it would need one.
+  - (c) Qualify §4.5 and §7: a new standard section type needs a new major, and later tallies arrive with v3.
 
 ---
 

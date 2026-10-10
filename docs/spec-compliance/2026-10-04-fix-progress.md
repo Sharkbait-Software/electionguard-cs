@@ -331,6 +331,25 @@ User answers (2026-10-04):
 - **V14 failure labeling (S10b-B question), answered 2026-10-10:** "14.structure for mismatches". 14.B and 14.D stay
   pure label-presence checks. A decrypted contest or field whose index and label do not match the manifest reports
   as 14.structure. This is a CHANGE from the S10b-B build and is applied in S10b-C.
+  - *Implementer reading (S10b-C, awaiting the user's acceptance):* 14.C and 14.D compare labels over the contest's
+    options and supplemental fields together (§3.1.3 p.19: "treated like and listed with the option selection
+    fields"), and a field released in the list of the other kind (a supplemental field listed as an option) is
+    14.structure with the pairing check, where it was 14.C. Without it, a decrypted contest whose index the manifest
+    lacks had its supplemental fields decoded as options and failed 14.C, not 14.structure. See the S10b-C log entry.
+    Two test rows rest on this reading, not on the decision, and say so in a comment: `ChallengedBallotDecryptionTests`
+    "supplemental field released as an option, index kept" and `RecordMapperTests` "the contest's index unknown,
+    label kept". Under the user's option (b) or (c), re-derive them from the answer (S10b-C review round 1).
+- **S10b-C questions, answered 2026-10-10:**
+  - **JSONL final line feed:** "Optional". This is a CHANGE, applied in S10b-D. Follow jsonlines.org: a missing
+    final line feed is accepted. A cut-off last line is still refused, because it does not parse (R.encoding).
+  - **NQ-7, where a later version's new section kinds live:** "Bump the major version". Adding a section kind
+    requires a new format_major. A reader refuses a section kind it does not know (R.version), and there is no
+    generic path for unknown section kinds.
+    - Minor versions add only fields: protobuf forward compatibility under NQ-1's rules.
+    - Per-precinct tallies (#16) will therefore come with a major version.
+    - Applied in S10b-D, in the design and the reader.
+  - **V14 label comparison:** "Combined set". Kept as built: options and supplemental fields are compared together,
+    and a field in the wrong list reports 14.structure.
 - **Cadence:** "Keep going". After each stage: commit, update this tracker, push, start the next stage. Stop only
   for a new spec contradiction or question.
 - **S7 design and API choices** (2026-10-06; implementer choices, none changes bytes the spec fixes; the first two are
@@ -792,6 +811,106 @@ User answers (2026-10-04):
       `BallotAggregationVerifier.WeightAdded` is new, beside `BallotsAdded`.
     - The TOC critical-bit check (§4.5 `R.root`) is deferred to S10b-9, which reads the claimed TOC (see its row).
 
+- **S10b-C design and API choices** (2026-10-10; low-stakes implementer choices under design §5, §8.3 and §9.2 S10b-6,
+  S10b-7, S10b-10; none changes a hash input, `git diff HEAD -- test/kat test/data` is empty and every KAT family
+  passes; design §8.3 "As built (S10b-C)" lists them against the sketch):
+  - **R-codes are `VerificationFailedException.SubSection`** (`RecordCodes`: R.container, R.encoding, R.order,
+    R.structure, R.version, R.root, R.summary, R.attestation, R.signature), as `VerifySummary`'s R.summary already
+    was, so callers and tests read every failure one way. No new exception type.
+  - **`RecordItemBytes(Bytes, Ordinal, Check)`**: the reader hands on every protobuf item with its `CanonicalCheck`,
+    a non-canonical one with the bytes as read (design §4.8 layer 1: still digested); framing, layout and segment
+    header failures throw R.container at once. A JSON line that does not parse throws R.encoding, since it has no
+    bytes to digest.
+  - **Final-phase items through methods**, not `ISortedSectionWriter` properties: `AddChallengedDecryptionAsync(ballot,
+    decrypted)`, `AddContestDataDecryptionAsync(ballot, decrypted)`, `AddUncastReleaseAsync(uncast)`. The writer
+    locates the ballot by H_I in its own index (`Locate(H_I)` is public), about 100 bytes per ballot (H_I, locator,
+    status, form, opened flag). That is O(N); see the carry-overs. The join sections are sorted through a spilling
+    external sort (`SortedSpool`: runs of at most `SortBudgetBytes`, default 64 MiB, merged k-way; a repeated key is
+    refused).
+  - **`DeviceSectionWriter.AppendAsync`/`AppendUncastAsync` return the ballot's `BallotLocator`.** `CloseAsync(closedAt)`
+    computes B̄_C and H̄ itself; `CloseAsync(DeviceChainRecord, closedAt)` checks `DeviceChain.Close`'s record against
+    the section (device, kind, mode, H_0, count, codes root, close). A device that appended nothing has its section
+    removed and `CloseAsync` returns null (Q25: no section). `OpenDeviceAsync(deviceId, kind)` computes the header;
+    `OpenDeviceAsync(DeviceHeader)` checks it against eq. 72/119, the manifest's mode and eq. 74/117. The writer
+    refuses a second ballot with an H_I it holds (they share id_B, 5.A).
+  - **Writer checks** (it is not a verifier): final status, device id, ballot kind for the section, `BallotStructure`
+    (plus the pre-encrypted cast part), the chaining field for the position, frame ceiling; no proofs. A
+    contest-data request must name a cast regular ballot by its own locator and H_I and a contest with b_Λ > 0;
+    a challenged decryption a challenged regular ballot; a release an uncast ballot, in the form the item was sealed
+    in. `CompleteAsync` refuses while a challenged ballot (#8), an uncast ballot (#5) or a request (#10) lacks its item.
+  - **Failed writes** (S10b-C review round 1): an item a writer refuses (frame ceiling, JSON projection) leaves
+    nothing behind. A device ballot's index entry is taken under the lock before its item is written (so two devices
+    cannot both write one H_I) and taken back if the write fails, so no locator names an unwritten ballot. A write
+    that fails part way (an I/O error, a cancelled token) leaves the segment's tail unknown, so that section refuses
+    every later append and its completion (`InvalidOperationException`); `ResumeAsync` is the repair. A final-phase
+    item is built (and so checked) before its ballot or request is marked done, and the mark is taken back if the
+    item does not reach the spool; `SortedSpool.AddAsync` spills before adding, so it holds the pair when it returns
+    or throws without it. `SealAggregatedAsync` builds the tally's items and checks every request (into a local set)
+    before it writes or remembers anything, and records the requests only once both sections are written, so a refused
+    tally or request list can be passed again corrected (S10b-C review round 2); a failure while its sections are being
+    written leaves files that `FileMode.CreateNew` will not overwrite, so that case is `ResumeAsync`'s (it removes the
+    unsealed aggregate sections). The final-phase adds may run concurrently on one writer (S10b-C review round 3):
+    they and `CompleteAsync` take turns through one `SemaphoreSlim` (the phase is checked again under it, then the
+    mark, then the spool), `SortedSpool.AddAsync` serialises itself as well and refuses an add once its merge has
+    started, and `CompleteAsync` checks, as a backstop, that each spool holds one item per mark.
+  - **Durability** (S10b-C review round 3): a phase root the writer returns is durable. Each segment is flushed to
+    the disk (`FileStream.Flush(flushToDisk: true)`) when it rolls over and when its section is completed; the TOC
+    temporary file is flushed before it is renamed; the manifest copy is flushed with the setup. A zip entry is not
+    flushed (a zip is complete only when the archive is closed). No directory is flushed: .NET has no portable API
+    for it, and a P/Invoke was judged not worth it; design §5.2 says what that leaves (on POSIX a lost rename leaves
+    the old TOC, and resuming redoes the step).
+  - **The plain manifest copy `setup/manifest.json` is written by default** (`WriteManifestCopy`); the reader checks
+    it byte for byte against the stored manifest when it reads the setup (R.container).
+  - **Zip entry order:** the converter writes the TOC, then the setup, then the other sections in canonical order,
+    then signatures and `meta.json` (design §5.4 prescribes no order to a reader and recommends TOC and setup first to
+    a writer; the task text's "prescribed entry order" is read as that recommendation). When the source claims a TOC
+    it is written first and checked against the converted sections at the end (R.root; the output is deleted).
+    Every entry is stamped 1980-01-01, so the archive's bytes depend only on the record. `.NET`'s
+    `CompressionLevel.NoCompression` writes method 0 (STORED), which a test pins through the local header.
+  - **Our own zip reader** (`ZipRecordSource`): `ZipArchive` exposes neither local headers nor their offsets and
+    hides a second entry of one name. The central directory (ZIP64 EOCD locator and extra fields honoured) is
+    authoritative; every local header read is compared with it (name, method, and CRC and sizes, which with bit 3 set
+    may instead be all three zero; the data descriptor is never read); CRC-32 and size are checked against the
+    central values as an entry's data is read; encrypted entries, methods other than 0 and 8, multi-disk archives,
+    duplicate and non-printable-ASCII names are R.container. The bit-3 exemption and the printable-ASCII rule are
+    normative since S10b-C review round 3 (design §5.4 and §5.3.1; the ASCII rule, with `:` and `\` refused, is in
+    `RecordLayout.RequireValidName`, so the directory carrier applies it too, which it did not before). A directory entry (name ending in
+    `/`) is ignored but must pass `RequireValidName` (without its `/`) and the case-fold check against every other
+    name, be STORED with both sizes 0, unencrypted, inside the data, with an agreeing local header (S10b-C review
+    round 2: a `../evil/` or data-hiding directory entry was accepted). A non-seekable stream is copied to
+    `egrf-spool-*.zip` (FileOptions.DeleteOnClose) in the spool directory first.
+  - **Unknown JSON member:** R.encoding for a record at the library's minor, R.version for a newer one (design §7: a
+    JSON reader cannot carry an unknown field to canonical bytes). JSON lines must end with a line feed (a last
+    line without one is a torn tail, R.container); an empty line is R.container; a line is capped at 128 MiB before
+    parsing and its canonical encoding at 64 MiB. These line rules (and the removal of one CR before the LF) are
+    normative in design §5.5 since S10b-C review round 3; the final line feed is required although jsonlines.org
+    makes it optional, because a reader cannot tell an unterminated last line from a torn one. The 128 MiB cap is
+    now exact (before, a line could pass it by up to one 64 KiB read when its line feed came in that read).
+  - **`CheckClaimedTocAsync`** compares the recomputed TOC with the claimed one entry by entry (count, root, critical
+    bit; a section in only one of them), all R.root. It therefore already reports a claimed `critical` bit that
+    differs from §4.5's (a test row): S10b-9 calls it rather than rebuilding the check.
+  - **`ConvertAsync` is sequential** (`maxDegreeOfParallelism` kept for the shape), takes `deflateJson` and
+    `segmentSizeBytes`, refuses a non-canonical source item (R.encoding) and newer-minor content for JSON (R.version),
+    and copies protobuf items byte for byte. `derived/` is not carried (regenerable, §5.6). It takes only a reader
+    `OpenAsync` returned (S10b-C review round 3): the signatures, `meta.json` and the manifest copy are not on
+    `IElectionRecordReader`, so a wrapper is refused (`ArgumentException`, before anything is created) rather than
+    converted without them; S10b-11 may add them to the interface when signatures exist.
+  - **`DiffAsync`** recomputes both TOCs, skips equal sections unread, and compares the differing sections item by
+    item by leaf hash (true subtree bisection needs random access to leaves, the §5.6 sidecars).
+  - **`ResumeAsync`** reads the claimed TOC for the phase last fixed, requires every listed section to match it on
+    disk, takes up device sections at the setup phase (torn tail cut back, zero-filled included; closed if it ends
+    with its close; open otherwise, handed out once by `OpenDeviceAsync`), and removes a section not in the TOC only
+    when it is a standard, non-device section of the next phase (an unfinished seal or completion, so the step is done
+    again; at the aggregated phase the decryptions and releases are added again). Any other unlisted section (a device
+    section after voting was sealed, a vendor section, a section of another phase) is foreign: `InvalidDataException`,
+    checked before anything is removed, and kept (S10b-C review round 2). A corrupt middle item, or a zero-length frame,
+    a length that is not minimal or a frame of zeros followed by data, is `InvalidDataException` (not repaired, design
+    §5.2); the same three followed only by zeros are a zero-filled torn tail and are cut. So is a last frame whose
+    first part reached the disk and whose rest is zeros (it ends in a zero byte, is not canonical, and only zeros
+    follow; S10b-C review round 3), the segment header's frame included. No TOC: nothing to resume.
+  - **Layout, framing, torn-tail, zip and JSON negatives are C# tests**, not `negatives.json` entries: they are whole
+    records, and their files come with the golden records in S10b-12 (design §5.7 says so).
+
 ## Stages
 
 | Stage | G-IDs | Blocked on | Status | Commit |
@@ -811,15 +930,16 @@ User answers (2026-10-04):
 | S10a Record correctness gaps (Q37 part A) | G40 (G39 won't fix, per Q9); S2 carry-overs: bind the parsed `Manifest` to `ManifestFile` (S2 review R1), record JSON round trip; S3/S5 carry-over: typed errors for malformed ballot documents; S4 carry-overs: a `DecryptedTally` record serializer, and a tally loaded from a record must carry or recompute each option's `MaximumCount` (S4 review R1/F2); S6/S7 carry-overs: `DecryptedContestData` and `DecryptedChallengedBallot` serializers | — | done | c4f1093 |
 | S10b Canonical ElectionRecord bundle (Q37 part B) | streaming, multi-representation election record (EGRF v2, `2026-10-08-election-record-design.md`); verify-everything entry point; device-close signing/timestamp (S8b). Split into the stages below, one per design step (§9.2) | S10a; the design (answers recorded 2026-10-09) | in progress | |
 | S10b-A EGRF groundwork | design update for NQ-1..NQ-6; S10b-0 nonce DTO cleanup; S10b-1 statuses (`Unrecorded`, `Spoiled`); S10b-1b manifest election facts and unknown-property tolerance (NQ-1, NQ-4); S10b-2 schema at `proto/electionguard/egrf/v2/egrf.proto`, codegen, schema lint | S10a | done | 72ce53c |
-| S10b-B EGRF core | S10b-3, S10b-4, S10b-5; R-3 change (near misses ignored); spoiled-ballot refusal in the guardian's view | S10b-A | done | see next commit |
+| S10b-B EGRF core | S10b-3, S10b-4, S10b-5; R-3 change (near misses ignored); spoiled-ballot refusal in the guardian's view | S10b-A | done | f1ecff5 |
+| S10b-C EGRF carriers and JSON | S10b-6, S10b-7, S10b-10; V14 labeling (decision 2026-10-10, "14.structure for mismatches") | S10b-B | done | see next commit |
 | S10b-3 Canonicality checker | Method A and B (unknown fields per NQ-1 / W6), D1-D6, segment header, signed statements; first golden and negative vectors | S10b-A | done (S10b-B) | |
 | S10b-4 Domain mappers | one mapper per item; `RawZp`/`RawZq` range attribution; uncast split/join with the compact form (NQ-2); `RecordSetup`; reflection completeness test | S10b-3 | done (S10b-B) | |
 | S10b-5 Merkle, TOC, phase roots | RFC 9162 frontier and proofs; TOC; phase roots | S10b-A | done (S10b-B) | |
-| S10b-6 Directory carrier | writer and reader; frame ceiling; layout rules; phase gates; `DeviceSectionWriter` (`UncastDisposition`); torn tails | S10b-4, S10b-5 | todo | |
-| S10b-7 `.zip` carrier | STORED/DEFLATE, ZIP64, local/central check; non-seekable input spooled (NQ-6) | S10b-6 | todo | |
+| S10b-6 Directory carrier | writer and reader; frame ceiling; layout rules; phase gates; `DeviceSectionWriter` (`UncastDisposition`); torn tails | S10b-4, S10b-5 | done (S10b-C) | |
+| S10b-7 `.zip` carrier | STORED/DEFLATE, ZIP64, local/central check; non-seekable input spooled (NQ-6) | S10b-6 | done (S10b-C; the > 4 GiB ZIP64 entry is a manual run, not done) | |
 | S10b-8 Streaming verifier pieces | `DeviceChainWalker`, `SpillingIdentifierSet`, `BallotAggregationVerifier.Merge`, join cursors | S10b-A | todo | |
-| S10b-9 `VerifyAllAsync` | steps A-F, profiles, report (`Complete` informational for a newer minor; compact items counted as 17.A/19.A-D held by construction), checkpoints, `VerifiedAggregate`; tests that a spoiled ballot's id_B is in 5.A (a spoiled ballot sharing id_B with a cast one fails 5.A); build the guardian's `IPublishedCastAndSpoiledBallots` from the sealed record (spoiled refusal decided 2026-10-09, "Refuse spoiled too"; done for regular ballots in S10b-B), from the parsed items with the raw-value `Add(status, id_B, H_I, C_ξB,0)` so items with range findings are held too (S10b-B review round 1); report every mapper finding under its code even where its owner does not run on the item (a cast or spoiled ballot's C_ξB: V13 runs on challenged ballots only; a cast pre-encrypted ballot's contests out of order, 16.structure); pass the decoded ballot items to V9's record overload (S10b-B review round 2); step E: call `BallotAggregationVerifier.VerifySummary` on the merged recount and report a mismatch of the tally header as `R.summary`, beside V9's outcome; report a contest-data request's decode finding (no locator, 12.structure) and let step C's framing pre-scan, which reads each join item's leading locator, treat an item with no locator as that structure finding, not as `R.order`; read the claimed TOC and report a standard-type entry whose `critical` bit differs from `RecordSections.FixedCritical` as `R.root` (design §4.5), with the §5.7 negative vector for it (S10b-B review round 3) | S10b-6, S10b-8 | todo | |
-| S10b-10 JSON projection, converter, diff | proto3 JSON with duplicate-member refusal; `ConvertAsync`; `DiffAsync` | S10b-6 | todo | |
+| S10b-9 `VerifyAllAsync` | steps A-F, profiles, report (`Complete` informational for a newer minor; compact items counted as 17.A/19.A-D held by construction), checkpoints, `VerifiedAggregate`; tests that a spoiled ballot's id_B is in 5.A (a spoiled ballot sharing id_B with a cast one fails 5.A); build the guardian's `IPublishedCastAndSpoiledBallots` from the sealed record (spoiled refusal decided 2026-10-09, "Refuse spoiled too"; done for regular ballots in S10b-B), from the parsed items with the raw-value `Add(status, id_B, H_I, C_ξB,0)` so items with range findings are held too (S10b-B review round 1); report every mapper finding under its code even where its owner does not run on the item (a cast or spoiled ballot's C_ξB: V13 runs on challenged ballots only; a cast pre-encrypted ballot's contests out of order, 16.structure); pass the decoded ballot items to V9's record overload (S10b-B review round 2); step E: call `BallotAggregationVerifier.VerifySummary` on the merged recount and report a mismatch of the tally header as `R.summary`, beside V9's outcome; report a contest-data request's decode finding (no locator, 12.structure) and let step C's framing pre-scan, which reads each join item's leading locator, treat an item with no locator as that structure finding, not as `R.order`; read the claimed TOC and report a standard-type entry whose `critical` bit differs from `RecordSections.FixedCritical` as `R.root` (design §4.5), with the §5.7 negative vector for it (S10b-B review round 3); that check exists since S10b-C as `ElectionRecord.CheckClaimedTocAsync` (count, root, critical bit, membership; R.root): call it, do not rebuild it; the zip reader checks an entry's CRC-32 when its last byte is read, so a corrupted item inside a STORED entry can surface as R.encoding (or a finding) before the entry's R.container: report both, in step order (S10b-C) | S10b-6, S10b-8 | todo | |
+| S10b-10 JSON projection, converter, diff | proto3 JSON with duplicate-member refusal; `ConvertAsync`; `DiffAsync` | S10b-6 | done (S10b-C; identical `VerificationReport`s across representations wait for S10b-9) | |
 | S10b-11 Attestations and signatures | statements, signers, verifiers, policies | S10b-9 | todo | |
 | S10b-12 Python reference reader and golden records | `test/egrf/egrf_ref.py` (Method A with W6), golden records, schema-table diff against `test/egrf/schema.json` | S10b-6, S10b-7 | todo | |
 | S10b-13 TypeScript reader | protobuf-es conformance reader | — | deferred (NQ-3: "Defer") | |
@@ -827,7 +947,7 @@ User answers (2026-10-04):
 | S10b-15 Migration of the consumers | console, egperf `writeRecord`/`verifyRecord`, Testing.Cli, `test/data/*` | S10b-9, S10b-10 | todo | |
 | S10b-16 Retire superseded code | old DTO tree, protobuf-net, JSON ballot/record serializers | S10b-15 | todo | |
 | S10b-17 Live tailing | may be deferred | S10b-9 | todo | |
-| S10b-18 Documentation and publication | CLAUDE.md record bullet, formal-spec skeleton, registered option numbers (user action) | S10b-16 | todo | |
+| S10b-18 Documentation and publication | CLAUDE.md record bullet, formal-spec skeleton, registered option numbers (user action); NQ-7 (where a later minor's standard section type lives, design §12) answered and applied before publication | S10b-16 | todo | |
 | S10b-19 Guardians open uncast pre-encrypted ballots (NQ-5) | `TallyGuardian.DecryptBallotNonce` opens an uncast pre-encrypted item from a sealed, verified record; refuses an id_B, H_I or C_ξB,0 matching a cast or spoiled ballot of it (Q31; "Refuse spoiled too", 2026-10-09; the view holds both since S10b-B); no issued list, no once-only state | S10b-9 | todo (after S10b) | |
 
 ## Pinned-value inventory
@@ -1024,7 +1144,457 @@ every KAT family passes. No test expectation was re-pinned. What moved, by desig
   `challenge`, `response`); `contest-data.json` and `challenged-ballots.json` likewise; `encrypted-tally.json` is
   new. Counts unchanged (0-0: 3, 0-1: 0). No input under `C:/temp/eg/data` changed, so no .bak.
 
+S10b-C: no hash, nonce, ciphertext, contest hash, confirmation code or KAT value moved (`git diff HEAD -- test/kat
+test/data` is empty; every KAT family passes). The only expectations that moved are V14 sub-section codes, by the
+user's decision of 2026-10-10 (8 rows, 14.B/14.D → 14.structure; see the S10b-C log entry); they pin no value.
+
 ## Log
+
+### 2026-10-10 — S10b-C review round 3 (reader rules made normative, converter refuses wrappers, durable phase roots, partly written torn frame, concurrent final-phase adds, rule-pinning tests, diff kinds)
+Worktree changes only; nothing committed. Ten findings (spec 1, code 4, tests 5). All ten applied; none rejected.
+No hash input, KAT vector or committed fixture moved (`git diff HEAD -- test/kat test/data` empty) and nothing was
+re-pinned.
+
+Per finding:
+- **Reader rules not in the design (spec minor).** Confirmed. These are reader verdicts, not bytes a writer emits,
+  and the format is unpublished, so they were decided and written into the design rather than raised as a question.
+  (1) §5.3.1: every name, `derived/` included, is printable ASCII 0x20-0x7E other than `\` and `:`; case folding is
+  therefore ASCII case. (2) The printable-ASCII rule was a C# inconsistency as well as a gap in the design. Only the
+  zip reader applied it, so a directory record holding `derived/café.txt` opened while its zip was refused. It now
+  lives in `RecordLayout.RequireValidName` (both carriers), and `DecodeName` keeps it as the byte gate before
+  decoding. (3) §5.4: with bit 3 the local CRC and sizes may all three be 0 and are then not compared; the central
+  values govern and the data is checked against them; the descriptor is never read. (4) §5.5 "Lines": final LF
+  required (stricter than jsonlines.org, on purpose: an unterminated last line cannot be told from a torn one), one CR
+  before the LF removed, empty line R.container, 128 MiB cap before parsing. While writing (4) I found the cap was not
+  exact: a line could pass it by up to one 64 KiB read when its LF came in the same read. `LineReader` now checks the
+  assembled line too. §5.7's negatives list gained these cases with their positives (bit 3 with all three zero; CRLF).
+- **`ConvertAsync` silently dropped the files outside the roots for a wrapped reader (code minor).** Confirmed.
+  `ConvertAsync` now refuses any `IElectionRecordReader` that is not the library's (`ArgumentException`, before the
+  destination is created). The interface is unchanged; S10b-11 may add the extra files to it when signatures exist.
+  The bounded-memory test's `ObservedReader` (a wrapper) is gone. That test now observes from below: an
+  `ObservedSource` over `IRecordSource` counts the bytes served from the device segment and measures at the byte
+  offset of the 1,000th ballot and at the end. Tests: `Convert_CarriesTheFilesOutsideTheRoots_AndRefusesAReaderTheLibraryDidNotOpen`
+  (directory and zip: `meta.json` and `setup/manifest.json` survive byte for byte and the result reads; a
+  `WrappedReader` is refused and nothing is created). Before this round no test carried `meta.json` through a
+  conversion.
+- **Fixing a phase was not durable (code minor).** Confirmed. `SectionWriter.CloseSegmentAsync(durable)` flushes a
+  file segment to the disk at rollover and at completion (not on a plain dispose). `WriteTocAsync` flushes the
+  temporary TOC before the rename, and the manifest copy is flushed with the setup. This also closes the round-1
+  carry-over "rollover durability". No directory flush: .NET has no portable API for one, and I followed the advice
+  not to add a P/Invoke that cannot be tested here. Design §5.2 has a new bullet, "A returned phase root is durable",
+  that says what this leaves on POSIX. Test: `SectionWriter_FlushesEachSegmentToTheDisk_AtRolloverAndCompletion`
+  (a sink of `FileStream` subclasses records `Flush(true)` before close; a writer disposed without completing does
+  not flush).
+- **A partly written frame followed by zeros was refused, not cut (code minor).** Confirmed. In `ScanFramesAsync`,
+  a frame (segment header included) that fails its canonical check, ends in a zero byte, and is followed only by
+  zeros is the torn frame. A valid item that happens to end in 0x00 passes the check and is kept (the zeros after it
+  then read as a zero length, which is torn). Rows: `TornTails` "a whole length and part of the frame, then zero
+  bytes past its end" and "... to its end"; `RolloverCrashes` "the new segment's header frame part written, then
+  zero-filled"; `CorruptionThatIsNotATornTail_IsRefused` "a frame part written, then zeros, then data" ("an item that
+  is not canonical"). Design §5.2 updated. It also records the case no scan can catch: a zero hole that leaves a
+  canonical item (zeros inside a `bytes` field). The guard there is `DeviceSectionWriter.FlushAsync(durable: true)`
+  per ballot.
+- **Concurrent final-phase adds could lose an item (code minor).** Confirmed. The three adds go through
+  `AddFinalItemAsync`, which holds a writer-level `SemaphoreSlim` across the phase re-check, the mark and the spool
+  add. `CompleteAsync` holds the same gate for its whole run and, as a backstop, refuses when a spool's `Count`
+  differs from its marks. `SortedSpool.AddAsync` also serialises itself and refuses an add once `MergeAsync` has
+  started. Tests: `ConcurrentFinalPhaseAdds_AllLand_AndADuplicateIsAcceptedOnce` (each add 32 times at once, 1-byte
+  sort budget; exactly one of each accepted; uninterrupted roots; an add after completion refused) and
+  `SortedSpool_TakesConcurrentAdds_WithoutLosingOne` (8 threads, budgets 1 B and 64 MiB). This closes the open item.
+- **The directory-entry and entry-value rows could not catch a single rule's removal (tests major).** Confirmed.
+  New `AnEntryBreakingARule_WithAgreeingHeaders_IsRefusedByThatRule`, built with `ZipParts` so the central and local
+  headers agree and only the rule under test can refuse: a directory entry DEFLATEd in both, a directory entry with
+  5 data bytes and a matching CRC in both, a file entry with method 12 in both, and a STORED entry whose compressed
+  size is one more than its size in both (data grown by a byte). Each asserts its rule's message. `ZipParts` gained
+  `With(...)` and a `Descriptor` trailer. Every `DirectoryEntryNegatives` row now asserts its own message too.
+- **R-codes without a negative test (tests minor).** Confirmed. New `Tampers` rows: a TOC entry for a section that
+  has no files, a TOC item that is not a `toc_entry`, a TOC entry naming the TOC's own type 0xFFFE (all R.root);
+  every section file removed (R.structure "holds no record sections"); the header section holding two items, and
+  holding a `parameters` item; the parameters section holding a `record_header`, and holding two items (all
+  R.structure). The harness now calls `ReadSetupAsync` after open, which is the verifier's order. New
+  `Convert_OfATamperedSource_IsRefused_AndLeavesNothing` (TOC root changed → R.root; non-canonical item →
+  R.encoding; directory and zip; the destination does not exist afterwards).
+- **R.container rows asserted only the code (tests minor).** Confirmed. `Tampers` is now (tamper, code, message
+  fragment) and every row asserts its fragment. The zip `Corruptions` rows do the same, with "is not what the central
+  directory states" for the flipped data byte.
+- **The non-minimal varint row padded the wrong length (tests minor).** Confirmed: it padded the whole frame's
+  length. It now pads `Payload(frames[1]).Length` and asserts "is not minimal (W4".
+- **Six of seven `DiffAsync` kinds untested (tests minor).** Confirmed. New
+  `Diff_ReportsThePhase_SectionsOnlyOneRecordHolds_AndItemsPastTheOtherSectionsEnd`: the sealed record against the
+  final record gives Phase, then SectionOnlyInB for the six later sections, and the reverse gives SectionOnlyInA. A
+  device section with an extra item gives exactly ItemOnlyInB at that ordinal (LeafA null, LeafB the item's leaf),
+  and the reverse gives ItemOnlyInA. New `Diff_ReportsAVendorSectionWhoseEntriesDifferOnlyInTheCriticalBit`: the
+  section type schema accepts the vendor range, so a hand-made `vendor/8001/` section works, and claiming it critical
+  in one record only gives exactly Critical.
+- Also added: `RequireValidName` rows for DEL, `é` and `:` (refused) and `derived/a b~!.txt` (accepted);
+  `AnEntryNameThatIsNotPrintableAscii_IsRefusedAsRContainer` (zip); `ALocalHeaderWithADataDescriptor_MayZeroItsCrcAndSizes_ButNotGiveOthers`
+  (all three zero: the archive reads; the CRC only: "disagrees with the central directory");
+  `LineReader_AppliesTheLineRules` (LF, CRLF, no final LF, empty line, CR-only line) and the exact 128 MiB cap row.
+
+Mutation check (each batch applied, built and run against the `RecordFormat` tests, then restored byte for byte from
+backups in `obj/mut-backup`, which was deleted afterwards):
+- (A) Each of these removed on its own line: the directory entry's method/size test, the method 0/8 test, and the
+  STORED size test. 9 tests failed: the three central-only directory rows (their messages), the two `Corruptions`
+  rows (method 12, size), and all four agreeing-header rows. The agreeing-header rows alone cover each rule.
+- (B) The partly-written-frame rule off, the spool's gate and lock off, the converter's refusal off (a cast), the
+  completion flush off, and the reader's W4 check off. 9 failed: the two new torn-tail rows, the rollover row, both
+  spool rows, both converter rows, the flush test, and the W4 tamper row.
+- (C) The printable-ASCII upper bound dropped from `RequireValidName`: the DEL and `é` rows failed.
+- (D) The writer's gate and the spool's gate and lock off: `ConcurrentFinalPhaseAdds` failed in 3 of 5 runs with
+  copies = 32, and in 1 of 3 runs with 8, so copies was raised to 32. Under this mutation the test is probabilistic.
+  The spool test is reliable.
+
+Gate (final tree; nothing was re-pinned, so this is also the gate before re-pinning; no test failed in the gate.
+Before it, on the first `RecordFormat` run, two new tests failed, and both were fixed in the tests. One had a
+message fragment I had guessed: the reader names the field-order rule, not "written twice". The other expected a
+file entry's local header to be checked on open, when it is checked on read):
+- Build: `0 Warning(s)`, `0 Error(s)`.
+- Smoke: `correctness passed`; `EncryptBallots     256       0.256       165.7      0.1657      12/3/2     1,000`,
+  `VerifyBallots      976       0.976       12.2       0.0122      0/0/0      1,000`; Tally 0.008, VerifyTally 0.004,
+  DecryptTally 0.034, VerifyDecryption 0.007 ms/ballot.
+- Console: `Challenged ballot 0-challenged, contest 0: 0-0=1, 0-1=0, contest data "Write-in: Ada Lovelace".`;
+  `Tally, contest 0: 0-0=3, 0-1=0, overvotes=0, null-votes=0, undervotes=0, undervote-difference=0, write-ins=0.`;
+  `Done.`; then the expected ReadKey `InvalidOperationException`. `tally.json`: 0-0 voteCount 3, 0-1 voteCount 0.
+- Tests: `Passed!  - Failed:     0, Passed:   231, Skipped:     0, Total:   231` (Perf);
+  `Passed!  - Failed:     0, Passed:  2478, Skipped:     0, Total:  2478` (Core; 41 new cases).
+
+Perf: no hot path changed (the record carriers are not on the smoke path). Against round 2 (0.245 / 0.989 ms/ballot,
+165.7 / 12.2 MB): 0.256 / 0.976, 165.7 / 12.2 MB. Noise.
+
+Carry-overs: round 2's, less "rollover durability" and "concurrent final-phase adds" (both fixed). NQ-7 and the V14
+reading are still open. New: no directory flush on POSIX (documented in design §5.2). A zero hole that leaves a
+canonical item is not detectable by resume (§5.2; per-ballot durable flush is the device's guard).
+
+### 2026-10-10 — S10b-C review round 2 (aggregate-seal rollback, resume minimality and foreign sections, zip directory entries, naming-rule tests, streaming and leak tests; NQ-7 raised)
+Worktree changes only; nothing committed. Nine findings (spec 1, code 4, tests 4). Seven applied (all four code
+findings and three of the test findings), one turned into a design question (spec), and one needed no change (tests,
+V14 rows). No hash input, KAT vector or committed fixture moved
+(`git diff HEAD -- test/kat test/data` empty) and nothing was re-pinned.
+
+Per finding:
+- **A newer minor's standard section type cannot be opened (spec minor).** Confirmed, and the gap is in the
+  design: §4.5 and §7 promise that a v2.0 reader digests such a section, but §5.3.1 makes any path it does not know
+  `R.container`. The path is interoperable, so no code change. Raised as **NQ-7** (design §12) with options and a
+  recommendation (a generic `sections/<type hex>[-<key hex>]/` path for standard types a reader does not know).
+  Must be settled before the format is published (S10b-18), and before any minor adds a section type.
+- **`SealAggregatedAsync` remembered requests before it validated (code minor).** Confirmed: the request keys went
+  into `_requests` inside the loop, before `TallyMapper.ToItems`, so a refused tally or a list refused at request
+  k+1 left keys behind, and the corrected retry failed with "requested twice". It now builds the tally items first,
+  collects the request keys in a local set, and adds them to `_requests` (under the lock) only after both sections
+  are written. A failure while the sections are being written is `ResumeAsync`'s case (`FileMode.CreateNew` will not
+  overwrite a partly written section; resume removes the unsealed aggregate sections); the Decisions bullet
+  "Failed writes" says so. Test: `RecordResumeTests.ARefusedAggregateSeal_LeavesNothingBehind_AndTheCorrectedCallSucceeds`
+  (a tally with an unknown total cast weight, then the requests with the first repeated at the end: both refused,
+  phase still Sealed, no `aggregated/` directory; then the correct call, and the record finishes with the
+  uninterrupted TOC).
+- **The resume scan accepted a non-minimal frame length (code minor).** Confirmed. `SegmentRepair.ScanFramesAsync`
+  now applies the reader's W4 rule. One choice beyond the finding (recorded here): such a length followed only by zeros
+  is the first bytes of a longer length plus a zero-filled tail. The writer writes only minimal lengths, and the design
+  says a trailing zero run is part of the torn tail, so that case is cut as torn. Followed by anything else, it is
+  `InvalidDataException` ("not minimal (W4)"). For the same reason a whole length whose frame is all zeros, followed only
+  by zeros, is torn (no item is all zeros: field number 0 is never valid), and followed by data it is refused. Before
+  this round, that case was refused as a non-canonical item. Rows: `TornTails` "a length varint cut short, then zero
+  bytes" and "a whole length, then zero bytes" (both resume and give the uninterrupted TOC);
+  `CorruptionThatIsNotATornTail_IsRefused` "a frame length in the middle that is not minimal", "a frame length that
+  is not minimal, then data", "a frame of zero bytes followed by data". Every row now asserts its message and that
+  the segment was not changed. Design §5.2 updated.
+- **Resume deleted foreign sections (code minor).** Confirmed. `RestoreAsync` now removes an unlisted section only
+  when it is a standard, non-device section of phase `Phase + 1` (what an unfinished seal or completion leaves); a
+  device section resumes only at the setup phase; anything else (a device section after voting was sealed, a
+  vendor section, a section of another phase, anything at the final phase) is `InvalidDataException` ("an operator
+  decides"), checked for every unlisted section before any is removed. Test:
+  `ASectionNoUnfinishedStepLeaves_IsRefused_AndKept` (a device section after the voting seal; a final section at the
+  sealed phase: both refused, the file kept). The existing "unsealed final files at the aggregated phase" test still
+  passes. `ResumeAsync` docs, the Decisions "ResumeAsync" bullet, design §5.2 and CLAUDE.md updated.
+- **Zip directory entries skipped every check (code minor).** Confirmed. A directory entry (name ending in `/`) now
+  passes `RequireValidName` (without the `/`), must be STORED with both sizes 0, unencrypted, with its local header
+  inside the data and agreeing (`CheckLocalHeader`), and may not repeat. Directory names, without the `/`, go through
+  the case-fold check with the file names (so `TOC.BINPB/` collides with `toc.binpb`). Method 8 is not allowed for a
+  directory entry: .NET, Info-ZIP, 7-Zip and Python all store directories, and allowing it would need a cap on hidden
+  bytes. Tests: 8 directory rows in `BadNames` (`../evil/`, `derived/../../evil/`, `/evil/`, `/`,
+  `derived\evil/`, `TOC.BINPB/`, `derived/X/`+`derived/x/`, `derived/x/` twice) and
+  `ADirectoryEntry_ThatCouldHideDataOrDisagree_IsRefusedAsRContainer` (method 8, compressed size 5, size 5, the
+  encryption bit, local method 8, local name changed, local offset past the data, all R.container; a well-formed one
+  reads the same TOC). Design §5.4 and CLAUDE.md updated.
+- **The bad-name rows could not catch their rules' removal (tests major).** Confirmed. `BadNames` now takes a list of
+  names and the rule's message, and asserts it. New rows have names under `derived/`, which only the naming rules
+  refuse: `derived/../toc.binpb`, `derived/../../evil.txt`, `derived/./x.txt`, `derived/x\y.txt`,
+  `derived/A.txt`+`derived/a.txt`, and `derived/x.txt` twice. Also added: direct tests of `RecordLayout.RequireValidName`
+  (10 refused, 4 accepted) and `RequireNoCaseFoldCollision`, and
+  `ASourceWithANameOnlyTheNamingRulesRefuse_IsRContainer`. That test is a directory record whose source also lists
+  `derived/` names, because a Windows directory cannot hold two names equal under case folding. It is the only test
+  that fails if the reader's own case-fold call is removed, since the zip source now checks case folding too.
+- **V14 rows on the pending reading (tests minor).** No change, as the finding says: both rows already say they rest
+  on the implementer's reading, and they will be re-derived from the user's answer.
+- **Bounded memory covered only the protobuf directory (tests minor).** Confirmed. The 5,000-ballot test, now
+  `FiveThousandBallots_AreWrittenConvertedAndRead_WithBoundedMemory`, also converts the record to a protobuf zip
+  and to a JSON zip. Retained heap is measured from inside each conversion at the device section's 1,000th item and
+  at its last: the source is wrapped in an `ObservedReader`, which loses the manifest copy and `meta.json`, both
+  irrelevant here. Growth under 8 MB. The device section is then read back from each zip, measured from before the
+  section is opened, so a reader that buffered a whole entry up front would show: under 8 MB at 1,000 ballots, and
+  under 4 MB more by the end. This covers `EntryWindow`, `DeflateStream` and the line reader. The whole test takes
+  about 2 s.
+- **The leaked-handle test relied on Windows sharing (tests minor).** Confirmed. `RefusedArchive_IsNotLeftOpen` now
+  opens through the `Stream` overload with a `DisposeObservingStream`, seekable and (through `ForwardOnlyStream`)
+  non-seekable, and asserts both were disposed and the spool directory is empty. The path-based delete stays as an
+  extra check.
+
+Mutation check (each batch applied, built and run against the `RecordFormat` tests, then restored byte for byte):
+- (A) `_requests.TryAdd` back in the loop, the minimality check off, the foreign-section refusal off, the reader's
+  case-fold call removed, the zip dispose on refusal removed: 7 tests failed, one or more per mutation. They were
+  the seal-retry test, both "not minimal" corruption rows, both foreign-section rows, the case-fold source row and
+  the leak test.
+- (B) The directory-entry block restored to the round-1 code: 14 failed. These were every new directory row except
+  "size made 5", which the old size check already covered.
+- (C) `RequireValidName` made a no-op: 24 failed. These were every name row, the direct tests and the source rows.
+
+Gate (final tree; nothing was re-pinned, so this is also the gate before re-pinning; no test failed at any point
+other than one test-helper ordering bug found on the first run and fixed):
+- Build: `0 Warning(s)`, `0 Error(s)`.
+- Smoke: `correctness passed`; `EncryptBallots     245       0.245       165.7      0.1657      12/4/2     1,000`,
+  `VerifyBallots      989       0.989       12.2       0.0122      1/0/0      1,000`; Tally 0.008, VerifyTally 0.005,
+  DecryptTally 0.035, VerifyDecryption 0.008 ms/ballot.
+- Console: `Challenged ballot 0-challenged, contest 0: 0-0=1, 0-1=0, contest data "Write-in: Ada Lovelace".`;
+  `Tally, contest 0: 0-0=3, 0-1=0, overvotes=0, null-votes=0, undervotes=0, undervote-difference=0, write-ins=0.`;
+  `Done.`; then the expected ReadKey `InvalidOperationException`. `tally.json`: 0-0 voteCount 3, 0-1 voteCount 0.
+- Tests: `Passed!  - Failed:     0, Passed:   231, Skipped:     0, Total:   231` (Perf);
+  `Passed!  - Failed:     0, Passed:  2437, Skipped:     0, Total:  2437` (Core; 48 new cases).
+
+Perf: no hot path changed. Against round 1 (0.247 / 0.995 ms/ballot, 165.8 / 12.3 MB): 0.245 / 0.989, 165.7 /
+12.2 MB. Noise.
+
+Carry-overs: unchanged from round 1, plus NQ-7 (open, design §12). The two V14 rows still wait on the user's answer
+to the S10b-C reading.
+
+### 2026-10-10 — S10b-C review round 1 (rollover resume, zip directory consistency, failed writes, enum names, test gaps)
+Worktree changes only; nothing committed. Fifteen findings (spec 3, code 7, tests 5). All applied; findings 1 and 5
+(spec and code) are the same rollover defect, and findings 4 and 2 (code and spec) the same zip directory defect, each
+fixed once. No finding was rejected. One extension beyond the suggested fixes: the same mark-before-write ordering
+was in `AddChallengedDecryptionAsync` and `AddUncastReleaseAsync` (their item was built first, but a spool failure
+left the mark set), so all three final-phase adds now take the mark back on failure. No hash input, KAT vector or
+committed fixture moved (`git diff HEAD -- test/kat test/data` empty) and nothing was re-pinned.
+
+Per finding:
+- **Resume after a crash at segment rollover (spec major + code major).** Confirmed: an empty, torn-header or
+  zero-filled newest segment scanned as (header 0, length 0), and the resumed `SectionWriter` appended items with no
+  `SegmentHeader`. `ResumeDeviceAsync` now removes that segment when it is not segment 0 and continues the previous
+  one (the next append rolls over and writes the header; a header-only newest segment is continued as is). A segment
+  other than the newest with no complete header is refused (`InvalidDataException`, "not a torn tail"). Tests:
+  `RecordResumeTests.WriterStoppedAtASegmentRollover_Resumes_AndGivesTheUninterruptedRoots` (`SegmentSizeBytes` 1;
+  empty, header cut short, zero-filled, header only; protobuf and JSON: 8 rows, each finishing with the uninterrupted
+  TOC and a full `CheckClaimedTocAsync`), `AnEmptySegmentBeforeTheLast_IsRefused`. Design §5.2 "Torn tails" updated.
+- **Zip central directory consistency (code major + spec minor).** `ZipRecordSource.ReadCentralDirectory` now
+  refuses as R.container: bytes after the stated number of entries (`position != end`); a directory that does not
+  end exactly where the (ZIP64) end record starts (`cdOffset + cdSize`); unequal end-record entry counts (offsets 8
+  and 10; the ZIP64 record's two counts); a ZIP64 record not just before its locator or with extensible data, a
+  locator not pointing at it or not "disk 0 of 1"; 32-bit fields that are neither the marker nor the ZIP64 value; a
+  marker without a locator. ZIP64 is now detected by the locator, as Python's `zipfile` does. The end record is
+  found as `zipfile` finds it (no-comment record at the end, else the last signature, which must then end the file).
+  Design §5.4 "Zip consistency" lists the rules.
+- **Undeclared enum names in JSON (spec minor).** Confirmed. `RecordJson`'s descriptor walk checks every string
+  value of an enum field (repeated too) with `FindValueByName`: R.version at a newer minor, else R.encoding.
+  `RecordJsonProjectionTests.UnknownJsonContent_InANewerMinorRecord_IsRVersion` (unknown member, enum name, enum name
+  in a nested message; each also R.encoding at this minor).
+- **Phantom index entry on a failed device append (code major).** Confirmed. `DeviceSectionWriter` takes the index
+  entry under the lock, then writes, and takes it back (`RemoveBallot`) if the write throws. `SectionWriter` refuses
+  (ceiling, JSON) before writing anything, and after a failure part way through a write it refuses further appends
+  and completion until `ResumeAsync`. Test: `ABallotWhoseItemIsNotWritten_IsNotIndexed_AndTheResumedWriterGivesTheNextOneItsPosition`
+  (a cancelled write: not indexed, `Locate` refuses, the section refuses the retry; resumed, the record finishes with
+  the uninterrupted TOC). A >64 MiB ballot item was not built for the test (impractical); the cancelled write takes
+  the same path.
+- **Contest-data request marked before its item (code major).** Confirmed. The item is built (checking the ballot)
+  before the request is marked, and the mark is taken back if the spool add fails; `SortedSpool.AddAsync` now spills
+  before adding, so it holds the pair when it returns or throws without it (a failed spill deletes its partial run).
+  Test: `ARefusedContestDataDecryption_LeavesItsRequestOpen` (another ballot's decryption refused, `CompleteAsync`
+  still refuses with "1 contest-data request(s)", the right pair then accepted, the uninterrupted TOC).
+- **Non-R.container failures in `OpenRead` (code minor).** `CheckLocalHeader` failures (end of stream, argument
+  range, overflow, I/O) become R.container; `ReadAt` and the entry bounds check are overflow-safe; `EntryWindow`'s
+  end of file is R.container; the central ZIP64 field's length is checked before it is read. Row "ZIP64: a compressed
+  size near 2^63" (central and local agree, so only the bounds check refuses it).
+- **Stream left open on a refused archive (code minor).** `ZipRecordSource.OpenAsync` disposes the stream when the
+  constructor refuses (and the input stream when spooling fails). `RefusedArchive_IsNotLeftOpen` deletes the file
+  right after the refusal.
+- **Unbounded manifest copy (code minor).** `CheckManifestCopyAsync` compares in 64 KiB chunks and refuses at the
+  first differing or extra byte.
+- **Frame ceiling row could not catch the check's removal (tests major).** The tamper row now asserts the message
+  ("over the 64 MiB ceiling"). `FrameReader_RefusesAnOversizedLength_BeforeReadingTheFrame` reads from a stream that
+  fails any read past the length: 64 MiB + 1, a 5-byte varint and a 10-byte varint are refused while the length is
+  read; exactly 64 MiB goes on to read. `LineReader_RefusesALineOverTheCeiling` feeds an endless line
+  (`ElectionRecordReader.LineReader` is now internal for it) and checks it stops within one buffer of
+  `MaxLineLength`.
+- **Two V14 rows tied to the pending reading (tests minor).** Comments on both rows; the Decisions entry names them.
+- **Pre-encrypted round trip tautological (tests minor).** The test now writes the record again from what it read
+  (casts and uncast ballots in print order, each uncast one in the form read, the releases) and asserts the
+  original TOC entries.
+- **ZIP64 untested (tests minor).** `RebuiltArchive_WithOrWithoutZip64_ReadsTheSameRecord` rebuilds a converted zip
+  by hand with every entry in ZIP64 form (central and local extra fields, ZIP64 end record and locator) and reads the
+  same TOC; `ArchiveWhoseDirectoryOrZip64RecordsDisagree_IsRefusedAsRContainer` has 13 rows (the 4 directory rules
+  above and 9 ZIP64 ones, one per `ApplyZip64` failure branch plus the end-record rules), all R.container.
+- **V14 check order unpinned (tests minor).** `Verification14_TwoDefects_ReportTheEarlierCheck`: "labels swapped and
+  an option value 2" 14.structure; "contest at another index and an option missing" 14.D; on `TwoOfThreeContests`,
+  "contest-1 labels swapped, contest-3 option missing" 14.D, "contest-1 option value 2, contest-3 labels swapped"
+  14.structure, "contest-1 at another index, contest-3 unknown label" 14.C.
+
+Mutation check: with the rollover removal, the `position != end` and entry-count checks, the index rollback and the
+enum-name check each disabled, 12 of the new tests failed (every rollover row but "header only", the duplicate and
+count rows, the leaked-stream test, the failed-append test, both enum rows); restored, all pass.
+
+Gate (final tree; nothing was re-pinned, so this is also the gate before re-pinning):
+- Build: `0 Warning(s)`, `0 Error(s)`.
+- Smoke: `correctness passed`; `EncryptBallots     247       0.247       165.8      0.1658      12/3/2     1,000`,
+  `VerifyBallots      995       0.995       12.3       0.0123      0/0/0      1,000`; Tally 0.008, VerifyTally 0.004,
+  DecryptTally 0.034, VerifyDecryption 0.008 ms/ballot.
+- Console: `Challenged ballot 0-challenged, contest 0: 0-0=1, 0-1=0, contest data "Write-in: Ada Lovelace".`;
+  `Tally, contest 0: 0-0=3, 0-1=0, overvotes=0, null-votes=0, undervotes=0, undervote-difference=0, write-ins=0.`;
+  `Done.`; then the expected ReadKey `InvalidOperationException`. `tally.json`: 0-0 voteCount 3, 0-1 voteCount 0.
+- Tests: `Passed!  - Failed:     0, Passed:   231, Skipped:     0, Total:   231` (Perf);
+  `Passed!  - Failed:     0, Passed:  2389, Skipped:     0, Total:  2389` (Core; 38 new cases).
+
+Perf: no hot path changed (the record carriers are not on the smoke path). Against S10b-C (0.243 / 0.997 ms/ballot,
+165.7 / 12.2 MB): 0.247 / 0.995, 165.8 / 12.3 MB. Noise.
+
+Carry-overs: unchanged from S10b-C, except that the ZIP64 parsing paths are now tested (the > 4 GiB entry round trip
+is still a manual run). The final-phase adds are not safe to call concurrently on one writer (the spools are not
+locked); nothing promises it, and S10b-15 should decide when a caller needs it. Two resume gaps found while
+checking this round, not fixed: (1) a rollover closes the previous segment without flushing it to disk, so a power
+loss (not a process crash) at rollover can tear it and leave the new one empty; resume then refuses the previous
+segment's torn tail (conservative, but outside the "one torn trailing frame" premise); one durable flush at rollover
+would restore it. (2) Resume checks a segment header for D6 only, not its section type, key or first ordinal, so a
+header-only newest segment with a stale first ordinal would be continued and then refused by every reader
+(pre-existing; middle segments too).
+
+### 2026-10-10 — S10b-C (EGRF carriers and JSON: directory and zip writer/reader, proto3 JSON projection, converter, diff; V14 labeling)
+Worktree changes only; nothing committed (S10b-B was committed as f1ecff5 while this ran). Implements design steps
+S10b-6, S10b-7 and S10b-10 and the V14 labeling decision ("14.structure for mismatches", 2026-10-10). No hash input,
+KAT vector or committed fixture moved (`git diff HEAD -- test/kat test/data` empty). Decisions: "S10b-C design and
+API choices" under Decisions; design §8.3 "As built (S10b-C)" and Revision 5.
+
+Per item:
+- **V14 labeling (decision 2026-10-10).** `ChallengedBallotWellFormednessVerification`: 14.B and 14.D are presence
+  checks (each style contest's label appears; each manifest option or field label occurs). After 14.A-14.D, a
+  contest whose stated index is not its label's manifest index, or a field whose index is not its label's, is
+  `14.structure`; then 14.E/14.F as before. The class and V13 remarks, design §4.6 (bullet), §4.8 layer 3, §12 (the
+  question, answered), CLAUDE.md (Tally and Verify paragraphs) say so. **Implementer reading, awaiting acceptance**
+  (recorded under the V14 decision): the first build kept 14.C/14.D per list (options against options, supplemental
+  fields against supplemental fields). The record row "the contest's index unknown, label kept" then failed 14.C,
+  because `DecryptionMapper.FromItem` sorts a contest's fields into the two lists by the manifest contest at the
+  stated index, and an unknown index puts every field among the options. V14 now checks 14.C and 14.D over options and
+  supplemental fields together (§3.1.3 p.19: they are "treated like and listed with the option selection fields"),
+  and a field in the list of the other kind is 14.structure with the pairing check. A supplemental field misfiled as
+  an option, which was 14.C, is now 14.structure (new row `"supplemental field released as an option, index kept"`).
+  The decoder is unchanged, so V13 still opens ciphertexts by the stated index.
+- **S10b-6, directory carrier** (`RecordFormat/`: `RecordLayout`, `SegmentFraming`, `SectionWriter`,
+  `ElectionRecordReader`, `ElectionRecordWriter` (+ `.Resume`), `SegmentRepair`, `SortedSpool`, `RecordStorage`,
+  `RecordCodes`, `ElectionRecord`). Layout per §5.3.1 (paths derived both ways, lowercase hex, 8-digit segment names
+  from 00000000 with no gap, one encoding per record, no unlisted file, no `.`/`..`/empty segment/backslash/absolute
+  name, no case-fold collision; `derived/`, `meta.json`, `setup/manifest.json`, `signatures/` known). Frames: minimal
+  length varint, 1 byte to 64 MiB, checked before allocation on read and refused on write. Every segment header is
+  checked (D6, path agreement, first ordinal continuity). Presence and phase per §4.5 (R.structure). The writer stages
+  setup → sealed → aggregated → final, writing the claimed TOC at each phase (each extending the last), streaming
+  each item into its section's Merkle frontier; the manifest is stored as given after parsing (a BOM or duplicate key
+  is refused before anything is written), with the optional plain copy. `ResumeAsync` repairs torn tails (cut short,
+  zero-filled) of open device sections and removes unsealed later-phase files; a corrupt middle item is refused.
+- **S10b-7, `.zip` carrier** (`ZipRecordSink` with `ZipArchive`: protobuf STORED, JSON DEFLATEd, fixed timestamps;
+  `ZipRecordSource`, this library's own reader: central directory authoritative, ZIP64 honoured, every local header
+  compared, CRC-32 and size checked on read, duplicates, encryption and other methods refused; non-seekable input
+  spooled, NQ-6).
+- **S10b-10, JSON projection, converter, diff** (`RecordJson`: compact proto3 JSON lines in field-number order with
+  the relaxed encoder; reading refuses BOM, ill-formed text, duplicates (`StrictJson.RejectAmbiguity`), alias pairs,
+  two oneof members and unknown members, then D1-D6 on the canonical encoding. `ElectionRecord.ConvertAsync`,
+  `ComputeTocAsync`, `CheckClaimedTocAsync`, `DiffAsync`).
+- **Tests** (77 new tests and rows, in `test/ElectionGuard.Core.UnitTests/RecordFormat/`):
+  - Fixtures in `RecordCarrierElections` (a regular election, simple chaining, two devices, cast, weight 2, spoiled,
+    challenged, contest data, tally, requests, decryptions; a pre-encrypted election, simple chaining, two casts,
+    full uncast, never-returned and ξ_B-released compact uncast, releases, tally). Every test record goes under one
+    per-run temporary directory, deleted at process exit.
+  - `RecordDirectoryCarrierTests` (30): write then read in both encodings gives the same domain objects, which pass
+    V8 (device walk), V9, V12, V13 and V14, and V15, V16 (device walk) and V18 on the pre-encrypted record;
+    rewriting what was read gives the same TOC; phase roots are prefixes. Segment rollover changes no root. Phase
+    gates (Q36 and the seals). Device writer refusals (chain order, other device, Unrecorded, structure, duplicate
+    device, wrong header, wrong kind, an empty device leaves no section, a foreign chain record). Never-returned
+    compact; wrong release form refused. Manifest byte for byte with vendor data, the copy, a differing copy
+    (R.container), BOM and duplicate-key manifests refused unwritten. 18 tamper rows, each under its code: reordered
+    ballots, a changed TOC root, a flipped critical bit, a removed entry (R.root); a truncated frame, a zero-filled
+    tail, a frame over 64 MiB, a non-minimal length, a header naming another section, another magic, uppercase hex,
+    an unlisted file, mixed extensions, a segment gap (R.container); missing setup or aggregate sections
+    (R.structure); a non-canonical ballot (R.encoding); major 3 (R.version). The writer refuses a frame over the
+    ceiling. `DiffAsync` finds the one relabelled ballot. **5,000 ballots** written and read with retained-heap growth
+    bounded (writer < 8 MiB, reader < 4 MiB over 4,000 ballots, about 13 KB each in the record), plus the writer's
+    5.A refusal.
+  - `RecordZipCarrierTests` (17): directory and zip hold the same record in both encodings (roots, no difference,
+    contents), TOC and setup first, protobuf STORED and JSON DEFLATEd (read from the local headers). Reversed entry
+    order and a forward-only stream (spooled, then the spool deleted) give the same roots. Six corruptions (a data
+    byte, the local CRC, the local name, method 12, the encryption bit, the central size) and eight names (`..`, `.`,
+    backslash, absolute, empty segment, case-fold collision, duplicate, uppercase hex) are R.container.
+  - `RecordJsonProjectionTests` (20): every golden item protobuf → JSON → protobuf byte for byte, in compact lines
+    with no escaped `+`; the full election protobuf → JSON → protobuf byte-identical file by file; the converter's
+    JSON equals the writer's; six representations (pb dir, JSON dir, pb zip, JSON zip, written JSON, round-tripped
+    pb) have the writer's TOC and phase roots and no difference. JSON negatives (duplicate, alias pair, two oneof
+    members, unknown member, unknown item type, undeclared enum name, not JSON, BOM, lone surrogate: R.encoding;
+    unknown member at a newer minor: R.version). Decode rules on parsed lines (31-byte id_B D1, uint64 2^63 D4,
+    pre-1970 and microsecond timestamps D3, an empty item D5, UNSPECIFIED kind D2). Newer-minor content copied
+    protobuf to protobuf byte for byte with the same roots and refused for JSON (R.version, output removed). A JSON
+    record with a duplicate member is refused by the reader.
+  - `RecordResumeTests` (10): stopped mid-voting with a torn tail (frame cut short, length varint cut short, zero
+    bytes, none; JSON line cut short, zero bytes) resumes from the last complete ballot and finishes with the
+    uninterrupted run's TOC; a non-canonical middle item and a zero-length frame followed by data are refused;
+    stopped after the aggregate, the unsealed final files are removed and the record finishes with the same TOC;
+    a directory whose TOC was never written, and a sealed section that changed on disk, are refused.
+
+Gate before re-pinning (all code and the new tests in, with the first V14 build; the V14 rows not yet moved):
+- Build: `0 Warning(s)`, `0 Error(s)`.
+- Smoke: `correctness passed`; `EncryptBallots     246       0.246       165.7      0.1657      12/3/2     1,000`,
+  `VerifyBallots      978       0.978       12.2       0.0122      0/0/0      1,000`.
+- Console: `Challenged ballot 0-challenged, contest 0: 0-0=1, 0-1=0, contest data "Write-in: Ada Lovelace".`;
+  `Tally, contest 0: 0-0=3, 0-1=0, overvotes=0, null-votes=0, undervotes=0, undervote-difference=0, write-ins=0.`;
+  `Done.`; then the expected ReadKey `InvalidOperationException`. `tally.json`: 0-0 voteCount 3, 0-1 voteCount 0.
+- Tests: `Passed!  - Failed:     0, Passed:   231, Skipped:     0, Total:   231` (Perf);
+  `Failed!  - Failed:     8, Passed:  2342, Skipped:     0, Total:  2350` (Core). Failing at that moment, all V14 rows
+  the decision moves: `RecordMapperTests.ChallengedBallotDecryption_IndicesDriveVerification13_LabelsVerification14`
+  ("two fields' labels swapped, indices kept" 14.D, "two fields' indices swapped, labels kept" 14.D, "the contest's
+  index unknown, label kept" 14.B, "a field index the manifest lacks" 14.D);
+  `ChallengedBallotDecryptionTests.Verification14_MalformedDecryption_FailsItsSubSection` ("two options' indices
+  swapped, labels kept" 14.D, "contest at another index, label kept" 14.B, "two options' labels swapped, indices
+  kept" 14.D); `ChallengedBallotDecryptionTests.MislabelledFields_PassVerification13_AndFailVerification14`.
+
+Re-pinned (moved by the decision, not re-captured): those 8 expectations to `14.structure` (the last test's two
+asserts), with their doc comments. Then V14 was revised once more (the reading above: 14.C/14.D over options and
+supplemental fields together, the list-of-kind check), because "the contest's index unknown, label kept" still
+failed with 14.C; one row was added for it. Every other V14 row passed unchanged both times.
+
+Gate after (final tree):
+- Build: `0 Warning(s)`, `0 Error(s)`.
+- Smoke: `correctness passed`; `EncryptBallots     243       0.243       165.7      0.1657      12/3/2     1,000`,
+  `VerifyBallots      997       0.997       12.2       0.0122      0/0/0      1,000`, Tally 0.008, VerifyTally 0.004,
+  DecryptTally 0.035, VerifyDecryption 0.008 ms/ballot.
+- Console: the same three lines and `Done.`, then the expected ReadKey exception; `tally.json` 0-0 voteCount 3, 0-1
+  voteCount 0. No input under C:\temp\eg\data changed, so no .bak.
+- Tests: `Passed!  - Failed:     0, Passed:   231, Skipped:     0, Total:   231` (Perf);
+  `Passed!  - Failed:     0, Passed:  2351, Skipped:     0, Total:  2351` (Core).
+
+Perf: no hot path changed (the carriers are not on the smoke path; V14 runs per challenged ballot only). Against
+S10b-B (0.244 / 0.986 ms/ballot, 165.7 / 12.2 MB): 0.246 / 0.978 before re-pinning and 0.243 / 0.997 after, the
+same allocation. Noise.
+
+Housekeeping: this session's earlier test runs had left 169 MB of test records under `%TEMP%\egrf-tests`; they were
+deleted, and the tests now write under one per-run directory that is removed at process exit.
+
+Carry-overs:
+- The writer's ballot index is O(N), about 100 B per ballot (1 GB at 10^7). A writer for records that large should
+  validate the final-phase items by a merge over the sealed device sections at `CompleteAsync` instead (S10b-15 or
+  S10b-17, when egperf writes records at scale).
+- Not built: `AddAttestationAsync`, `AddRecordSignatureAsync`, `AddDevicePartAsync`, the `DeviceSeal` statement
+  builders and the prefix checkpoint statement (S10b-11; the attestations section is written empty); vendor sections
+  in the writer (the reader reads them); `ReadSectionFromAsync(locator)` and the join cursors (S10b-8).
+- The > 4 GiB ZIP64 entry round trip is a manual or nightly run (design §9.2 S10b-7); the ZIP64 parsing paths are
+  not exercised by a test, since .NET writes ZIP64 only when needed.
+- S10a's strict JSON round-trip tests were not ported one by one; the domain round trip through both encodings
+  (every object re-encoded to the same item bytes and re-written to the same TOC) stands in for them.
+- S10b-9: call `CheckClaimedTocAsync` for the claimed TOC's R.root (critical bits included); the zip CRC ordering
+  note is in its row. Identical `VerificationReport`s across the four representations (design §9.2 S10b-10) wait for it.
+- S10b-12: the layout, framing, torn-tail, zip and JSON negatives as files, with the golden records.
+- Questions for the user: the V14 reading above (14.C/14.D over options and supplemental fields together; a field in
+  the other kind's list is 14.structure). Not blocking.
 
 ### 2026-10-09 — S10b-B review round 3 (K and K̂ under 3.A/3.B, absent locators, tally header R.summary, 6.A order row, TOC critical bit)
 Worktree changes only; nothing committed. Five findings (spec 1, code 2, tests 2). Applied: 3 as suggested (F1, F2, F4),

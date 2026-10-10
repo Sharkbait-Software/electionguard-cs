@@ -78,7 +78,8 @@ public class ChallengedBallotDecryptionVerification
     /// where it carries some). Contests and fields are matched by their indices
     /// (<see cref="DecryptedChallengedContest.Index"/>, <see cref="DecryptedChallengedField.Index"/>;
     /// design §4.6): the labels the decryption states are Verification 14's to check, so a
-    /// mislabelled field is a 14.C/14.D failure, not a 13.x one against another field's
+    /// mislabelled field is a Verification 14 failure (14.C for a label the manifest lacks,
+    /// 14.structure for a manifest label at another index), not a 13.x one against another field's
     /// ciphertext.</item>
     /// <item>"13.A", then "13.B", for the first lettered check that fails.</item>
     /// </list>

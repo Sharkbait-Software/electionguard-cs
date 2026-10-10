@@ -749,11 +749,12 @@ public class ChallengedBallotDecryptionTests
     }
 
     /// <summary>
-    /// Design §4.6: "the index drives V13's ciphertext lookup, and the label is compared in V14, so a
-    /// mislabelled field fails 14.D rather than surfacing as a 13.x crypto failure". A label changed
-    /// to another option's (two labels swapped) or to no option's, every index kept, opens the right
-    /// ciphertexts, so Verification 13 passes; Verification 14 fails 14.D and 14.C. Swapping the
-    /// indices instead (labels kept) opens each nonce against the other ciphertext: 13.B and 14.D.
+    /// Design §4.6: "the index drives V13's ciphertext lookup, and the label is compared in V14", so a
+    /// mislabelled field fails Verification 14 rather than surfacing as a 13.x crypto failure. A label
+    /// changed to another option's (two labels swapped) or to no option's, every index kept, opens the
+    /// right ciphertexts, so Verification 13 passes; Verification 14 fails 14.structure (each manifest
+    /// label is present, at another index: user decision 2026-10-10) and 14.C. Swapping the indices
+    /// instead (labels kept) opens each nonce against the other ciphertext: 13.B and 14.structure.
     /// </summary>
     [Fact]
     public void MislabelledFields_PassVerification13_AndFailVerification14()
@@ -763,7 +764,7 @@ public class ChallengedBallotDecryptionTests
 
         var swapped = With(decrypted, c => With(c, choices: [With(c.Choices[0], id: c.Choices[1].Id), With(c.Choices[1], id: c.Choices[0].Id)]));
         election.Verify13(ballot, swapped);
-        Assert.Equal("14.D", Assert.Throws<VerificationFailedException>(() => election.Verify14(ballot, swapped)).SubSection);
+        Assert.Equal("14.structure", Assert.Throws<VerificationFailedException>(() => election.Verify14(ballot, swapped)).SubSection);
 
         var unknown = With(decrypted, c => With(c, choices: [c.Choices[0], With(c.Choices[1], id: "choice-x")]));
         election.Verify13(ballot, unknown);
@@ -775,7 +776,7 @@ public class ChallengedBallotDecryptionTests
 
         var reindexed = Tamper13(decrypted, "two options' indices swapped, labels kept");
         Assert.Equal("13.B", Assert.Throws<VerificationFailedException>(() => election.Verify13(ballot, reindexed)).SubSection);
-        Assert.Equal("14.D", Assert.Throws<VerificationFailedException>(() => election.Verify14(ballot, reindexed)).SubSection);
+        Assert.Equal("14.structure", Assert.Throws<VerificationFailedException>(() => election.Verify14(ballot, reindexed)).SubSection);
     }
 
     /// <summary>
@@ -1022,10 +1023,15 @@ public class ChallengedBallotDecryptionTests
         { "unknown supplemental field label", "14.C" },
         { "manifest option missing", "14.D" },
         { "declared supplemental field missing", "14.D" },
-        { "two options' labels swapped, indices kept", "14.D" },
-        { "two options' indices swapped, labels kept", "14.D" },
-        { "contest at another index, label kept", "14.B" },
+        { "two options' labels swapped, indices kept", "14.structure" },
+        { "two options' indices swapped, labels kept", "14.structure" },
+        { "contest at another index, label kept", "14.structure" },
         { "option index listed twice under two labels", "14.structure" },
+        // Pending the user's answer: this row is not settled by the V14 decision (index and label both
+        // match the manifest; only the list is wrong, which was 14.C). It rests on the implementer's
+        // reading (tracker, Decisions, V14 "implementer reading, awaiting acceptance"); under the
+        // user's option (b) or (c) re-derive it from that answer, do not re-capture the output.
+        { "supplemental field released as an option, index kept", "14.structure" },
         { "option value 2 (R = 1)", "14.E" },
         { "option value -1", "14.E" },
         { "indicator value 2", "14.E" },
@@ -1060,6 +1066,7 @@ public class ChallengedBallotDecryptionTests
             "two options' indices swapped, labels kept" => With(d, c => With(c, choices: [With(c.Choices[0], index: c.Choices[1].Index), With(c.Choices[1], index: c.Choices[0].Index)])),
             "contest at another index, label kept" => With(d, c => With(c, index: c.Index + 1)),
             "option index listed twice under two labels" => With(d, c => With(c, choices: [c.Choices[0], With(c.Choices[1], index: c.Choices[0].Index)])),
+            "supplemental field released as an option, index kept" => With(d, c => With(c, choices: [.. c.Choices, c.SupplementalFields.Single(f => f.Id == overvote)], fields: c.SupplementalFields.Where(f => f.Id != overvote).ToList())),
             "option value 2 (R = 1)" => With(d, c => With(c, choices: Replace(c.Choices, "choice-1", f => With(f, value: 2)))),
             "option value -1" => With(d, c => With(c, choices: Replace(c.Choices, "choice-2", f => With(f, value: -1)))),
             "indicator value 2" => With(d, c => With(c, fields: Replace(c.SupplementalFields, overvote, f => With(f, value: 2)))),
@@ -1078,6 +1085,47 @@ public class ChallengedBallotDecryptionTests
             "null supplemental field entry" => With(d, c => With(c, fields: [.. c.SupplementalFields.Skip(1), null!])),
             _ => throw new ArgumentOutOfRangeException(nameof(tamper)),
         };
+    }
+
+    public static TheoryData<string, string> Verification14OrderRows() => new()
+    {
+        { "labels swapped and an option value 2", "14.structure" },
+        { "contest at another index and an option missing", "14.D" },
+        { "contest-1 labels swapped, contest-3 option missing", "14.D" },
+        { "contest-1 option value 2, contest-3 labels swapped", "14.structure" },
+        { "contest-1 at another index, contest-3 unknown label", "14.C" },
+    };
+
+    /// <summary>
+    /// The order of the pairing check (user decision 2026-10-10; the class remarks, which other
+    /// verifiers follow): 14.A-14.D run over the whole ballot first, then the index/label pairing
+    /// (14.structure) over the whole ballot, then 14.E/14.F. Two defects, on one contest or on two
+    /// contests of <see cref="TwoOfThreeContests"/>, are reported under the earlier check.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Verification14OrderRows))]
+    public void Verification14_TwoDefects_ReportTheEarlierCheck(string tamper, string subSection)
+    {
+        var (election, ballot, decrypted) = tamper.StartsWith("contest-1", StringComparison.Ordinal)
+            ? TwoOfThreeContests.Value
+            : (Shared.Value, Opened.Value.Ballot, Opened.Value.Decrypted);
+        election.Verify14(ballot, decrypted);
+
+        static DecryptedChallengedContest SwapLabels(DecryptedChallengedContest c) =>
+            With(c, choices: [With(c.Choices[0], id: c.Choices[1].Id), With(c.Choices[1], id: c.Choices[0].Id), .. c.Choices.Skip(2)]);
+
+        var tampered = tamper switch
+        {
+            "labels swapped and an option value 2" => With(decrypted, c => With(SwapLabels(c), choices: Replace(SwapLabels(c).Choices, "choice-1", f => With(f, value: 2)))),
+            "contest at another index and an option missing" => With(decrypted, c => With(c, index: c.Index + 1, choices: [c.Choices[0]])),
+            "contest-1 labels swapped, contest-3 option missing" => With(decrypted, c => c.ContestId == "contest-1" ? SwapLabels(c) : With(c, choices: [c.Choices[0]])),
+            "contest-1 option value 2, contest-3 labels swapped" => With(decrypted, c => c.ContestId == "contest-1" ? With(c, choices: Replace(c.Choices, "choice-1", f => With(f, value: 2))) : SwapLabels(c)),
+            "contest-1 at another index, contest-3 unknown label" => With(decrypted, c => c.ContestId == "contest-1" ? With(c, index: c.Index + 5) : With(c, choices: [c.Choices[0], With(c.Choices[1], id: "choice-x"), .. c.Choices.Skip(2)])),
+            _ => throw new ArgumentOutOfRangeException(nameof(tamper)),
+        };
+
+        var exception = Assert.Throws<VerificationFailedException>(() => election.Verify14(ballot, tampered));
+        Assert.True(subSection == exception.SubSection, $"{tamper}: {exception.SubSection} {exception.Message}");
     }
 
     [Theory]

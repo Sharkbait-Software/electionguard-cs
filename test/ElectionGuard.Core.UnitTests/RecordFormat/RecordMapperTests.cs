@@ -1086,18 +1086,23 @@ public class RecordMapperTests
 
     public static TheoryData<string, string?, string> ChallengedIndexTampers() => new()
     {
-        { "two fields' indices swapped, labels kept", "13.B", "14.D" },
-        { "two fields' labels swapped, indices kept", null, "14.D" },
+        { "two fields' indices swapped, labels kept", "13.B", "14.structure" },
+        { "two fields' labels swapped, indices kept", null, "14.structure" },
         { "a field's label unknown, index kept", null, "14.C" },
-        { "a field index the manifest lacks", "13.structure", "14.D" },
-        { "the contest's index unknown, label kept", "13.structure", "14.B" },
+        { "a field index the manifest lacks", "13.structure", "14.structure" },
+        // Pending the user's answer: 14.structure here rests on the implementer's reading under the V14
+        // decision (tracker, Decisions, V14 "implementer reading, awaiting acceptance": 14.C/14.D
+        // compare options and supplemental fields together). Under option (c) it would stay 14.C, and
+        // under (b) the decoder changes; re-derive it from that answer, do not re-capture the output.
+        { "the contest's index unknown, label kept", "13.structure", "14.structure" },
     };
 
     /// <summary>
     /// Design §4.6: the item's indices drive Verification 13's ciphertext lookup and its labels are
     /// compared in Verification 14, so a verifier that looks up by index agrees with this one. A
-    /// mislabelled field opens the right ciphertexts (13 passes) and fails 14.C/14.D; an index moved
-    /// to another field opens the wrong one (13.B) and fails 14.D too.
+    /// mislabelled field opens the right ciphertexts (13 passes) and fails 14.C (a label the manifest
+    /// lacks) or 14.structure (a manifest label at another index, user decision 2026-10-10); an index
+    /// moved to another field opens the wrong one (13.B) and fails 14.structure too.
     /// </summary>
     [Theory]
     [MemberData(nameof(ChallengedIndexTampers))]

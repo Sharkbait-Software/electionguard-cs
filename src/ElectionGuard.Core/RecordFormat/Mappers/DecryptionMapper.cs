@@ -64,7 +64,14 @@ internal static class DecryptionMapper
     {
         ArgumentNullException.ThrowIfNull(decrypted);
         ArgumentNullException.ThrowIfNull(ballots);
-        var (locator, identifierHash) = ballots.Locate(Decrypts(ballot, decrypted.BallotId));
+        return ToItem(decrypted, ballot, ballots.Locate(Decrypts(ballot, decrypted.BallotId)).Locator);
+    }
+
+    /// <summary>A contest-data decryption of <paramref name="ballot"/>, which stands at <paramref name="locator"/> (the record writer's index).</summary>
+    public static Pb.RecordItem ToItem(DecryptedContestData decrypted, BallotEncryption.EncryptedBallot ballot, BallotLocator locator)
+    {
+        ArgumentNullException.ThrowIfNull(decrypted);
+        var identifierHash = Decrypts(ballot, decrypted.BallotId);
         return new Pb.RecordItem
         {
             ContestDataDecryption = new Pb.ContestDataDecryption
@@ -112,8 +119,15 @@ internal static class DecryptionMapper
     {
         ArgumentNullException.ThrowIfNull(decrypted);
         ArgumentNullException.ThrowIfNull(ballots);
+        return ToItem(decrypted, ballot, ballots.Locate(Decrypts(ballot, decrypted.BallotId)).Locator, manifest);
+    }
+
+    /// <summary>A challenged ballot's decryption of <paramref name="ballot"/>, which stands at <paramref name="locator"/> (the record writer's index).</summary>
+    public static Pb.RecordItem ToItem(DecryptedChallengedBallot decrypted, BallotEncryption.EncryptedBallot ballot, BallotLocator locator, Manifest manifest)
+    {
+        ArgumentNullException.ThrowIfNull(decrypted);
         ArgumentNullException.ThrowIfNull(manifest);
-        var (locator, identifierHash) = ballots.Locate(Decrypts(ballot, decrypted.BallotId));
+        var identifierHash = Decrypts(ballot, decrypted.BallotId);
         var item = new Pb.ChallengedBallotDecryption { Ballot = DeviceMapper.ToItem(locator), HI = Bytes(identifierHash) };
         foreach (var contest in decrypted.Contests.OrderBy(x => x.Index))
         {
