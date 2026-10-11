@@ -1,19 +1,20 @@
 using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.Models;
+using ElectionGuard.Core.RecordFormat;
+using ElectionGuard.Core.RecordFormat.Mappers;
 using ElectionGuard.Core.Serialization;
 using ElectionGuard.Testing.Common;
-using System.Text;
-using System.Text.Json;
+using Google.Protobuf;
 using System.Text.Json.Nodes;
-using static ElectionGuard.Core.Serialization.ProtobufEncryptedBallotSerializer;
 
 namespace ElectionGuard.Core.UnitTests.Serialization;
 
 /// <summary>
 /// G40 (S10a): §3.7 lists "the date and time of the ballot encryption" among a ballot's record
 /// items. The encryptor reads it from an injectable clock, in UTC to the millisecond; it is optional
-/// in both encodings and is not a hash input (eq. 71 hashes the contest hashes and B_C only).
+/// in the record (the ballot item's <c>encrypted_at</c>, S10b) and is not a hash input (eq. 71
+/// hashes the contest hashes and B_C only).
 /// </summary>
 public class EncryptionTimestampTests
 {
@@ -119,92 +120,68 @@ public class EncryptionTimestampTests
         EncryptionTimestamp = timestamp,
     };
 
-    public static TheoryData<IEncryptedBallotSerializer> Serializers() => new()
+    private static EncryptedBallot Cast(TimeProvider? clock)
     {
-        new JsonEncryptedBallotSerializer(),
-        new ProtobufEncryptedBallotSerializer(),
-    };
-
-    private static EncryptedBallot RoundTrip(IEncryptedBallotSerializer serializer, EncryptedBallot ballot)
-    {
-        using var encoded = new MemoryStream();
-        serializer.Serialize(encoded, ballot);
-        encoded.Position = 0;
-        return serializer.Deserialize(encoded)!;
+        var ballot = Encrypt(clock);
+        ballot.RecordStatus(BallotStatus.Cast);
+        return ballot;
     }
 
-    [Theory]
-    [MemberData(nameof(Serializers))]
-    public void EncryptionTimestamp_RoundTrips_AndAbsentStaysAbsent(IEncryptedBallotSerializer serializer)
+    private static EncryptedBallot RoundTrip(EncryptedBallot ballot, bool json)
     {
-        var ballot = Encrypt(new FixedClock(Now));
+        var manifest = Shared.Value.Manifest;
+        return json
+            ? RecordItemCodec.DecodeBallotJson(RecordItemCodec.EncodeBallotJson(ballot, manifest), manifest, "device-1")
+            : RecordItemCodec.DecodeBallot(RecordItemCodec.EncodeBallot(ballot, manifest), manifest, "device-1");
+    }
 
-        Assert.Equal(ballot.EncryptionTimestamp, RoundTrip(serializer, ballot).EncryptionTimestamp);
-        Assert.Null(RoundTrip(serializer, Copy(ballot, null)).EncryptionTimestamp);
-        var earliest = new DateTimeOffset(1, 1, 1, 0, 0, 0, TimeSpan.Zero);
-        Assert.Equal(earliest, RoundTrip(serializer, Copy(ballot, earliest)).EncryptionTimestamp);
+    /// <summary>
+    /// S10b-16: the ballot item's <c>encrypted_at</c> carries the timestamp in both representations
+    /// (S10a's protobuf-net field 14 and JSON member retired with their serializers); absent stays
+    /// absent. D3 limits it to 1970-01-01T00:00:00Z onwards, so an earlier time cannot be recorded.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void EncryptionTimestamp_RoundTrips_AndAbsentStaysAbsent(bool json)
+    {
+        var ballot = Cast(new FixedClock(Now));
+
+        Assert.Equal(ballot.EncryptionTimestamp, RoundTrip(ballot, json).EncryptionTimestamp);
+        Assert.Null(RoundTrip(Copy(ballot, null), json).EncryptionTimestamp);
+        var earliest = DateTimeOffset.UnixEpoch;
+        Assert.Equal(earliest, RoundTrip(Copy(ballot, earliest), json).EncryptionTimestamp);
+        Assert.Throws<ArgumentException>(() => RecordItemCodec.EncodeBallot(Copy(ballot, earliest.AddMilliseconds(-1)), Shared.Value.Manifest));
     }
 
     [Fact]
-    public void Json_WritesTheDocumentedForm_AndOmitsAnAbsentTimestamp()
+    public void Json_WritesTheMappingsForm_AndOmitsAnAbsentTimestamp()
     {
-        var ballot = Encrypt(new FixedClock(Now));
-        var serializer = new JsonEncryptedBallotSerializer();
-        using var encoded = new MemoryStream();
-        serializer.Serialize(encoded, ballot);
-        using var withoutEncoded = new MemoryStream();
-        serializer.Serialize(withoutEncoded, Copy(ballot, null));
+        var ballot = Cast(new FixedClock(Now));
+        var manifest = Shared.Value.Manifest;
 
-        Assert.Equal("2026-10-08T12:34:56.789Z", JsonNode.Parse(encoded.ToArray())!["encryptionTimestamp"]!.GetValue<string>());
-        Assert.False(JsonNode.Parse(withoutEncoded.ToArray())!.AsObject().ContainsKey("encryptionTimestamp"));
+        var line = JsonNode.Parse(RecordItemCodec.EncodeBallotJson(ballot, manifest))!["encryptedBallot"]!;
+        var without = JsonNode.Parse(RecordItemCodec.EncodeBallotJson(Copy(ballot, null), manifest))!["encryptedBallot"]!;
+
+        Assert.Equal("2026-10-08T12:34:56.789Z", line["encryptedAt"]!.GetValue<string>());
+        Assert.False(without.AsObject().ContainsKey("encryptedAt"));
     }
 
+    /// <summary>
+    /// D3 on the item: seconds in [0, 253402300799] and whole milliseconds. Anything else is not
+    /// canonical, refused when the item is decoded (S10a refused the same in its two serializers).
+    /// </summary>
     [Theory]
-    [InlineData("2026-10-08T12:34:56Z")]
-    [InlineData("2026-10-08T12:34:56.7890Z")]
-    [InlineData("2026-10-08T14:34:56.789+02:00")]
-    [InlineData("2026-10-08T12:34:56.789")]
-    [InlineData("2026-10-08 12:34:56.789Z")]
-    [InlineData(" 2026-10-08T12:34:56.789Z")]
-    [InlineData("2026-13-08T12:34:56.789Z")]
-    public void Json_TimestampNotInTheDocumentedForm_IsRefused(string text)
+    [InlineData(-1L, 0)]
+    [InlineData(253402300800L, 0)]
+    [InlineData(1_759_926_896L, 1)]
+    [InlineData(1_759_926_896L, 789_000_001)]
+    public void Item_TimestampOutsideD3_IsRefused(long seconds, int nanos)
     {
-        var exception = Record.Exception(() => ReadJsonWithTimestamp(JsonValue.Create(text)));
+        var manifest = Shared.Value.Manifest;
+        var item = BallotMapper.ToItem(Cast(new FixedClock(Now)), manifest);
+        item.EncryptedBallot.EncryptedAt = new Google.Protobuf.WellKnownTypes.Timestamp { Seconds = seconds, Nanos = nanos };
 
-        Assert.IsType<NonCanonicalEncodingException>(exception);
-    }
-
-    [Fact]
-    public void Json_TimestampAsANumber_IsRefused()
-    {
-        Assert.IsAssignableFrom<JsonException>(Record.Exception(() => ReadJsonWithTimestamp(JsonValue.Create(1_759_926_896_789L))));
-    }
-
-    private static EncryptedBallot? ReadJsonWithTimestamp(JsonNode value)
-    {
-        var serializer = new JsonEncryptedBallotSerializer();
-        using var encoded = new MemoryStream();
-        serializer.Serialize(encoded, Encrypt(new FixedClock(Now)));
-        var document = JsonNode.Parse(encoded.ToArray())!;
-        document["encryptionTimestamp"] = value;
-        return serializer.Deserialize(new MemoryStream(Encoding.UTF8.GetBytes(document.ToJsonString())));
-    }
-
-    [Theory]
-    [InlineData(long.MaxValue)]
-    [InlineData(long.MinValue)]
-    public void Protobuf_TimestampOutsideTheRepresentableYears_IsRefused(long unixMilliseconds)
-    {
-        using var encoded = new MemoryStream();
-        new ProtobufEncryptedBallotSerializer().Serialize(encoded, Encrypt(new FixedClock(Now)));
-        encoded.Position = 0;
-        var dto = ProtoBuf.Serializer.Deserialize<ProtobufEncryptedBallot>(encoded);
-        Assert.Equal(Now.ToUnixTimeMilliseconds(), dto.EncryptionTimestamp);
-        typeof(ProtobufEncryptedBallot).GetProperty(nameof(ProtobufEncryptedBallot.EncryptionTimestamp))!.SetValue(dto, unixMilliseconds);
-        using var tampered = new MemoryStream();
-        ProtoBuf.Serializer.Serialize(tampered, dto);
-        tampered.Position = 0;
-
-        Assert.Throws<NonCanonicalEncodingException>(() => new ProtobufEncryptedBallotSerializer().Deserialize(tampered));
+        Assert.Throws<NonCanonicalEncodingException>(() => RecordItemCodec.DecodeBallot(item.ToByteArray(), manifest, "device-1"));
     }
 }

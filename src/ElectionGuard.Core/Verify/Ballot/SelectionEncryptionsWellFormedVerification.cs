@@ -233,9 +233,9 @@ public class SelectionEncryptionsWellFormedVerification
     }
 
     /// <summary>
-    /// A non-null list of <paramref name="bound"/> + 1 non-null proofs. A null list or entry only
-    /// comes from a malformed JSON document (protobuf cannot encode one); it is reported like a list
-    /// of the wrong length.
+    /// A non-null list of <paramref name="bound"/> + 1 non-null proofs. A null list or entry comes
+    /// only from a ballot built in memory (the record decoder has no null); it is reported like a
+    /// list of the wrong length, which a record item can carry (a whole number of pairs, D1).
     /// </summary>
     private static bool HasOneProofPerValue(ChallengeResponsePair[]? proofs, int bound)
     {

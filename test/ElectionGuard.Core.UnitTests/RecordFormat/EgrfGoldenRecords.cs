@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
@@ -241,7 +242,8 @@ internal static class EgrfGoldenRecords
         const string HeaderAtOpen = "implementation-chosen, awaiting sign-off: a header section that cannot be read stops the read at open (S10b-E review round 3)";
         const string HeaderLineD6 = "implementation-chosen, awaiting sign-off: D6 governs a .jsonl segment header line, so any failure of it is R.container (S10b-E review round 3)";
         const string JsonOneForm = "implementation-chosen, awaiting sign-off: in JSON, bytes are standard padded base64 and integers plain decimal; other forms are R.encoding (design §5.5, S10b-E review round 3)";
-        const string TocNameEncoding = "implementation-chosen, awaiting sign-off: an undeclared SectionType name in a JSON claimed TOC is R.encoding, NQ-7's R.version applying to the numeric form (S10b-E review round 3)";
+        const string JsonTimestampOneForm = "implementation-chosen, awaiting sign-off: in JSON, a timestamp is written as the mapping's formatter writes it (Z, no fraction for a whole second, else exactly three digits); other spellings are R.encoding (design §5.5, S10b-F review round 2)";
+        const string TocNameEncoding ="implementation-chosen, awaiting sign-off: an undeclared SectionType name in a JSON claimed TOC is R.encoding, NQ-7's R.version applying to the numeric form (S10b-E review round 3)";
         async Task NegZip(string name, string description, string code, Func<byte[], byte[]> mutate) =>
             entries.Add(await MutateFileAsync($"negative/{name}", zip, description, [code], mutate));
 
@@ -461,6 +463,34 @@ internal static class EgrfGoldenRecords
             RewriteFirstBase64(d, value => value.EndsWith('='), value => value.TrimEnd('='));
             return Task.CompletedTask;
         }, JsonOneForm);
+        await Neg("encoding-jsonl-spaced-base64", "A JSON line whose first base64 value has four spaces inserted, its length still a multiple of 4 (design §5.5: one form; decoders that skip whitespace would read the same bytes).", RecordCodes.Encoding, json, d =>
+        {
+            RewriteFirstBase64(d, _ => true, value => value.Insert(8, "    "));
+            return Task.CompletedTask;
+        }, JsonOneForm);
+        await Neg("encoding-jsonl-base64-unused-bit", "A JSON line whose first padded base64 value has an unused bit of its last character set (design §5.5: one form; it decodes to the same bytes).", RecordCodes.Encoding, json, d =>
+        {
+            const string alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            RewriteFirstBase64(d, value => value.EndsWith('=') && (alphabet.IndexOf(value[value.IndexOf('=') - 1]) & 1) == 0, value =>
+            {
+                int last = value.IndexOf('=') - 1;
+                return string.Concat(value.AsSpan(0, last), alphabet[alphabet.IndexOf(value[last]) | 1].ToString(), value.AsSpan(last + 1));
+            });
+            return Task.CompletedTask;
+        }, JsonOneForm);
+        await Neg("encoding-jsonl-timestamp-offset", "A JSON device section whose first ballot's encryptedAt names the same instant with a +02:00 offset (design §5.5: one form, the formatter's Z form).", RecordCodes.Encoding, json, d =>
+        {
+            string f = Directory.EnumerateFiles(Path.Combine(d, "devices"), "*.jsonl", SearchOption.AllDirectories).Single();
+            string text = File.ReadAllText(f);
+            const string member = "\"encryptedAt\":\"";
+            int start = text.IndexOf(member, StringComparison.Ordinal);
+            Assert.True(start >= 0, "no encryptedAt");
+            start += member.Length;
+            string value = text[start..text.IndexOf('"', start)];
+            var at = DateTimeOffset.Parse(value, CultureInfo.InvariantCulture).ToOffset(TimeSpan.FromHours(2));
+            File.WriteAllText(f, ReplaceFirst(text, member + value + "\"", member + at.ToString("yyyy-MM-dd'T'HH:mm:ss.fffzzz", CultureInfo.InvariantCulture) + "\""));
+            return Task.CompletedTask;
+        }, JsonTimestampOneForm);
         await Neg("encoding-jsonl-integer-leading-zero", "A JSON device close whose ballot count is written with a leading zero (design §5.5: plain decimal).", RecordCodes.Encoding, json, d =>
         {
             string f = Directory.EnumerateFiles(Path.Combine(d, "devices"), "*.jsonl", SearchOption.AllDirectories).Single();

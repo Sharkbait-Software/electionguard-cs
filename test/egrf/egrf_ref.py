@@ -652,6 +652,15 @@ def _timestamp(v, where):
         sign = 1 if off[0] == "+" else -1
         seconds -= sign * (int(off[1:3]) * 3600 + int(off[4:6]) * 60)
     nanos = int((frac or "").ljust(9, "0")) if frac else 0
+    if 0 <= seconds <= 253402300799 and nanos % 1_000_000 == 0:
+        # §5.5 one written form (provisional rule (d), S10b-F review round 2): what the mapping's
+        # formatter writes for a value D3 allows: Z, no fraction for a whole second, else exactly
+        # three digits. A value outside D3 is left for D3 to name.
+        at = datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc) + datetime.timedelta(seconds=seconds)
+        written = (f"{at.year:04d}-{at.month:02d}-{at.day:02d}T{at.hour:02d}:{at.minute:02d}:{at.second:02d}"
+                   + (f".{nanos // 1_000_000:03d}" if nanos else "") + "Z")
+        if written != v:
+            raise JsonFail("R.encoding", f"{where}: {v!r} is not in the one written form {written!r}")
     out = {}
     if seconds:
         out["seconds"] = seconds

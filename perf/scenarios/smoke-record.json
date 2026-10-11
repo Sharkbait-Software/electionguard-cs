@@ -1,0 +1,22 @@
+{
+  "id": "smoke-record",
+  "manifest": "test/data/single-contest/manifest.json",
+  "ballotCount": 1000,
+  "seed": 20260907,
+  "guardians": { "n": 3, "k": 2 },
+  "parallelism": 0,
+  "chunkSize": 500,
+  "warmupBallots": 200,
+  "phases": {
+    "ballotVerification": true,
+    "tallyVerification": true,
+    "decrypt": true,
+    "serialization": true,
+    "writeRecord": true,
+    "verifyRecord": true
+  },
+  "record": {
+    "deviceCount": 4,
+    "encoding": "protobuf"
+  }
+}

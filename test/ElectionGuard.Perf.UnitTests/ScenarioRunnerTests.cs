@@ -737,4 +737,89 @@ public class ScenarioRunnerTests
             Assert.Equal(3, EGParameters.GuardianParameters.K);
         }
     }
+
+    // --- S10b-15: the election record phases --------------------------------------------------
+
+    private static PerfScenario RecordScenario(int deviceCount, string encoding, bool decrypt = true, bool verify = true) => Scenario(decrypt: decrypt, ballotVerification: true, tallyVerification: true) with
+    {
+        Phases = Scenario(decrypt: decrypt, ballotVerification: true, tallyVerification: true).Phases with { WriteRecord = true, VerifyRecord = verify },
+        Record = new RecordSettings { DeviceCount = deviceCount, Encoding = encoding },
+    };
+
+    /// <summary>
+    /// The record is written as the run goes, chunk by chunk over the simulated devices, sealed,
+    /// completed with the decrypted tally, then verified from disk by VerifyAllAsync (every
+    /// verification and record rule); both phases are recorded, and the temporary record is deleted.
+    /// </summary>
+    [Theory]
+    [InlineData(1, "protobuf")]
+    [InlineData(3, "protobuf")]
+    [InlineData(2, "json")]
+    public void Run_WritesAndVerifiesTheRecord_WhenRequested(int deviceCount, string encoding)
+    {
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest(includeWriteIns: true);
+
+        var outcome = new ScenarioRunner(RecordScenario(deviceCount, encoding), manifest, _output.WriteLine).Run();
+
+        Assert.True(CorrectnessStatus.Passed == outcome.Correctness.Status, string.Join("; ", outcome.Notes.Select(x => $"{x.Key}={x.Value}")));
+        Assert.Equal(8, outcome.Phases[PhaseNames.WriteRecord].BallotsProcessed);
+        Assert.Equal(8, outcome.Phases[PhaseNames.VerifyRecord].BallotsProcessed);
+        Assert.False(outcome.Phases[PhaseNames.VerifyRecord].Aborted);
+        Assert.Equal("passed", outcome.Notes["recordVerification"]);
+        Assert.Equal("Final", outcome.Notes["recordPhase"]);
+        Assert.Equal(encoding, outcome.Notes["recordEncoding"]);
+        Assert.Equal(deviceCount.ToString(), outcome.Notes["recordDevices"]);
+        Assert.True(long.Parse(outcome.Notes["recordBytes"]) > 0);
+        Assert.Matches("^[0-9a-f]{64}$", outcome.Notes["recordRoot"]);
+    }
+
+    /// <summary>Without a decryption the record stops at its aggregated phase, and that is what is verified.</summary>
+    [Fact]
+    public void Run_WithoutDecryption_VerifiesTheAggregatedRecord()
+    {
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest();
+
+        var outcome = new ScenarioRunner(RecordScenario(1, "protobuf", decrypt: false), manifest).Run();
+
+        Assert.True(CorrectnessStatus.Skipped == outcome.Correctness.Status, string.Join("; ", outcome.Notes.Select(x => $"{x.Key}={x.Value}")));
+        Assert.Equal("Aggregated", outcome.Notes["recordPhase"]);
+        Assert.Equal("passed", outcome.Notes["recordVerification"]);
+    }
+
+    [Fact]
+    public void Run_WritesTheRecordWithoutVerifyingIt_WhenOnlyWriteRecordIsOn()
+    {
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest();
+
+        var outcome = new ScenarioRunner(RecordScenario(1, "protobuf", verify: false), manifest).Run();
+
+        Assert.Equal(CorrectnessStatus.Passed, outcome.Correctness.Status);
+        Assert.Contains(PhaseNames.WriteRecord, outcome.Phases.Keys);
+        Assert.DoesNotContain(PhaseNames.VerifyRecord, outcome.Phases.Keys);
+        Assert.False(outcome.Notes.ContainsKey("recordVerification"));
+    }
+
+    /// <summary>Under simple chaining one device encrypts the whole chain, so several simulated devices are a setup error.</summary>
+    [Fact]
+    public void Run_UnderChaining_RefusesSeveralDevices()
+    {
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest(chainingMode: ChainingMode.Simple);
+
+        var outcome = new ScenarioRunner(RecordScenario(2, "protobuf"), manifest).Run();
+
+        Assert.Equal(CorrectnessStatus.Error, outcome.Correctness.Status);
+        Assert.Contains("deviceCount", outcome.Notes["error"]);
+    }
+
+    /// <summary>Under simple chaining the one device's section carries the chain, and it verifies (8.C-8.G from the record).</summary>
+    [Fact]
+    public void Run_UnderChaining_WritesAndVerifiesTheChainedRecord()
+    {
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest(chainingMode: ChainingMode.Simple);
+
+        var outcome = new ScenarioRunner(RecordScenario(1, "protobuf"), manifest).Run();
+
+        Assert.True(CorrectnessStatus.Passed == outcome.Correctness.Status, string.Join("; ", outcome.Notes.Select(x => $"{x.Key}={x.Value}")));
+        Assert.Equal("passed", outcome.Notes["recordVerification"]);
+    }
 }

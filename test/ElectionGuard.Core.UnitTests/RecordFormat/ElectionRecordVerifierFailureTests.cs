@@ -77,6 +77,7 @@ public class ElectionRecordVerifierFailureTests
         var report = await VerifyAsync(directory, 1);
         var parallel = await VerifyAsync(directory, -1);
         Assert.Equal(ElectionRecordVerifierTests.Canonical(report), ElectionRecordVerifierTests.Canonical(parallel));
+        Assert.Equal(ElectionRecordVerifierTests.Canonical(report), ElectionRecordVerifierTests.Canonical(await VerifyAsync(directory, 4)));
 
         Assert.False(report.Passed);
         var deviceOf = section == 0x0101 ? (tamper.Contains("newer minor") || tamper.Contains("too many") || tamper.Contains("device header") ? two : one) : default;
@@ -338,6 +339,7 @@ public class ElectionRecordVerifierFailureTests
         await ReTocAsync(directory);
         var report = await VerifyAsync(directory, 1);
         Assert.Equal(ElectionRecordVerifierTests.Canonical(report), ElectionRecordVerifierTests.Canonical(await VerifyAsync(directory, -1)));
+        Assert.Equal(ElectionRecordVerifierTests.Canonical(report), ElectionRecordVerifierTests.Canonical(await VerifyAsync(directory, 4)));
         Assert.False(report.Passed);
         Assert.True(report.Findings.Any(x => x.SubSection == code && (ushort)x.Section!.Value.Type == section && (ordinal is null || x.Ordinal == ordinal)),
             $"{tamper}: no {code} at 0x{section:x4}#{ordinal}.\n{ElectionRecordVerifierTests.Describe(report)}");
@@ -452,14 +454,19 @@ public class ElectionRecordVerifierFailureTests
     }
 
     /// <summary>
-    /// Single-threaded with one item per batch, or in parallel with the default batch bound, which
-    /// holds a whole test device section in one batch: its items' workers then run concurrently.
+    /// Single-threaded with one item per batch (1); in parallel with the default batch bound (-1),
+    /// which holds a whole test device section in one batch, so its items' workers run concurrently;
+    /// or with that many workers and one item per batch (any other value), which runs the read-ahead:
+    /// the next batch is read while the workers verify the current one (S10b-F review round 1).
     /// </summary>
     internal static async Task<VerificationReport> VerifyAsync(string directory, int parallelism)
     {
         await using var reader = await ElectionRecord.OpenAsync(directory);
-        return await ElectionRecordVerifier.VerifyAllAsync(reader, parallelism == 1
-            ? new VerifyAllOptions { MaxDegreeOfParallelism = 1, BatchBytes = 1 }
-            : new VerifyAllOptions { MaxDegreeOfParallelism = parallelism });
+        return await ElectionRecordVerifier.VerifyAllAsync(reader, parallelism switch
+        {
+            1 => new VerifyAllOptions { MaxDegreeOfParallelism = 1, BatchBytes = 1 },
+            -1 => new VerifyAllOptions { MaxDegreeOfParallelism = -1 },
+            _ => new VerifyAllOptions { MaxDegreeOfParallelism = parallelism, BatchBytes = 1 },
+        });
     }
 }

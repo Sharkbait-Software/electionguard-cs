@@ -90,9 +90,9 @@ public static class BallotStructure
             return styleViolation;
         }
 
-        // A JSON document can null a list or one of its entries (S10a: the S3/S5 carry-over); a
-        // protobuf one reads a missing list as empty and is caught below as missing contests or
-        // options.
+        // A ballot built in memory can null a list or one of its entries (S10a: the S3/S5
+        // carry-over, from the retired JSON decoder); the record decoder reads a missing list as
+        // empty, caught below as missing contests or options.
         if (ballot.Contests is null)
         {
             return $"Ballot {ballot.Id} has a null contest list.";
@@ -175,10 +175,10 @@ public static class BallotStructure
 
     /// <summary>
     /// The ballot names the device it was encrypted on, S_device (§3.4.3 eq. 72; §4.1.4 eq. 119):
-    /// Verifications 8 and 16 hash it into H_DI. The property is required, but a JSON document that
-    /// writes null (or a protobuf message without the field) yields a ballot without it, which would
-    /// otherwise surface as an <see cref="ArgumentNullException"/> far from the cause (S9 review
-    /// round 3).
+    /// Verifications 8 and 16 hash it into H_DI. The property is required, but a ballot built in
+    /// memory can hold null (the record decoder takes it from the device section's header), which
+    /// would otherwise surface as an <see cref="ArgumentNullException"/> far from the cause (S9
+    /// review round 3).
     /// </summary>
     private static string? DeviceIdViolation(string ballotId, string? deviceId)
     {
@@ -202,9 +202,9 @@ public static class BallotStructure
     /// <summary>
     /// §3.3.4: "every ElectionGuard ballot contains an encryption of the ballot nonce", C_ξB, whose
     /// C_ξB,1 is b(ξ_B, 32) ⊕ k_1, exactly 32 bytes (eq. 37). It is the only way a challenged ballot
-    /// is opened (§3.6.7); a ballot without it could never be audited. Neither the protobuf decoder
-    /// (which refuses a missing field) nor the JSON one (which refuses a missing property) yields
-    /// one without it; a JSON document that writes null does.
+    /// is opened (§3.6.7); a ballot without it could never be audited. The record decoder yields one
+    /// without it when the item leaves the message field out (it has no width option, so its absence
+    /// is canonical), so this check is what refuses it (S10a's decoders refused it at decode).
     /// </summary>
     private static string? BallotNonceViolation(string ballotId, EncryptedBallotNonce? nonce)
     {
@@ -228,8 +228,8 @@ public static class BallotStructure
     /// missing one would leave its count unverifiable.
     ///
     /// A null list (or a null entry) is a violation even where the manifest declares no fields: the
-    /// list is required, every encoder writes it (empty when there are none), and the protobuf
-    /// decoder yields an empty list, so null only comes from a malformed JSON document. Every
+    /// list is required, every encoder writes it (empty when there are none), and the record
+    /// decoder yields an empty list, so null comes only from a ballot built in memory. Every
     /// consumer after <see cref="Require(EncryptedBallot, Manifest, int)"/> walks the list unguarded.
     /// </summary>
     private static string? SupplementalFieldViolation(string ballotId, EncryptedContest contest, Contest manifestContest, Span<bool> buffer)

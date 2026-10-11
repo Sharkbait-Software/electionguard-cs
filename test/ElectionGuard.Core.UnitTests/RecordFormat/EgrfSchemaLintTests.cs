@@ -245,6 +245,19 @@ public class EgrfSchemaLintTests
     }
 
     /// <summary>
+    /// The schema appendix of docs/spec-compliance/egrf-v2-spec.md is generated from schema.json and
+    /// the .proto's field comments by test/egrf/spec_tables.py; a schema or comment change must be
+    /// followed by a regeneration (S10b-F review round 2).
+    /// </summary>
+    [PythonFact]
+    public void SpecAppendix_IsWhatSpecTablesWrites()
+    {
+        string script = Path.Combine(Path.GetDirectoryName(SchemaJsonPath())!, "spec_tables.py");
+        var (exit, output, error) = PythonInterpreter.Run(script, "--check");
+        Assert.True(exit == 0, $"spec_tables.py --check exited {exit}; run python test/egrf/spec_tables.py:\n{output}\n{error}");
+    }
+
+    /// <summary>
     /// Each break and a fragment of the one violation it must produce. Every break is isolated:
     /// adding a field below the highest number, or at a reserved number, leaves every reservation in
     /// place, so only the numbering check (the basis of W6: an unknown field follows every known

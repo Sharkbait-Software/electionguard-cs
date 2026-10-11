@@ -61,7 +61,7 @@ public class EncryptedTally
     }
 
     /// <summary>
-    /// Rebuilds a tally from its published form (<see cref="Serialization.JsonElectionRecordSerializer"/>):
+    /// Rebuilds a tally from its published form (the record's encrypted tally items, <see cref="RecordFormat.Mappers.TallyMapper"/>):
     /// every contest and option the document lists, with its (A, B) and cast weight, and the number
     /// of ballots cast. The keys are the document's, not the manifest's, so that Verification 9 sees
     /// a contest or option the manifest does not list, or misses one it does ("9.structure"). Each
@@ -146,8 +146,8 @@ public class EncryptedTally
     /// The sum of the weights W (eq. 80) of the cast ballots added, whatever contests they list:
     /// the election record's <c>EncryptedTallyHeader.total_cast_weight</c> (design §4.5, #17),
     /// informational like <see cref="BallotsCast"/> (decoding adds no finding; the record verifier
-    /// checks the header against the recount as "R.summary"). A tally restored from the JSON record format,
-    /// which does not publish it, has 0 here, and the record writer refuses it
+    /// checks the header against the recount as "R.summary"). A tally restored without its header
+    /// (<see cref="Restore"/> alone) has 0 here, and the record writer refuses it
     /// (<c>TallyMapper.ToItems</c>: a total below <see cref="BallotsCast"/> is unknown, since every
     /// weight is at least 1).
     /// </summary>
@@ -421,7 +421,7 @@ public class EncryptedTally
         /// <see cref="EncryptedAggregateContest.CastWeight"/> times <see cref="MaximumValue"/>. Tally
         /// decryption searches [0, this] for the count (§3.6.2); the number of ballots cast, which it
         /// used to search, is too small once a weight or R exceeds 1 (G16). A tally read back from a
-        /// record (<see cref="Serialization.JsonElectionRecordSerializer"/>) restores it from the
+        /// record (<see cref="RecordFormat.Mappers.TallyMapper"/>) restores it from the
         /// published cast weight and the manifest (S10a); Verification 9 checks that weight. An
         /// aggregate built outside the tally has 0 here, so decrypting it fails closed for any
         /// nonzero count. The product saturates at <see cref="long.MaxValue"/> rather than wrapping,

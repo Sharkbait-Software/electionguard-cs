@@ -48,10 +48,10 @@ public class EncryptedBallot
     /// and §3.4 p.41 leaves the date and time to optional inputs an implementation may choose
     /// (S_device of eq. 72 could carry it, as the manifest specifies). So nothing in the ballot
     /// binds it: whoever can rewrite the record can change it, and only the record's signature
-    /// (§3.7) protects it. No verification checks it. JSON: <c>encryptionTimestamp</c>, exactly
-    /// <c>yyyy-MM-ddTHH:mm:ss.fffZ</c>; protobuf: field 14, Unix milliseconds.
+    /// (§3.7) protects it. No verification checks it. In the record it is the ballot item's
+    /// <c>encrypted_at</c> (a <c>google.protobuf.Timestamp</c> of whole milliseconds, decode rule D3;
+    /// in the proto3 JSON mapping <c>yyyy-MM-ddTHH:mm:ss.fffZ</c>), absent when null.
     /// </summary>
-    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public DateTimeOffset? EncryptionTimestamp
     {
         get => _encryptionTimestamp;
@@ -94,11 +94,9 @@ public class EncryptedBallot
     /// 8 refuses it ("8.structure": "Verification 8 is only used for regular ElectionGuard
     /// ballots", p.64), and Verifications 15, 16 and 17 check it instead.
     /// </summary>
-    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public List<PreEncryption.PreEncryptedCastContest>? PreEncryptedContests { get; init; }
 
     /// <summary>Whether this is a cast pre-encrypted ballot (<see cref="PreEncryptedContests"/> present).</summary>
-    [System.Text.Json.Serialization.JsonIgnore]
     public bool IsPreEncrypted => PreEncryptedContests is not null;
 
     private BallotStatus _status;
@@ -219,7 +217,6 @@ public record EncryptedContest
     /// (§3.3.9 p.38; user decision Q15). The spec gives no challenge format for it; see
     /// <see cref="BallotEncryptor"/>. Null otherwise.
     /// </summary>
-    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public ChallengeResponsePair[]? UndervoteDifferenceProof { get; init; }
 
     /// <summary>
@@ -229,7 +226,6 @@ public record EncryptedContest
     /// validity of the encrypted overvote indicator" (§3.3.9 p.39; user decisions Q15, Q17). The
     /// spec gives no challenge format for it; see <see cref="BallotEncryptor"/>. Null otherwise.
     /// </summary>
-    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public ChallengeResponsePair[]? NullVoteProof { get; init; }
 
     /// <summary>

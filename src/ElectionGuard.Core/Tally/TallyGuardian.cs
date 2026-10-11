@@ -522,9 +522,8 @@ public class TallyAdmin
     /// Verification 9 against the record's cast ballots. A tally read back must not be decrypted before
     /// that: its decryption bounds come from the published cast weights, which only Verification 9
     /// checks, and a forged weight widens the discrete-log search (up to the <see cref="int.MaxValue"/>
-    /// limit, beyond which decryption refuses). The same holds for a tally read with the JSON
-    /// serializer (<see cref="ElectionGuard.Core.Serialization.JsonElectionRecordSerializer.DeserializeEncryptedTally"/>),
-    /// which must pass <see cref="ElectionGuard.Core.Verify.Tally.BallotAggregationVerification"/> first.</para>
+    /// limit, beyond which decryption refuses). The same holds for any tally decoded from a record
+    /// another way, which must pass <see cref="ElectionGuard.Core.Verify.Tally.BallotAggregationVerification"/> first.</para>
     /// </summary>
     public DecryptedTally Decrypt(IReadOnlyList<TallyGuardian> guardians, ElectionGuard.Core.Verify.VerifiedAggregate aggregate, int maxDegreeOfParallelism = -1)
     {

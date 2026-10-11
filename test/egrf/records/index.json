@@ -793,6 +793,69 @@
       }
     },
     {
+      "path": "negative/encoding-jsonl-spaced-base64",
+      "kind": "negative",
+      "description": "A JSON line whose first base64 value has four spaces inserted, its length still a multiple of 4 (design §5.5: one form; decoders that skip whitespace would read the same bytes).",
+      "expect": [
+        "R.encoding"
+      ],
+      "codes": [
+        "R.encoding",
+        "R.root",
+        "R.signature"
+      ],
+      "complete": true,
+      "basis": "implementation-chosen, awaiting sign-off: in JSON, bytes are standard padded base64 and integers plain decimal; other forms are R.encoding (design §5.5, S10b-E review round 3)",
+      "phaseRoots": {
+        "aggregated": "2fe0e4e73191d2e63a94bf3efeb4f1d0f773d6ccc4c128d24452e5d0f4e3092f",
+        "final": "45d072d9bd4c5fff8bbc82db5231ae8ab88e504076f76702824689d380ed19e4",
+        "sealed": "4289e56b19f25f30e07b21259e01e8cc869f4ddac471e37f93cd9a78dbe322e0",
+        "setup": "19e544b8932090f48d233ca4171fb782b3f2e27d90b7079015f3c8ab311541f8"
+      }
+    },
+    {
+      "path": "negative/encoding-jsonl-base64-unused-bit",
+      "kind": "negative",
+      "description": "A JSON line whose first padded base64 value has an unused bit of its last character set (design §5.5: one form; it decodes to the same bytes).",
+      "expect": [
+        "R.encoding"
+      ],
+      "codes": [
+        "R.encoding",
+        "R.root",
+        "R.signature"
+      ],
+      "complete": true,
+      "basis": "implementation-chosen, awaiting sign-off: in JSON, bytes are standard padded base64 and integers plain decimal; other forms are R.encoding (design §5.5, S10b-E review round 3)",
+      "phaseRoots": {
+        "aggregated": "986c385e0bbe0ea7030c54433dc87ca2fcfbe90f5dcc981223b20cbd7931fa99",
+        "final": "15ee5f0bfdd137c1f07c7a1db83aa6b05edb6c30a80181b1b7c2a4a8ed8f7b68",
+        "sealed": "a5ce192bb64aa65662a3728998d01466c82df3823398dcaa7c6cb88b98c05549",
+        "setup": "19e544b8932090f48d233ca4171fb782b3f2e27d90b7079015f3c8ab311541f8"
+      }
+    },
+    {
+      "path": "negative/encoding-jsonl-timestamp-offset",
+      "kind": "negative",
+      "description": "A JSON device section whose first ballot's encryptedAt names the same instant with a +02:00 offset (design §5.5: one form, the formatter's Z form).",
+      "expect": [
+        "R.encoding"
+      ],
+      "codes": [
+        "R.encoding",
+        "R.root",
+        "R.signature"
+      ],
+      "complete": true,
+      "basis": "implementation-chosen, awaiting sign-off: in JSON, a timestamp is written as the mapping's formatter writes it (Z, no fraction for a whole second, else exactly three digits); other spellings are R.encoding (design §5.5, S10b-F review round 2)",
+      "phaseRoots": {
+        "aggregated": "d5eac83dcb3ab50c0ad4b74d94d9621f105ca222bb74d1b42c7a325102afc711",
+        "final": "ccbf9601fb04fe5d3eeb88a0791b5297ca55d4e7d8af663fa34703bcfccc5e7d",
+        "sealed": "83e748496e7be83213548ea9e4adc049fa34f05b73716dcef32940e11aff36ec",
+        "setup": "19e544b8932090f48d233ca4171fb782b3f2e27d90b7079015f3c8ab311541f8"
+      }
+    },
+    {
       "path": "negative/encoding-jsonl-integer-leading-zero",
       "kind": "negative",
       "description": "A JSON device close whose ballot count is written with a leading zero (design §5.5: plain decimal).",

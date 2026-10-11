@@ -127,8 +127,9 @@ public class AdherenceToVoteLimitsVerification
 
     private static void Verify(EncryptedContest encryptedContest, Contest contest, RangeProofChallenge challenge, EncryptedBallot encryptedBallot)
     {
-        // A null list or a null entry only comes from a malformed JSON document (protobuf cannot
-        // encode one); it is reported like a list of the wrong length.
+        // A null list or a null entry comes only from a ballot built in memory (the record decoder
+        // has no null: a proof it leaves out is empty); it is reported like a list of the wrong
+        // length. A wrong count, an omitted relation proof included, does come from a record item.
         if (encryptedContest.Proofs is null || encryptedContest.Proofs.Length != contest.SelectionLimit + 1 || HasNullEntry(encryptedContest.Proofs))
         {
             throw new VerificationFailedException("7", $"A challenge/response value was not provided for all possible values of the contest selection limit of {contest.SelectionLimit}.");

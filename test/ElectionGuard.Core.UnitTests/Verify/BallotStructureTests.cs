@@ -431,27 +431,23 @@ public class BallotStructureTests
     }
 
     /// <summary>
-    /// S5 review: the JSON decoder (unlike protobuf, which decodes an absent list as empty) accepts
-    /// <c>"supplementalFields": null</c> for the required list. For a contest whose manifest declares
-    /// no fields, that once passed the structure check and then crashed Verifications 6-8 and the
-    /// tally with a NullReferenceException; it is now a structural failure.
+    /// S5 review: a null supplemental field list (the retired JSON ballot decoder accepted
+    /// <c>"supplementalFields": null</c>; a record item decodes an absent list as empty, and an
+    /// in-memory ballot can still hold null). For a contest whose manifest declares no fields, that
+    /// once passed the structure check and then crashed Verifications 6-8 and the tally with a
+    /// NullReferenceException; it is now a structural failure.
     /// </summary>
     [Theory]
     [InlineData(6)]
     [InlineData(7)]
     [InlineData(8)]
     [InlineData(9)]
-    public void JsonBallotWithANullSupplementalFieldList_IsRejected_AsStructure(int verification)
+    public void BallotWithANullSupplementalFieldList_IsRejected_AsStructure(int verification)
     {
         var fixture = Shared.Value;
-        var serializer = new Core.Serialization.JsonEncryptedBallotSerializer();
-        using var encoded = new MemoryStream();
-        serializer.Serialize(encoded, fixture.Ballot);
-        var document = System.Text.Json.Nodes.JsonNode.Parse(encoded.ToArray())!;
-        Assert.NotNull(document["contests"]![0]!["supplementalFields"]);
-        document["contests"]![0]!["supplementalFields"] = null;
+        Assert.NotNull(fixture.Ballot.Contests[0].SupplementalFields);
 
-        var decoded = serializer.Deserialize(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(document.ToJsonString())))!;
+        var decoded = With(fixture.Ballot, contests: [fixture.Ballot.Contests[0] with { SupplementalFields = null! }, .. fixture.Ballot.Contests.Skip(1)]);
         Assert.Null(decoded.Contests[0].SupplementalFields);
         Assert.Empty(fixture.Record.Manifest.Contests[0].SupplementalFields);
 

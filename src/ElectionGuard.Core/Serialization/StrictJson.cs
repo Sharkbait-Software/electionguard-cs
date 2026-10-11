@@ -6,8 +6,8 @@ namespace ElectionGuard.Core.Serialization;
 
 /// <summary>
 /// Checks shared by the strict JSON readers of the manifest (<see cref="ManifestSerializer"/>) and of
-/// the election record (<see cref="JsonElectionRecordSerializer"/>): the parts of "one document,
-/// one meaning" that System.Text.Json does not enforce on its own.
+/// the election record's JSON lines (<see cref="RecordFormat.RecordJson"/>): the parts of "one
+/// document, one meaning" that System.Text.Json does not enforce on its own.
 /// </summary>
 internal static class StrictJson
 {

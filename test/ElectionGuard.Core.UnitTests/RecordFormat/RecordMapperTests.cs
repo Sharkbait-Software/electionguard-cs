@@ -976,19 +976,16 @@ public class RecordMapperTests
     }
 
     /// <summary>
-    /// The header's total cast weight is the tally's (#17); a tally restored from the JSON record
-    /// format, which does not publish it, would write 0 under a nonzero count, so the writer refuses
-    /// it. Aggregating the ballots again gives the total.
+    /// The header's total cast weight is the tally's (#17); a tally restored without its header (as
+    /// S10a's retired JSON record format restored one, which did not publish it) would write 0 under
+    /// a nonzero count, so the writer refuses it. Aggregating the ballots again gives the total.
     /// </summary>
     [Fact]
     public void EncryptedTally_WithoutItsTotalCastWeight_IsRefusedByTheWriter()
     {
         var election = Shared.Value;
-        var serializer = new ElectionGuard.Core.Serialization.JsonElectionRecordSerializer();
-        using var stream = new MemoryStream();
-        serializer.Serialize(stream, election.Tally);
-        stream.Position = 0;
-        var restored = serializer.DeserializeEncryptedTally(stream, election.Manifest);
+        var restored = EncryptedTally.Restore(election.Manifest, election.Tally.BallotsCast, election.Tally.Contests.Values.Select(contest =>
+            (contest.ContestId, contest.CastWeight, contest.Choices.Values.Select(choice => (choice.ChoiceId, choice.A, choice.B)))));
 
         Assert.Equal((2, 0L), (restored.BallotsCast, restored.TotalCastWeight));
         Assert.Throws<ArgumentException>(() => TallyMapper.ToItems(restored));

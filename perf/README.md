@@ -111,9 +111,57 @@ Two knobs matter most:
 
 - **`phases`** — which optional phases run.
 - **`budgets`** — per-phase wall-clock allowance in minutes, keyed by phase name: `EncryptBallots`,
-  `VerifyBallots`, `Tally`, `VerifyTally`, `DecryptTally`, `VerifyDecryption`. A phase that exhausts its budget stops
-  at the next chunk boundary and is recorded as `aborted:budgetExceeded`; the run still produces a
-  record.
+  `VerifyBallots`, `Tally`, `VerifyTally`, `DecryptTally`, `VerifyDecryption`, `WriteRecord`, `VerifyRecord`. A phase
+  that exhausts its budget stops at the next chunk boundary and is recorded as `aborted:budgetExceeded`; the run still
+  produces a record.
+
+### The election record phases (S10b-15)
+
+Two optional phases write and verify the election as an EGRF v2 record
+(`docs/spec-compliance/2026-10-08-election-record-design.md`, §8.5), off unless a scenario turns them on:
+
+- **`writeRecord`** (`WriteRecord`): `ElectionRecordWriter` in a temporary directory (deleted when the run ends). The
+  setup and the device headers before the first chunk, each chunk's ballots appended to their devices' sections
+  right after encryption, then the chain closes, the voting seal and the aggregate seal (with no contest-data
+  requests) after the last chunk, and after a decryption the final phase (`CompleteAsync`). Billed per chunk like
+  the streamed phases, and over its budget it stops the run at the chunk boundary.
+- **`verifyRecord`** (`VerifyRecord`, requires `writeRecord`): `ElectionRecordVerifier.VerifyAllAsync` with the
+  full profile over the record from disk: Verifications 1-19 that apply (1-4, 5-8, 9, 10-11 over the final
+  phase) and every record-level rule (digests, phase roots, chain walks, 5.A over every ballot), with
+  `MaxDegreeOfParallelism` from `--parallelism`. A failing report makes the run an `error`. Without a decryption
+  (`decrypt: false`, or a decryption over its budget) the record ends at its aggregated phase, which the full
+  profile refuses, so it is verified as the guardians verify it before decrypting (`VerifyAggregatedAsync`, the
+  `GuardianPreliminary` profile: 1-9, 15, 16), and the phase must also yield the verified aggregate.
+
+The optional `record` object configures them: `deviceCount` (default 1; ballot i goes to simulated device
+i mod deviceCount, encrypted under that device's H_DI so that its chaining field and its section agree; under
+chaining it must be 1) and `encoding` (`protobuf`, the default, or `json`). Both flags and `record` are left out
+of the config hash while off or absent, so a scenario written before they existed keeps its hash and its history
+stays comparable. On the command line `--write-record`, `--verify-record` (both phases) and `--no-record` override
+the scenario. The run's notes gain `recordEncoding`, `recordDevices`, `recordPhase`, `recordRoot` (the last phase
+root), `recordBytes`, `recordBytesPerBallot` and `recordVerification`.
+
+`smoke-record` is `smoke` with both phases on, 4 devices and protobuf; `smoke` itself does not write a record, so
+its numbers and hash are unchanged. On this machine (32 logical cores, server GC) `VerifyRecord` on `smoke-record`
+was 1.25-1.30 ms/ballot against `VerifyBallots`' 0.99 for the same ballots before S10b-F's device-pass changes and
+1.18-1.20 after; at 5,000 ballots 1.057 before and 1.020 after, against 0.957 (the like-for-like direct path,
+`VerifyBallots` + `VerifyTally` + `VerifyDecryption`, is 0.961 there, so the record path costs 6 % more). The
+difference is what only the record path does: reading and checking every item's canonical encoding, decoding it
+into the domain, the setup's Verifications 1-4, Merkle digests and phase roots, and the per-batch barrier. Single
+threaded the two paths are equal (15.0 and 15.7 ms/ballot on 300 ballots, the latter including 9-11). `WriteRecord`
+costs about 0.13-0.19 ms/ballot and 47 MB on `smoke-record` (12.3 KB of record per ballot).
+
+### The serialization sub-benchmark
+
+`serialization` measures one representative encrypted ballot through the record's item codec
+(`RecordItemCodec`, S10b-16): `protobuf` is the canonical `RecordItem` bytes a record stores and a device sends,
+`json` its proto3 JSON line; decoding includes the canonicality check and the mapping to the domain ballot. The
+record keeps its `json`/`protobuf` keys, but before S10b-15 they measured the retired protobuf-net and
+System.Text.Json ballot serializers, so the figures of the two eras are not comparable (on `smoke`'s ballot:
+12,277 protobuf bytes and 16,945 JSON bytes now, against 12,489 and about 21,300 before; about 50,000-65,000
+encodes and 17,000-21,000 decodes per second in protobuf, 5,000-6,300 and 1,900-2,200 in JSON, against 42,000-44,000,
+36,000-39,000, 8,700-9,200 and 5,800 before: a decode now also runs the canonicality check, and the JSON path
+re-encodes and re-checks the canonical bytes). The sub-benchmark is outside every phase, so `compare` is unaffected.
 
 An exception is treated the same way. If encryption, verification, aggregation or decryption throws,
 the run still produces a record: the phases that completed keep their timings, `notes.error` carries

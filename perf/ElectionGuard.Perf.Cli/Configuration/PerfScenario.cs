@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace ElectionGuard.Perf.Cli.Configuration;
 
 /// <summary>
@@ -37,6 +39,27 @@ public sealed record PerfScenario
     /// hanging the run. An absent key means unlimited.
     /// </summary>
     public Dictionary<string, double> Budgets { get; init; } = new();
+
+    /// <summary>
+    /// How the election record is written when <see cref="PhaseSettings.WriteRecord"/> is on (design
+    /// §8.5). Null takes the defaults (one device, protobuf, a directory). Left out of the config
+    /// hash when null, so scenarios that write no record keep the hash they had before it existed.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RecordSettings? Record { get; init; }
+}
+
+/// <summary>The election record the <c>WriteRecord</c> phase writes (EGRF v2, design §5).</summary>
+public sealed record RecordSettings
+{
+    /// <summary>
+    /// Simulated voting devices; ballot i goes to device i mod deviceCount, each with its own
+    /// device section. Must be 1 under chaining (one device encrypts the whole chain).
+    /// </summary>
+    public int DeviceCount { get; init; } = 1;
+
+    /// <summary>"protobuf" (<c>.binpb</c> segments) or "json" (<c>.jsonl</c>, the proto3 JSON mapping).</summary>
+    public string Encoding { get; init; } = "protobuf";
 }
 
 public sealed record GuardianThreshold
@@ -55,6 +78,23 @@ public sealed record PhaseSettings
     public bool TallyVerification { get; init; } = true;
     public bool Decrypt { get; init; } = true;
     public bool Serialization { get; init; } = true;
+
+    /// <summary>
+    /// Writes the election as an EGRF record (design §8.5) to a temporary directory as the run goes:
+    /// the setup, each chunk appended to its device sections, the chains closed, voting and the
+    /// aggregate sealed, and after decryption the final phase. Left out of the config hash when
+    /// false, so a scenario without it keeps its earlier hash.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool WriteRecord { get; init; }
+
+    /// <summary>
+    /// Runs <c>ElectionRecordVerifier.VerifyAllAsync</c> (the full profile: Verifications 1-19 and
+    /// every record rule) over the written record, from disk. Requires <see cref="WriteRecord"/>.
+    /// Left out of the config hash when false.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool VerifyRecord { get; init; }
 }
 
 /// <summary>Command-line overrides. A null field leaves the scenario's value alone.</summary>
@@ -71,6 +111,8 @@ public sealed record ScenarioOverrides
     public bool? TallyVerification { get; init; }
     public bool? Decrypt { get; init; }
     public bool? Serialization { get; init; }
+    public bool? WriteRecord { get; init; }
+    public bool? VerifyRecord { get; init; }
 
     public PerfScenario Apply(PerfScenario scenario)
     {
@@ -92,6 +134,8 @@ public sealed record ScenarioOverrides
                 TallyVerification = TallyVerification ?? scenario.Phases.TallyVerification,
                 Decrypt = Decrypt ?? scenario.Phases.Decrypt,
                 Serialization = Serialization ?? scenario.Phases.Serialization,
+                WriteRecord = WriteRecord ?? scenario.Phases.WriteRecord,
+                VerifyRecord = VerifyRecord ?? scenario.Phases.VerifyRecord,
             },
         };
 

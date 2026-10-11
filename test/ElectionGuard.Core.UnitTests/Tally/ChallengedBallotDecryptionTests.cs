@@ -2,11 +2,13 @@ using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.Models;
 using ElectionGuard.Core.Serialization;
-using ElectionGuard.Core.Serialization.Converters;
+using ElectionGuard.Core.RecordFormat;
+using ElectionGuard.Core.RecordFormat.Mappers;
 using ElectionGuard.Core.Tally;
 using ElectionGuard.Core.Verify;
 using ElectionGuard.Core.Verify.Tally;
 using ElectionGuard.Testing.Common;
+using Google.Protobuf;
 using System.Numerics;
 using System.Text.Json;
 
@@ -205,11 +207,17 @@ public class ChallengedBallotDecryptionTests
 
         Assert.Equal(ContestDataEncryption.Nonce(selectionHash, 1, new BallotNonce(ballotNonceBytes)), contest.ContestData!.EncryptionNonce);
 
-        var options = new JsonSerializerOptions { Converters = { new IntegerModQJsonConverter(), new IntegerModPJsonConverter() } };
-        var published = JsonSerializer.Serialize(decrypted, options);
+        // As published: the record item (S10b) and its proto3 JSON line hold neither ξ_B nor ξ_B mod q.
+        var ballotIndex = new RecordBallotIndex();
+        ballotIndex.AddDevice(new DeviceKey(DeviceChainBallotKind.Encrypted, new VotingDeviceInformationHash(election.Record.ExtendedBaseHash, ballot.DeviceId)), [(ballot.Id, selectionHash)]);
+        byte[] item = DecryptionMapper.ToItem(decrypted, ballot, ballotIndex, election.Record.Manifest).ToByteArray();
+        var published = System.Text.Encoding.UTF8.GetString(RecordItemCodec.ToJson(item));
+        byte[] reduced = new IntegerModQ(ballotNonceBytes).ToByteArray();
+        Assert.Equal(-1, item.AsSpan().IndexOf(ballotNonceBytes));
+        Assert.Equal(-1, item.AsSpan().IndexOf(reduced));
         Assert.DoesNotContain(Convert.ToBase64String(ballotNonceBytes), published);
         Assert.DoesNotContain(Convert.ToHexString(ballotNonceBytes), published, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain(Convert.ToBase64String(new IntegerModQ(ballotNonceBytes).ToByteArray()), published);
+        Assert.DoesNotContain(Convert.ToBase64String(reduced), published);
     }
 
     /// <summary>

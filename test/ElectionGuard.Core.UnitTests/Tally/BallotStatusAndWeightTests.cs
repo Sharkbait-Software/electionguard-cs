@@ -1,12 +1,16 @@
 using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.Models;
+using ElectionGuard.Core.RecordFormat;
+using ElectionGuard.Core.RecordFormat.Mappers;
 using ElectionGuard.Core.Serialization;
 using ElectionGuard.Core.Tally;
 using ElectionGuard.Core.Verify;
 using ElectionGuard.Core.Verify.Ballot;
 using ElectionGuard.Core.Verify.Tally;
 using ElectionGuard.Testing.Common;
+using Google.Protobuf;
+using Pb = ElectionGuard.Core.RecordFormat.Protobuf;
 
 namespace ElectionGuard.Core.UnitTests.Tally;
 
@@ -312,52 +316,61 @@ public class BallotStatusAndWeightTests
 
     // --- Serialization ------------------------------------------------------------------------
 
+    // Through the record's item codec (S10b-16; the protobuf-net and JSON ballot serializers it
+    // replaces carried Unrecorded and weight 0 as written).
+
     public static TheoryData<BallotStatus, int> StatusesAndWeights => new()
     {
         { BallotStatus.Cast, 1 },
         { BallotStatus.Challenged, 1 },
         { BallotStatus.Spoiled, 1 },
-        { BallotStatus.Unrecorded, 1 },
         { BallotStatus.Cast, 3 },
-        { BallotStatus.Cast, 0 },
     };
 
     [Theory]
     [MemberData(nameof(StatusesAndWeights))]
-    public void Json_RoundTripsStatusAndWeight(BallotStatus status, int weight)
+    public void Item_RoundTripsStatusAndWeight_InBothRepresentations(BallotStatus status, int weight)
     {
-        var decoded = RoundTrip(new JsonEncryptedBallotSerializer(), status, weight);
+        var (ballot, manifest) = RecordedBallot(status, weight);
 
-        Assert.Equal(status, decoded.Status);
-        Assert.Equal(weight, decoded.Weight);
+        foreach (var decoded in new[]
+        {
+            RecordItemCodec.DecodeBallot(RecordItemCodec.EncodeBallot(ballot, manifest), manifest, "device-1"),
+            RecordItemCodec.DecodeBallotJson(RecordItemCodec.EncodeBallotJson(ballot, manifest), manifest, "device-1"),
+        })
+        {
+            Assert.Equal(status, decoded.Status);
+            Assert.Equal(weight, decoded.Weight);
+        }
     }
 
-    [Theory]
-    [MemberData(nameof(StatusesAndWeights))]
-    public void Protobuf_RoundTripsStatusAndWeight(BallotStatus status, int weight)
-    {
-        // 0 is protobuf's default and is left off the wire, so Unrecorded and weight 0 are also
-        // what a ballot without the field decodes to.
-        var decoded = RoundTrip(new ProtobufEncryptedBallotSerializer(), status, weight);
-
-        Assert.Equal(status, decoded.Status);
-        Assert.Equal(weight, decoded.Weight);
-    }
-
+    /// <summary>
+    /// A record item carries a recorded status and a weight of at least 1, so neither an unrecorded
+    /// ballot nor one of weight 0 can be encoded. An item that says so anyway: an UNSPECIFIED status is
+    /// not canonical (decode rule D2); weight 0 is no decode rule, so it decodes faithfully and is
+    /// rejected when tallied, as Verification 9 does ("9.structure").
+    /// </summary>
     [Fact]
-    public void Protobuf_ABallotWithoutStatusOrWeight_DecodesFaithfully_AndIsRejectedWhenTallied()
+    public void Item_WithoutStatusOrWeight_IsRefused_OrDecodesAndIsRejectedWhenTallied()
     {
-        // A decoder decodes; Verification 9 judges. Weight 0 and no status are both rejected there.
-        var tally = new EncryptedTally(Manifest());
+        var (unrecorded, manifest) = RecordedBallot(BallotStatus.Unrecorded, 1);
+        var (weightless, _) = RecordedBallot(BallotStatus.Cast, 0);
+        Assert.Throws<ArgumentException>(() => RecordItemCodec.EncodeBallot(unrecorded, manifest));
+        Assert.Throws<ArgumentException>(() => RecordItemCodec.EncodeBallot(weightless, manifest));
 
-        var noStatus = RoundTrip(new ProtobufEncryptedBallotSerializer(), BallotStatus.Unrecorded, 1);
-        var noWeight = RoundTrip(new ProtobufEncryptedBallotSerializer(), BallotStatus.Cast, 0);
+        var (cast, _) = RecordedBallot(BallotStatus.Cast, 1);
+        var noStatus = BallotMapper.ToItem(cast, manifest);
+        noStatus.EncryptedBallot.Status = Pb.BallotStatus.Unspecified;
+        Assert.Throws<NonCanonicalEncodingException>(() => RecordItemCodec.DecodeBallot(noStatus.ToByteArray(), manifest, "device-1"));
 
-        Assert.Equal("9.structure", Assert.Throws<VerificationFailedException>(() => tally.AddBallot(noStatus)).SubSection);
-        Assert.Equal("9.structure", Assert.Throws<VerificationFailedException>(() => tally.AddBallot(noWeight)).SubSection);
+        var noWeight = BallotMapper.ToItem(cast, manifest);
+        noWeight.EncryptedBallot.Weight = 0;
+        var decoded = RecordItemCodec.DecodeBallot(noWeight.ToByteArray(), manifest, "device-1");
+        Assert.Equal(0, decoded.Weight);
+        Assert.Equal("9.structure", Assert.Throws<VerificationFailedException>(() => new EncryptedTally(manifest).AddBallot(decoded)).SubSection);
     }
 
-    private static EncryptedBallot RoundTrip(IEncryptedBallotSerializer serializer, BallotStatus status, int weight)
+    private static (EncryptedBallot Ballot, Manifest Manifest) RecordedBallot(BallotStatus status, int weight)
     {
         // A real ballot, so that every value decodes strictly.
         var (manifest, manifestFile) = ElectionFixtureBuilder.CreateMinimalManifest();
@@ -365,12 +378,7 @@ public class BallotStatusAndWeightTests
         var record = ElectionFixtureBuilder.CreateEncryptionRecord(guardians, manifest, manifestFile);
         var deviceHash = new VotingDeviceInformationHash(record.ExtendedBaseHash, "device-1");
         var encrypted = ElectionFixtureBuilder.CreateEncryptedBallot(record.EncryptionRecord, "device-1", deviceHash, ElectionFixtureBuilder.CreateBallot(manifest), status: BallotStatus.Unrecorded);
-        var ballot = TallyDecryptionElection.WithWeight(encrypted, weight, status);
-
-        using var stream = new MemoryStream();
-        serializer.Serialize(stream, ballot);
-        stream.Position = 0;
-        return serializer.Deserialize(stream)!;
+        return (TallyDecryptionElection.WithWeight(encrypted, weight, status), manifest);
     }
 
     // --- G20: Verification 9 compares exactly the manifest's options --------------------------

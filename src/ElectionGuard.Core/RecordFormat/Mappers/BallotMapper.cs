@@ -190,6 +190,7 @@ internal static class BallotMapper
             SelectionEncryptionIdentifierHash = SelectionEncryptionIdentifierHash.FromCanonicalBytes(RequireArray(item.HI, 32, "H_I")),
             BallotStyleId = item.BallotStyle,
             Status = (BallotStatus)(int)item.Status,
+            // D4 refuses a uint32 of 2^31 or more before the mapper runs; the clamp only guards a caller that skipped the check.
             Weight = (int)Math.Min(item.Weight, int.MaxValue),
             EncryptionTimestamp = item.EncryptedAt is { } time ? Time(time) : null,
             Contests = item.Contests.Select(x => Contest(x, manifest, id, context)).ToList(),
@@ -214,6 +215,7 @@ internal static class BallotMapper
             SelectionEncryptionIdentifierHash = SelectionEncryptionIdentifierHash.FromCanonicalBytes(RequireArray(item.HI, 32, "H_I")),
             BallotStyleId = item.BallotStyle,
             Status = BallotStatus.Cast,
+            // D4 refuses a uint32 of 2^31 or more before the mapper runs; the clamp only guards a caller that skipped the check.
             Weight = (int)Math.Min(item.Weight, int.MaxValue),
             EncryptionTimestamp = item.EncryptedAt is { } time ? Time(time) : null,
             Contests = contests,

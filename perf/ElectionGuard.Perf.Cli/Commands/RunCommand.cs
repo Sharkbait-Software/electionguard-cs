@@ -62,6 +62,18 @@ public sealed class RunCommand : Command<RunCommand.Settings>
         [Description("Skip the serialization sub-benchmark.")]
         public bool NoSerialization { get; set; }
 
+        [CommandOption("--write-record")]
+        [Description("Write the election as an EGRF record (the WriteRecord phase).")]
+        public bool WriteRecord { get; set; }
+
+        [CommandOption("--verify-record")]
+        [Description("Write the election as an EGRF record and verify it with VerifyAllAsync (the WriteRecord and VerifyRecord phases).")]
+        public bool VerifyRecord { get; set; }
+
+        [CommandOption("--no-record")]
+        [Description("Skip the WriteRecord and VerifyRecord phases.")]
+        public bool NoRecord { get; set; }
+
         [CommandOption("--window-bits <N>")]
         [TypeConverter(typeof(WholeNumberConverter))]
         [Description("Bits per window for the Note 3.5 precomputed power tables. 0 disables them and measures the table-free Montgomery path.")]
@@ -129,6 +141,8 @@ public sealed class RunCommand : Command<RunCommand.Settings>
             TallyVerification = settings.NoTallyVerification ? false : null,
             Decrypt = settings.NoDecrypt ? false : null,
             Serialization = settings.NoSerialization ? false : null,
+            WriteRecord = settings.NoRecord ? false : settings.WriteRecord || settings.VerifyRecord ? true : null,
+            VerifyRecord = settings.NoRecord ? false : settings.VerifyRecord ? true : null,
         }.Apply(ScenarioLoader.Load(scenarioPath));
 
         var manifestPath = ManifestLoader.ResolvePath(root, scenario);
@@ -208,7 +222,7 @@ public sealed class RunCommand : Command<RunCommand.Settings>
             Derived = derived,
             Memory = outcome.Memory,
             Serialization = scenario.Phases.Serialization && outcome.RepresentativeBallot is not null
-                ? SerializationBenchmark.Measure(outcome.RepresentativeBallot)
+                ? SerializationBenchmark.Measure(outcome.RepresentativeBallot, manifest)
                 : null,
             Correctness = outcome.Correctness,
             Notes = outcome.Notes,

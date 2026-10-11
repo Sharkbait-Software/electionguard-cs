@@ -106,9 +106,15 @@ internal static class RecordJson
     /// </summary>
     private static void RejectAliasesAndOneofs(JsonElement element, MessageDescriptor descriptor, ushort recordFormatMinor)
     {
-        if (descriptor.FullName == Google.Protobuf.WellKnownTypes.Timestamp.Descriptor.FullName || element.ValueKind != JsonValueKind.Object)
+        if (descriptor.FullName == Google.Protobuf.WellKnownTypes.Timestamp.Descriptor.FullName)
         {
-            // A Timestamp is an RFC 3339 string; anything else of the wrong kind is the parser's to refuse.
+            RequireTimestampForm(element, descriptor);
+            return;
+        }
+
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            // Anything else of the wrong kind is the parser's to refuse.
             return;
         }
 
@@ -213,6 +219,52 @@ internal static class RecordJson
                 }
 
                 break;
+        }
+    }
+
+    /// <summary>
+    /// Design §5.5's one written form for a <c>Timestamp</c> (S10b-F review round 2, extending the
+    /// provisional rule (d)): the form the mapping's formatter writes for a value D3 allows, UTC with
+    /// a <c>Z</c>, no fraction for a whole second, else exactly three digits
+    /// (<c>2026-10-08T12:34:56Z</c>, <c>2026-10-08T12:34:56.789Z</c>). The mapping lets a parser take
+    /// an offset and 0-9 fraction digits, so several strings name one instant; a string that does
+    /// not parse, or names a value outside D3, is left to the parser and the canonicality check. A
+    /// value that is not a string (a number, an object) is <c>R.encoding</c> here. Null is a default.
+    /// </summary>
+    private static void RequireTimestampForm(JsonElement element, MessageDescriptor descriptor)
+    {
+        if (element.ValueKind == JsonValueKind.Null)
+        {
+            return;
+        }
+
+        if (element.ValueKind != JsonValueKind.String)
+        {
+            throw RecordCodes.Failure(RecordCodes.Encoding, $"A {descriptor.Name} is an RFC 3339 string, not a JSON {element.ValueKind} (design §5.5).");
+        }
+
+        string text = element.GetString()!;
+        Google.Protobuf.WellKnownTypes.Timestamp parsed;
+        try
+        {
+            parsed = Parser.Parse<Google.Protobuf.WellKnownTypes.Timestamp>(JsonSerializer.Serialize(text));
+        }
+        catch (Exception ex) when (ex is InvalidProtocolBufferException or InvalidJsonException or FormatException or ArgumentException)
+        {
+            // Not a timestamp at all: the parser refuses it when the line is parsed.
+            return;
+        }
+
+        if (parsed.Nanos % 1_000_000 != 0 || parsed.Seconds is < 0 or > 253402300799)
+        {
+            // Outside D3: the canonicality check names the rule.
+            return;
+        }
+
+        string written = JsonSerializer.Deserialize<string>(Formatter.Format(parsed))!;
+        if (written != text)
+        {
+            throw RecordCodes.Failure(RecordCodes.Encoding, $"\"{text}\" is not in the one written form of a {descriptor.Name}, \"{written}\" (design §5.5).");
         }
     }
 

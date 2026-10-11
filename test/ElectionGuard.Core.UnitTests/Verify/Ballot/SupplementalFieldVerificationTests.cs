@@ -1076,20 +1076,23 @@ public class SupplementalFieldVerificationTests
         Assert.Equal("7", exception.SubSection);
     }
 
+    private static ChallengeResponsePair[] WithNullFirst(ChallengeResponsePair[] proofs) => [null!, .. proofs[1..]];
+
     /// <summary>
-    /// Each JSON edit, and the decoded proof list it must produce: the JSON decoder keeps a null
-    /// list or a null entry as is (protobuf cannot encode either).
+    /// Each edit, and the proof list it leaves null or with a null entry. No record item can carry
+    /// either (a missing list decodes empty, which fails the proof count), so the ballot is built in
+    /// memory; until S10b-16 the retired JSON ballot decoder could produce both.
     /// </summary>
-    private static readonly Dictionary<string, (Action<System.Text.Json.Nodes.JsonNode> Edit, Func<EncryptedContest, ChallengeResponsePair[]?> Decoded)> NullProofEdits = new()
+    private static readonly Dictionary<string, (Func<EncryptedContest, EncryptedContest> Edit, Func<EncryptedContest, ChallengeResponsePair[]?> Decoded)> NullProofEdits = new()
     {
-        ["undervote difference proof entry"] = (c => c["undervoteDifferenceProof"]![0] = null, c => c.UndervoteDifferenceProof),
-        ["null-vote proof entry"] = (c => c["nullVoteProof"]![0] = null, c => c.NullVoteProof),
-        ["contest proof entry"] = (c => c["proofs"]![0] = null, c => c.Proofs),
-        ["contest proof list"] = (c => c["proofs"] = null, c => c.Proofs),
-        ["selection proof entry"] = (c => c["choices"]![0]!["proof"]![0] = null, c => c.Choices[0].Proofs),
-        ["selection proof list"] = (c => c["choices"]![0]!["proof"] = null, c => c.Choices[0].Proofs),
-        ["field proof entry"] = (c => c["supplementalFields"]![0]!["proof"]![0] = null, c => c.SupplementalFields[0].Proofs),
-        ["field proof list"] = (c => c["supplementalFields"]![0]!["proof"] = null, c => c.SupplementalFields[0].Proofs),
+        ["undervote difference proof entry"] = (c => c with { UndervoteDifferenceProof = WithNullFirst(c.UndervoteDifferenceProof!) }, c => c.UndervoteDifferenceProof),
+        ["null-vote proof entry"] = (c => c with { NullVoteProof = WithNullFirst(c.NullVoteProof!) }, c => c.NullVoteProof),
+        ["contest proof entry"] = (c => c with { Proofs = WithNullFirst(c.Proofs) }, c => c.Proofs),
+        ["contest proof list"] = (c => c with { Proofs = null! }, c => c.Proofs),
+        ["selection proof entry"] = (c => c with { Choices = [c.Choices[0] with { Proofs = WithNullFirst(c.Choices[0].Proofs) }, .. c.Choices.Skip(1)] }, c => c.Choices[0].Proofs),
+        ["selection proof list"] = (c => c with { Choices = [c.Choices[0] with { Proofs = null! }, .. c.Choices.Skip(1)] }, c => c.Choices[0].Proofs),
+        ["field proof entry"] = (c => c with { SupplementalFields = [c.SupplementalFields[0] with { Proofs = WithNullFirst(c.SupplementalFields[0].Proofs) }, .. c.SupplementalFields.Skip(1)] }, c => c.SupplementalFields[0].Proofs),
+        ["field proof list"] = (c => c with { SupplementalFields = [c.SupplementalFields[0] with { Proofs = null! }, .. c.SupplementalFields.Skip(1)] }, c => c.SupplementalFields[0].Proofs),
     };
 
     public static TheoryData<string, int> NullProofCases() => new()
@@ -1106,23 +1109,18 @@ public class SupplementalFieldVerificationTests
 
     [Theory]
     [MemberData(nameof(NullProofCases))]
-    public void JsonBallotWithANullProofListOrEntry_FailsLikeAProofListOfTheWrongLength(string fault, int verification)
+    public void BallotWithANullProofListOrEntry_FailsLikeAProofListOfTheWrongLength(string fault, int verification)
     {
         // S5 review round 2: these once threw NullReferenceException from Verification 6 or 7. A
         // malformed proof list is reported as "6"/"7", like one of the wrong length: after 6.A/7.A
         // (proofs are read by Verifications 6 and 7 only, so this is not a ballot-structure failure).
         var election = Build(selectionLimit: 2);
         var ballot = Encrypt(election, 1, 0);
-        var serializer = new Core.Serialization.JsonEncryptedBallotSerializer();
-        using var encoded = new MemoryStream();
-        serializer.Serialize(encoded, ballot);
-        var document = System.Text.Json.Nodes.JsonNode.Parse(encoded.ToArray())!;
         var (edit, decodedList) = NullProofEdits[fault];
-        edit(document["contests"]![0]!);
 
-        var decoded = serializer.Deserialize(new MemoryStream(Encoding.UTF8.GetBytes(document.ToJsonString())))!;
+        var decoded = WithContest(ballot, edit);
         var list = decodedList(decoded.Contests[0]);
-        Assert.True(list is null || list.Any(x => x is null),$"The decoder did not keep the null ({fault}).");
+        Assert.True(list is null || list.Any(x => x is null), $"The edit did not leave a null ({fault}).");
 
         var exception = Assert.Throws<VerificationFailedException>(() =>
         {

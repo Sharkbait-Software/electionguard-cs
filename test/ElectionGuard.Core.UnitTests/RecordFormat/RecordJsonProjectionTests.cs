@@ -123,7 +123,46 @@ public class RecordJsonProjectionTests
         { "not JSON", "{\"recordHeader\":", RecordCodes.Encoding },
         { "a byte order mark", "\uFEFF{\"recordHeader\":{\"formatMajor\":2}}", RecordCodes.Encoding },
         { "a lone surrogate escape", "{\"deviceHeader\":{\"deviceId\":\"\\uD800\"}}", RecordCodes.Encoding },
+        // Base64 that decodes, but not in the one form (design §5.5): the length stays a multiple of
+        // 4, so only the round-trip comparison refuses these (S10a's whitespace and unused-bit cases).
+        { "base64 with spaces inside it", "{\"deviceHeader\":{\"deviceId\":\"d\",\"hDi\":\"" + new string('A', 20) + "    " + new string('A', 23) + "=\"}}", RecordCodes.Encoding },
+        { "base64 with an unused bit set", "{\"deviceHeader\":{\"deviceId\":\"d\",\"hDi\":\"" + new string('A', 42) + "B=\"}}", RecordCodes.Encoding },
+        // A timestamp the mapping's parser takes, but not in the one form its formatter writes
+        // (design §5.5, S10b-F review round 2; S10a's JSON timestamp rows): each names
+        // 2026-11-03T20:00:00.005Z (or 20:00:00Z), which D3 allows, so only the one-form rule refuses it.
+        { "a timestamp with an offset", ClosedAt("\"2026-11-03T22:00:00.005+02:00\""), RecordCodes.Encoding },
+        { "a timestamp with a zero offset", ClosedAt("\"2026-11-03T20:00:00.005+00:00\""), RecordCodes.Encoding },
+        { "a timestamp with four fraction digits", ClosedAt("\"2026-11-03T20:00:00.0050Z\""), RecordCodes.Encoding },
+        { "a timestamp with six fraction digits", ClosedAt("\"2026-11-03T20:00:00.005000Z\""), RecordCodes.Encoding },
+        { "a timestamp with a zero fraction", ClosedAt("\"2026-11-03T20:00:00.000Z\""), RecordCodes.Encoding },
+        { "a timestamp with a lowercase z", ClosedAt("\"2026-11-03T20:00:00.005z\""), RecordCodes.Encoding },
+        { "a timestamp with a space for the T", ClosedAt("\"2026-11-03 20:00:00.005Z\""), RecordCodes.Encoding },
+        { "a timestamp without a zone", ClosedAt("\"2026-11-03T20:00:00.005\""), RecordCodes.Encoding },
+        { "a timestamp that is no date", ClosedAt("\"2026-13-03T20:00:00.005Z\""), RecordCodes.Encoding },
+        { "a timestamp as a number", ClosedAt("1793736000"), RecordCodes.Encoding },
+        { "a timestamp as an object", ClosedAt("{\"seconds\":\"1793736000\"}"), RecordCodes.Encoding },
     };
+
+    private static string ClosedAt(string value) => "{\"deviceClose\":{\"ballotCount\":\"1\",\"closedAt\":" + value + "}}";
+
+    /// <summary>The control for the timestamp rows above: the formatter's two forms parse, to the instant they name.</summary>
+    [Theory]
+    [InlineData("2026-11-03T20:00:00.005Z", 5_000_000)]
+    [InlineData("2026-11-03T20:00:00Z", 0)]
+    public void JsonLine_WithATimestampInItsOneForm_Parses(string text, int nanos)
+    {
+        var item = Pb.RecordItem.Parser.ParseFrom(RecordJson.ParseItem(Encoding.UTF8.GetBytes(ClosedAt($"\"{text}\"")), 0));
+        Assert.Equal((1_793_736_000L, nanos), (item.DeviceClose.ClosedAt.Seconds, item.DeviceClose.ClosedAt.Nanos));
+        Assert.Contains($"\"closedAt\":\"{text}\"", Encoding.UTF8.GetString(RecordJson.FormatItem(item.ToByteArray(), CanonicalProtobuf.Check(item.ToByteArray(), 0))));
+    }
+
+    /// <summary>The control for the base64 rows above: the same line in the one form parses.</summary>
+    [Fact]
+    public void JsonLine_WithCanonicalBase64_Parses()
+    {
+        byte[] item = RecordJson.ParseItem(Encoding.UTF8.GetBytes("{\"deviceHeader\":{\"deviceId\":\"d\",\"hDi\":\"" + new string('A', 43) + "=\"}}"), 0);
+        Assert.Equal(new byte[32], Pb.RecordItem.Parser.ParseFrom(item).DeviceHeader.HDi.ToByteArray());
+    }
 
     [Theory]
     [MemberData(nameof(JsonNegatives))]

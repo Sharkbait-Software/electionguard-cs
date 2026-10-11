@@ -132,6 +132,27 @@ public static class ScenarioLoader
                 $"Scenario '{scenario.Id}' has an invalid guardian threshold {scenario.Guardians.K}-of-{scenario.Guardians.N}.");
         }
 
+        if (scenario.Phases.VerifyRecord && !scenario.Phases.WriteRecord)
+        {
+            throw new ScenarioConfigurationException(
+                $"Scenario '{scenario.Id}' turns on verifyRecord without writeRecord; there is no record to verify.");
+        }
+
+        if (scenario.Record is { } record)
+        {
+            if (record.DeviceCount < 1)
+            {
+                throw new ScenarioConfigurationException(
+                    $"Scenario '{scenario.Id}' has record.deviceCount {record.DeviceCount}; it must be at least 1.");
+            }
+
+            if (record.Encoding is not ("protobuf" or "json"))
+            {
+                throw new ScenarioConfigurationException(
+                    $"Scenario '{scenario.Id}' has record.encoding '{record.Encoding}'; use \"protobuf\" or \"json\".");
+            }
+        }
+
         foreach (var (phase, minutes) in scenario.Budgets)
         {
             if (!PhaseNames.All.Contains(phase))

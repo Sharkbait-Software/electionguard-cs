@@ -101,7 +101,12 @@ public sealed record VerifyAllOptions
     /// <summary>The most findings reported; the first ones in the report's order are kept.</summary>
     public int MaxFindings { get; init; } = 10_000;
 
-    /// <summary>The bound, in bytes, of the items read ahead and held while their batch is verified (at least one item).</summary>
+    /// <summary>
+    /// The bound, in bytes, of one batch of device items (at least one item): the items read and held
+    /// while their batch is verified. When the next batch is read while the workers verify the current
+    /// one (in parallel, with no <see cref="CheckpointPath"/> and without <see cref="StopOnFirstFailure"/>),
+    /// two batches are held, up to twice this bound; otherwise one.
+    /// </summary>
     public long BatchBytes { get; init; } = 64L << 20;
 
     public SignaturePolicy SignaturePolicy { get; init; } = SignaturePolicy.Report;

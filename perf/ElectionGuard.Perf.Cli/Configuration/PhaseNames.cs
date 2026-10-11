@@ -30,5 +30,19 @@ public static class PhaseNames
     /// </summary>
     public const string VerifyDecryption = "VerifyDecryption";
 
-    public static readonly IReadOnlyList<string> All = [EncryptBallots, VerifyBallots, Tally, VerifyTally, DecryptTally, VerifyDecryption];
+    /// <summary>
+    /// Writing the election record (EGRF v2, design §8.5): the setup, every ballot appended to its
+    /// device section chunk by chunk, the chain closes, the voting and aggregate seals and, after a
+    /// decryption, the final phase. Present only when the scenario's <c>writeRecord</c> is on.
+    /// </summary>
+    public const string WriteRecord = "WriteRecord";
+
+    /// <summary>
+    /// <c>ElectionRecordVerifier.VerifyAllAsync</c> over the written record, from disk (the full
+    /// profile: Verifications 1-19 and every record-level rule). Present only when the scenario's
+    /// <c>verifyRecord</c> is on.
+    /// </summary>
+    public const string VerifyRecord = "VerifyRecord";
+
+    public static readonly IReadOnlyList<string> All = [EncryptBallots, VerifyBallots, Tally, VerifyTally, DecryptTally, VerifyDecryption, WriteRecord, VerifyRecord];
 }

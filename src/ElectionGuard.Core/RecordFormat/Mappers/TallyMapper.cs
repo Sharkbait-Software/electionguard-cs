@@ -21,11 +21,11 @@ internal static class TallyMapper
         ArgumentNullException.ThrowIfNull(tally);
 
         // Every cast ballot weighs at least 1, so a total below the count is not the tally's: it is
-        // one restored from the JSON record format, which does not publish it (0). Writing it would
+        // one restored without its header (EncryptedTally.Restore alone: 0). Writing it would
         // publish a false header value (#17).
         if (tally.TotalCastWeight < tally.BallotsCast)
         {
-            throw new ArgumentException($"The tally's total cast weight ({tally.TotalCastWeight}) is below its {tally.BallotsCast} cast ballots, so it is unknown (a tally restored from the JSON record format does not carry it); aggregate the ballots again to write the record.", nameof(tally));
+            throw new ArgumentException($"The tally's total cast weight ({tally.TotalCastWeight}) is below its {tally.BallotsCast} cast ballots, so it is unknown (a tally restored without its header does not carry it); aggregate the ballots again to write the record.", nameof(tally));
         }
 
         var manifest = tally.Manifest;

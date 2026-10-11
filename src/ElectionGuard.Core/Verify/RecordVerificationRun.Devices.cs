@@ -7,6 +7,7 @@ using ElectionGuard.Core.Tally;
 using ElectionGuard.Core.Verify.Ballot;
 using ElectionGuard.Core.Verify.PreEncryption;
 using ElectionGuard.Core.Verify.Tally;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using Pb = ElectionGuard.Core.RecordFormat.Protobuf;
 
@@ -29,7 +30,9 @@ namespace ElectionGuard.Core.Verify;
 /// <item>the sequencer again: the leaves into each section's frontier, and at a device's close its
 /// root and its attestations.</item>
 /// </list>
-/// A checkpoint can be taken between batches: nothing is in flight then.
+/// A checkpoint can be taken between batches: nothing is in flight then. When no checkpoint can be
+/// taken and the run cannot stop early, the next batch is read while the workers verify this one
+/// (the read is the only stage-1 input that does not depend on the previous batch's results).
 /// </summary>
 internal sealed partial class RecordVerificationRun
 {
@@ -287,33 +290,98 @@ internal sealed partial class RecordVerificationRun
 
         int startDevice = resumed?.DeviceIndex ?? 0;
         long startOrdinal = resumed?.NextOrdinal ?? 0;
-        int maxItems = Math.Max(64, 4 * Parallelism);
-        var batch = new List<Event>();
-        long bytes = 0;
-        await foreach (var e in ReadDevicesAsync(startDevice, startOrdinal, resumedDevice).ConfigureAwait(false))
+
+        // Batches of 16 items per worker (S10b-F): each batch ends at a barrier (stage 3 runs in
+        // record order once every worker is done), so a batch of a few items per worker idled most
+        // workers at its tail; at 16 the tail is a small part of the batch. BatchBytes still bounds
+        // the memory in flight.
+        int maxItems = Math.Max(64, 16 * Parallelism);
+
+        // While the workers verify one batch, the next is read (frames, canonicality checks) when
+        // nothing depends on the read stopping at a batch boundary: not when a checkpoint may be
+        // written after the batch (it must record a position with nothing read beyond it) and not
+        // when the run may stop after it (a failure the read-ahead found would be reported).
+        bool readAhead = !Checkpointing && !_options.StopOnFirstFailure && _options.MaxDegreeOfParallelism != 1;
+        var events = ReadDevicesAsync(startDevice, startOrdinal, resumedDevice).GetAsyncEnumerator(_ct);
+        try
         {
-            batch.Add(e);
-            bytes += e.Raw.Bytes.Length;
-            if (batch.Count >= maxItems || bytes >= _options.BatchBytes)
+            var (batch, more) = await NextBatchAsync(events, maxItems).ConfigureAwait(false);
+            while (batch.Count > 0)
             {
-                await ProcessBatchAsync(batch).ConfigureAwait(false);
-                batch.Clear();
-                bytes = 0;
+                await SequenceBatchAsync(batch).ConfigureAwait(false);
+                List<Event> next = [];
+                bool nextMore = false;
+                if (readAhead && more)
+                {
+                    var work = Task.Run(() => WorkBatch(batch), _ct);
+                    try
+                    {
+                        (next, nextMore) = await NextBatchAsync(events, maxItems).ConfigureAwait(false);
+                    }
+                    catch (Exception readFailure)
+                    {
+                        // The workers are never left running past this point, and the read's failure
+                        // is not lost to theirs: both are thrown when both failed, unless one of them
+                        // is only the cancellation the other caused or shares.
+                        await AwaitWorkersAfterReadFailureAsync(work, readFailure).ConfigureAwait(false);
+                        throw;
+                    }
+
+                    await work.ConfigureAwait(false);
+                }
+                else
+                {
+                    WorkBatch(batch);
+                }
+
+                await FinishBatchAsync(batch).ConfigureAwait(false);
                 if (Stop())
                 {
                     return;
                 }
+
+                if (!(readAhead && more) && more)
+                {
+                    (next, nextMore) = await NextBatchAsync(events, maxItems).ConfigureAwait(false);
+                }
+
+                (batch, more) = (next, nextMore);
             }
         }
-
-        if (batch.Count > 0)
+        finally
         {
-            await ProcessBatchAsync(batch).ConfigureAwait(false);
+            await events.DisposeAsync().ConfigureAwait(false);
         }
 
         if (!IsBallotCorrectness && !Stop())
         {
             await DrainCursorsAsync(digestOnly: false).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Waits for the workers after the read-ahead failed with <paramref name="readFailure"/>. Returns
+    /// when they finished, or failed only by cancellation (the caller then rethrows the read's
+    /// failure); throws the workers' failure alone when the read was only cancelled, and both, as an
+    /// <see cref="AggregateException"/> with the read's first, when each failed on its own.
+    /// </summary>
+    internal static async Task AwaitWorkersAfterReadFailureAsync(Task work, Exception readFailure)
+    {
+        try
+        {
+            await work.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception workFailure)
+        {
+            if (readFailure is OperationCanceledException)
+            {
+                throw;
+            }
+
+            throw new AggregateException(readFailure, workFailure);
         }
     }
 
@@ -496,9 +564,31 @@ internal sealed partial class RecordVerificationRun
         return context;
     }
 
-    private async ValueTask ProcessBatchAsync(List<Event> batch)
+    /// <summary>
+    /// The next batch of the device pass: items until <paramref name="maxItems"/> or
+    /// <see cref="VerifyAllOptions.BatchBytes"/> (at least one), and whether the stream may hold more.
+    /// </summary>
+    private async ValueTask<(List<Event> Batch, bool More)> NextBatchAsync(IAsyncEnumerator<Event> events, int maxItems)
     {
-        // 1. The sequencer, in record order.
+        var batch = new List<Event>();
+        long bytes = 0;
+        while (await events.MoveNextAsync().ConfigureAwait(false))
+        {
+            var e = events.Current;
+            batch.Add(e);
+            bytes += e.Raw.Bytes.Length;
+            if (batch.Count >= maxItems || bytes >= _options.BatchBytes)
+            {
+                return (batch, true);
+            }
+        }
+
+        return (batch, false);
+    }
+
+    /// <summary>Stage 1, the sequencer, in record order (see the class remarks).</summary>
+    private async ValueTask SequenceBatchAsync(List<Event> batch)
+    {
         foreach (var e in batch)
         {
             if (e.IsHeader)
@@ -525,7 +615,11 @@ internal sealed partial class RecordVerificationRun
             }
         }
 
-        // 2. The workers: leaf hashes and per-item verifications.
+    }
+
+    /// <summary>Stage 2, the workers: leaf hashes and per-item verifications.</summary>
+    private void WorkBatch(List<Event> batch)
+    {
         var options = new ParallelOptions { MaxDegreeOfParallelism = _options.MaxDegreeOfParallelism, CancellationToken = _ct };
         if (_options.MaxDegreeOfParallelism == 1)
         {
@@ -536,10 +630,16 @@ internal sealed partial class RecordVerificationRun
         }
         else
         {
-            Parallel.ForEach(batch, options, Worker);
+            // One item at a time: an item is a whole ballot's verification (tens of milliseconds of
+            // one core), so the default range partitioning stranded workers behind a range of slow
+            // items (S10b-F; the direct path measured the same, ScenarioRunner.VerifyChunk).
+            Parallel.ForEach(Partitioner.Create(batch, EnumerablePartitionerOptions.NoBuffering), options, Worker);
         }
+    }
 
-        // 3. The sequencer again: leaves into the section frontiers, and each closed device's root.
+    /// <summary>Stage 3, the sequencer again: leaves into the section frontiers, each closed device's root, the checkpoint.</summary>
+    private async ValueTask FinishBatchAsync(List<Event> batch)
+    {
         foreach (var e in batch)
         {
             e.Device.Frontier.AppendLeafHash(e.Leaf);

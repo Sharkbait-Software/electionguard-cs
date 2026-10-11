@@ -1320,6 +1320,11 @@ Each `.jsonl` file's first line is the `SegmentHeader` and every following line 
     included, that is not plain decimal: an optional `-`, no leading zero, no fraction or exponent (the mapping lets
     parsers take exponent notation). Before this rule the two reference readers disagreed on whether such a record
     is acceptable: URL-safe and unpadded `idB` values and a `"01"` count were refused by C# and taken by Python.
+    Extended in S10b-F review round 2 (same status, listed for sign-off) to a timestamp: a JSON string in the form
+    the mapping's formatter writes for a value D3 allows, `Z` with no fraction for a whole second, else exactly three
+    digits. The mapping lets a parser take an offset and 0-9 fraction digits, so `2026-11-03T22:00:00.005+02:00`,
+    `...20:00:00.0050Z` and `...20:00:00.005Z` named one instant; both reference readers took all three. S10a's
+    ballot JSON had pinned the one form, and its rows return as `RecordJsonProjectionTests.JsonNegatives`.
 
   The leniencies that remain, `null` for a default and a number given as a string (or a string as a number), cannot
   change what is hashed, because the reader hashes the canonical protobuf encoding of what it parsed. Neither could
@@ -1510,7 +1515,7 @@ F = 200, C = 50, W = 32 and X = 10^5.
 
 | Verification | State across items | Bound | Example |
 |---|---|---|---|
-| Pipeline | in-flight items | the reader's byte bound per open section (default 64 MiB), plus one decoded item per worker (≤ 64 MiB each, §5.2; ~13 KB for a ballot) | 32 × 4 × 13 KB ≈ 2 MB for regular ballots; worst case W × 64 MiB with 64 MiB items |
+| Pipeline | in-flight items | the reader's byte bound per open section (default 64 MiB), plus one decoded item per worker (≤ 64 MiB each, §5.2; ~13 KB for a ballot) | 32 × 16 × 13 KB ≈ 7 MB for regular ballots, twice that with the batch read ahead (S10b-F); a batch's raw bytes are bounded by `BatchBytes` (64 MiB), so the worst case is two batches plus W × 64 MiB decoded with 64 MiB items |
 | Digests | a frontier per open stream; D section roots | ≤ 64 × 32 B per stream + ~80 B × D | < 1 MB |
 | V1-V4 | manifest bytes, parsed manifest, guardians | O(manifest) + n·k·512 B | < 10 MB |
 | **V5.A** | keyed 64-bit id_B prefixes in sorted runs | **8 B × N**, in RAM up to the budget (default 256 MiB, about 32M ids), spilled beyond it. | 80 MB, or ≤ 256 MiB plus disk at 10^8 |
@@ -1573,6 +1578,13 @@ recommended for official verification, and why the section seal is offered for r
   `TallyDecryptionVerification` and the pipeline, so `--parallelism 1` stays a true single-threaded baseline.
 - **Throughput.** It is CPU-bound at about 1,000 ballots/s on 32 logical cores (measured). SHA-256 of a 13 KB item
   (about 8 µs), the canonicality check and the decode are under 0.1 % of a ballot's verify cost.
+- **As measured (S10b-F, egperf `smoke-record`, 32 logical cores).** With batches of 4 items per worker and the
+  default range partitioning, the workers' stage took 1,091 ms for 1,000 ballots against the direct path's 990 ms
+  for Verifications 5-8 (each batch ends at a barrier, and a worker holding a range of slow items strands the rest).
+  Batches of 16 items per worker, one item at a time (`EnumerablePartitionerOptions.NoBuffering`) and reading the
+  next batch while the workers run (not when a checkpoint or an early stop may follow) bring the run to within 6 %
+  of the direct path at 5,000 ballots (1.020 against 0.961 ms/ballot for V5-V11) and about 20 % at 1,000, where the
+  fixed costs (V1-V4, V10, the last batch's tail) weigh more. Single threaded the two are equal.
 
 ### 6.8 Resumable and incremental verification
 
@@ -2014,7 +2026,7 @@ public static class ElectionRecordVerifier
 
 - **One stream of device items, single join cursors.** The device pass reads the device sections in canonical order
   as one stream and cuts it into batches (`VerifyAllOptions.BatchBytes`, default 64 MiB, at least one item, and at
-  most max(64, 4 × workers) items). Each batch runs a sequencer (framing, canonicality, kind, the `DeviceChainWalker`,
+  most max(64, 4 × workers) items; S10b-F: 16 × workers, and the next batch is read while the workers verify the current one unless a checkpoint or an early stop may follow). Each batch runs a sequencer (framing, canonicality, kind, the `DeviceChainWalker`,
   5.A's keyed prefix, prefix checkpoints, and the join items at each ballot's locator), then the workers in parallel
   (leaf hash, decode, per-item verifications with the joined decryption or release, the V9 fold into pooled
   recounts), then the sequencer again (leaves into the section frontier; at a device's close its root and its
@@ -2214,6 +2226,22 @@ public static class ElectionRecordVerifier
 - **`ElectionGuard.Testing.Cli`** emits records in both encodings; `test/data/*` fixtures are regenerated in the new
   format.
 
+**As built (S10b-F).** egperf: `writeRecord` and `verifyRecord` as above, configured by an optional `record` object
+(`deviceCount`, `encoding`; the carrier is always a directory), left out of the config hash while off so existing
+scenarios keep their hash; a record that ends at its aggregated phase (no decryption) is verified with the
+`GuardianPreliminary` profile, since `Full` requires a final record; the notes carry the record's phase, last root,
+bytes and bytes per ballot; peak working set is the run's (one figure per run). The serialization sub-benchmark
+measures the public `RecordItemCodec` (canonical item and proto3 JSON line). The new scenario `smoke-record` runs
+both phases. Console: the record is written to a protobuf directory phase by phase; the writer is stopped after the
+aggregate seal and resumed (`ResumeAsync`) for the final phase, as an administrator's process would be while the
+guardians work; the guardians verify the aggregated prefix with `ExpectedAggregatedRoot` and decrypt the
+`VerifiedAggregate`; the challenged ballots opened are the report's `BallotsToOpen`; the final record is verified
+(`Full`), converted to a JSON `.zip` with `ConvertAsync` (equal roots asserted) and verified again. The status-flip
+demonstration is not built (the R.root finding it would show is pinned by the golden negative records).
+`ElectionGuard.Testing.Cli` and `test/data/*` never used the retired serializers (they hold manifests and plaintext
+ballots only), so neither changed; emitting encrypted records from Testing.Cli was left out (a scope decision,
+S10b-F log).
+
 ---
 
 ## 9. Implementation plan
@@ -2249,10 +2277,10 @@ updates the tracker.
 | **S10b-12** Python reference reader and golden records. **Done (S10b-E).** | `test/egrf/egrf_ref.py` (standard library; Method A with W6's unknown-field rule, D1-D6, delimited segments with the frame ceiling, the §5.3.1 layout rules, Merkle, phase roots, `.zip` via `zipfile` with the local-header check), the three complete golden records in all representations, the schema-table diff against `test/egrf/schema.json` | CI runs `python test/egrf/egrf_ref.py --check`: every golden root reproduced and every negative vector's verdict matched |
 | **S10b-13** TypeScript reader. **Deferred (NQ-3: "Defer").** | `test/egrf/js/`: protobuf-es generated code (binary and the proto3 JSON mapping; not protobufjs, §5.5), Method B (with `readUnknownFields: false` for records of its own minor), D1-D6, `sizeDelimitedDecodeStream` with `readMaxBytes` set, Merkle roots | Reproduces the golden roots and negative verdicts in CI |
 | **S10b-14** `ElectionGuard.Verifier`. **Done (S10b-E).** | New project; `egrecord verify | digest | convert | diff | prove | show` over the Core API | CLI tests on the golden records: exit codes, report output, `digest` equal across representations |
-| **S10b-15** Migration of the consumers | `Program.cs` as in §8.5; egperf `writeRecord`/`verifyRecord` and the serialization phase on the item codec; `ElectionGuard.Testing.Cli` emits records; `test/data/*` regenerated | Console pipeline passes; perf smoke run and `compare --repeat 5` against a HEAD worktree baseline (allocation of the Google.Protobuf parse path checked here) |
-| **S10b-16** Retire superseded code | Remove `ProtobufEncryptedBallotSerializer` and its `Protobuf*` DTO tree, the protobuf-net package, `IEncryptedBallotSerializer`, the JSON ballot serializer, `JsonElectionRecordSerializer` (**replaced** by the proto3 JSON projection; its per-object API has no use once records are read and written as a whole, and `egrecord show` prints any item as JSON), `JsonPreEncryptedBallotSerializer`, `JsonDeviceChainRecordSerializer`, `StrictBase64` and `EncryptedBallotShape` (folded into the mappers). `ManifestSerializer` stays as the manifest parser; its writer stays only as an authoring helper whose output has no canonical status. | No remaining reference; the full suite green; CLAUDE.md's Serialization bullet rewritten |
+| **S10b-15** Migration of the consumers. **Done (S10b-F),** as built in §8.5 (Testing.Cli unchanged: it used no retired serializer). | `Program.cs` as in §8.5; egperf `writeRecord`/`verifyRecord` and the serialization phase on the item codec; `ElectionGuard.Testing.Cli` emits records; `test/data/*` regenerated | Console pipeline passes; perf smoke run and `compare --repeat 5` against a HEAD worktree baseline (allocation of the Google.Protobuf parse path checked here) |
+| **S10b-16** Retire superseded code. **Done (S10b-F);** the public `RecordItemCodec` replaces `IEncryptedBallotSerializer` for one ballot at a time. | Remove `ProtobufEncryptedBallotSerializer` and its `Protobuf*` DTO tree, the protobuf-net package, `IEncryptedBallotSerializer`, the JSON ballot serializer, `JsonElectionRecordSerializer` (**replaced** by the proto3 JSON projection; its per-object API has no use once records are read and written as a whole, and `egrecord show` prints any item as JSON), `JsonPreEncryptedBallotSerializer`, `JsonDeviceChainRecordSerializer`, `StrictBase64` and `EncryptedBallotShape` (folded into the mappers). `ManifestSerializer` stays as the manifest parser; its writer stays only as an authoring helper whose output has no canonical status. | No remaining reference; the full suite green; CLAUDE.md's Serialization bullet rewritten |
 | **S10b-17** Live tailing (may be deferred) | `FollowLiveRecord`, prefix-checkpoint checking | Tail a record while a writer appends; a checkpoint mismatch is caught |
-| **S10b-18** Documentation and publication | CLAUDE.md "Record" architecture bullet; a formal-spec skeleton generated from §4 and the `.proto`; register `width`, `width_multiple` and `omittable` in protobuf's global extension registry and replace the draft numbers 50001-50003 (a user action: it is a pull request to the protobuf project) | Review only; the lint test pins the registered numbers |
+| **S10b-18** Documentation and publication. **Done (S10b-F)** (`docs/spec-compliance/egrf-v2-spec.md`, draft), except the registration of 50001-50003, a user action. | CLAUDE.md "Record" architecture bullet; a formal-spec skeleton generated from §4 and the `.proto`; register `width`, `width_multiple` and `omittable` in protobuf's global extension registry and replace the draft numbers 50001-50003 (a user action: it is a pull request to the protobuf project) | Review only; the lint test pins the registered numbers |
 | **S10b-19** Guardians open uncast pre-encrypted ballots (NQ-5; after S10b, needs S10b-9) | `TallyGuardian.DecryptBallotNonce` (and the administrator's combine) also opens a pre-encrypted uncast item taken from a sealed record the guardian has verified (`VerifiedAggregate`, §6.9): it decrypts C_ξB as §3.6.7 does, and the administrator publishes the release (ξ_B for a compact item; the ξ_{i,j,k} by eq. 121 for a full one) only if it regenerates the item. It refuses any id_B, H_I or C_ξB,0 that matches a cast or spoiled ballot of that record (Q31; "Refuse spoiled too"). No issued list and no once-only state (Q35, Q36: guardians decrypt only after the record is sealed). | A never-returned ballot opened by k guardians gives a release that passes V16 and V18 (17.A and 19.A-D hold by construction on the compact item, §3.2); an id_B, H_I or C_ξB,0 that matches a spoiled ballot of the sealed record is refused as one matching a cast ballot is (decided 2026-10-09, "Refuse spoiled too"; the regular-ballot view does it since S10b-B); an id_B cast in the record is refused; a ballot not in the sealed record is refused; a wrong m_i is detected and nothing is published |
 
 **No legacy importer.** v1's S10b-9 planned importers for today's JSON ballots, device chains and pre-encrypted

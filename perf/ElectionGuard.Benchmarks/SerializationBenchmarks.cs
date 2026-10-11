@@ -1,52 +1,41 @@
 using BenchmarkDotNet.Attributes;
 using ElectionGuard.Core.BallotEncryption;
-using ElectionGuard.Core.Serialization;
+using ElectionGuard.Core.Models;
+using ElectionGuard.Core.RecordFormat;
 
 namespace ElectionGuard.Benchmarks;
 
+/// <summary>
+/// One encrypted ballot through the election record's item codec (<see cref="RecordItemCodec"/>):
+/// the canonical protobuf item and its proto3 JSON line. Decoding includes the canonicality check.
+/// </summary>
 [MemoryDiagnoser]
 public class SerializationBenchmarks
 {
     private EncryptedBallot _ballot = null!;
-    private JsonEncryptedBallotSerializer _json = null!;
-    private ProtobufEncryptedBallotSerializer _protobuf = null!;
+    private Manifest _manifest = null!;
     private byte[] _jsonBytes = null!;
     private byte[] _protobufBytes = null!;
 
     [GlobalSetup]
     public void Setup()
     {
-        _ballot = BenchmarkElection.Create().EncryptBallot(0);
-        _json = new JsonEncryptedBallotSerializer();
-        _protobuf = new ProtobufEncryptedBallotSerializer();
-        _jsonBytes = Encode(_json);
-        _protobufBytes = Encode(_protobuf);
+        var election = BenchmarkElection.Create();
+        _ballot = election.EncryptBallot(0);
+        _manifest = election.Manifest;
+        _jsonBytes = RecordItemCodec.EncodeBallotJson(_ballot, _manifest);
+        _protobufBytes = RecordItemCodec.EncodeBallot(_ballot, _manifest);
     }
 
     [Benchmark(Baseline = true)]
-    public byte[] JsonSerialize() => Encode(_json);
+    public byte[] JsonSerialize() => RecordItemCodec.EncodeBallotJson(_ballot, _manifest);
 
     [Benchmark]
-    public EncryptedBallot? JsonDeserialize()
-    {
-        using var source = new MemoryStream(_jsonBytes);
-        return _json.Deserialize(source);
-    }
+    public EncryptedBallot JsonDeserialize() => RecordItemCodec.DecodeBallotJson(_jsonBytes, _manifest, BenchmarkElection.DeviceId);
 
     [Benchmark]
-    public byte[] ProtobufSerialize() => Encode(_protobuf);
+    public byte[] ProtobufSerialize() => RecordItemCodec.EncodeBallot(_ballot, _manifest);
 
     [Benchmark]
-    public EncryptedBallot? ProtobufDeserialize()
-    {
-        using var source = new MemoryStream(_protobufBytes);
-        return _protobuf.Deserialize(source);
-    }
-
-    private byte[] Encode(IEncryptedBallotSerializer serializer)
-    {
-        using var destination = new MemoryStream();
-        serializer.Serialize(destination, _ballot);
-        return destination.ToArray();
-    }
+    public EncryptedBallot ProtobufDeserialize() => RecordItemCodec.DecodeBallot(_protobufBytes, _manifest, BenchmarkElection.DeviceId);
 }

@@ -51,9 +51,8 @@ public class EncryptionRecord
     /// <summary>
     /// The election manifest, parsed from <see cref="ManifestFile"/> and validated
     /// (<see cref="Manifest.Validate"/>) when the file was set; every index-bearing hash computed
-    /// against this record trusts its contest and option indices. It is derived, so
-    /// <see cref="Serialization.JsonElectionRecordSerializer"/> does not write it (the record carries
-    /// the file) and refuses a document that has it.
+    /// against this record trusts its contest and option indices. It is derived, so the election
+    /// record does not carry it (its setup stores the file's bytes as given, design §4.6).
     /// </summary>
     public Manifest Manifest => _manifest;
 

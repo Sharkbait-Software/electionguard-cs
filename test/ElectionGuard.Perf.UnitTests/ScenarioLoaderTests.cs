@@ -96,6 +96,10 @@ public class ScenarioLoaderTests : IDisposable
     [InlineData("""{ "id": "x", "manifest": "m.json", "ballotCount": 10, "guardians": { "n": 2, "k": 3 } }""")]
     [InlineData("""{ "id": "", "manifest": "m.json", "ballotCount": 10 }""")]
     [InlineData("""{ "id": "x", "manifest": "", "ballotCount": 10 }""")]
+    [InlineData("""{ "id": "x", "manifest": "m.json", "ballotCount": 10, "phases": { "verifyRecord": true } }""")]
+    [InlineData("""{ "id": "x", "manifest": "m.json", "ballotCount": 10, "phases": { "writeRecord": true }, "record": { "deviceCount": 0 } }""")]
+    [InlineData("""{ "id": "x", "manifest": "m.json", "ballotCount": 10, "phases": { "writeRecord": true }, "record": { "encoding": "xml" } }""")]
+    [InlineData("""{ "id": "x", "manifest": "m.json", "ballotCount": 10, "record": { "carrier": "zip" } }""")]
     public void Load_RejectsInvalidConfiguration(string json)
     {
         var path = WriteScenario("bad.json", json);
@@ -234,6 +238,29 @@ public class ScenarioLoaderTests : IDisposable
 
         Assert.NotEqual(ScenarioLoader.ComputeConfigHash(baseline), ScenarioLoader.ComputeConfigHash(changed));
         Assert.NotEqual(ScenarioLoader.ComputeConfigHash(baseline), ScenarioLoader.ComputeConfigHash(phaseChanged));
+    }
+
+    /// <summary>
+    /// S10b-15: the record phases and settings are left out of the hash while off, so a scenario
+    /// written before they existed (smoke, every committed one but smoke-record) keeps its hash and
+    /// stays comparable with its earlier records; turning them on changes it.
+    /// </summary>
+    [Fact]
+    public void ComputeConfigHash_IgnoresTheRecordPhasesWhileTheyAreOff()
+    {
+        var plain = ScenarioLoader.Load(WriteScenario("plain.json",
+            """{ "id": "x", "manifest": "m.json", "ballotCount": 10, "phases": { "decrypt": true } }"""));
+        var off = ScenarioLoader.Load(WriteScenario("off.json",
+            """{ "id": "x", "manifest": "m.json", "ballotCount": 10, "phases": { "decrypt": true, "writeRecord": false, "verifyRecord": false } }"""));
+        var on = ScenarioLoader.Load(WriteScenario("on.json",
+            """{ "id": "x", "manifest": "m.json", "ballotCount": 10, "phases": { "decrypt": true, "writeRecord": true } }"""));
+        var settings = ScenarioLoader.Load(WriteScenario("settings.json",
+            """{ "id": "x", "manifest": "m.json", "ballotCount": 10, "phases": { "decrypt": true, "writeRecord": true }, "record": { "deviceCount": 4 } }"""));
+
+        Assert.Equal(ScenarioLoader.ComputeConfigHash(plain), ScenarioLoader.ComputeConfigHash(off));
+        Assert.DoesNotContain("record", System.Text.Json.JsonSerializer.Serialize(plain, PerfJson.LineOptions), StringComparison.OrdinalIgnoreCase);
+        Assert.NotEqual(ScenarioLoader.ComputeConfigHash(plain), ScenarioLoader.ComputeConfigHash(on));
+        Assert.NotEqual(ScenarioLoader.ComputeConfigHash(on), ScenarioLoader.ComputeConfigHash(settings));
     }
 
     [Fact]

@@ -369,6 +369,14 @@ User answers (2026-10-04):
   - (c) A broken JSON-lines segment-header line is R.container.
   - (d) JSON values must use the one standard form (padded standard base64, plain decimal integers), else R.encoding.
   - (e) An undeclared section kind written as a JSON enum name is R.encoding.
+- **S10b-F questions, answered 2026-10-11:**
+  - **Ballot bytes in the record:** "Store device bytes as-is". This is a CHANGE, applied in S10b-G. The device-section
+    writer gains a bytes-level append: it decodes the item for its checks (canonicality, status, device,
+    `BallotStructure`, chaining field), then stores the canonical bytes exactly as received. So a ballot sent without
+    the optional `ballot_ref` keeps none, and a device's own section root matches the record's.
+  - **JSON timestamps:** "Yes, one form". Kept as built: rule (d) also covers timestamps, which must be in the form
+    the proto3 JSON formatter writes.
+  - **Testing.Cli encrypted records:** "Leave out for now".
 - **Cadence:** "Keep going". After each stage: commit, update this tracker, push, start the next stage. Stop only
   for a new spec contradiction or question.
 - **S7 design and API choices** (2026-10-06; implementer choices, none changes bytes the spec fixes; the first two are
@@ -1162,7 +1170,8 @@ User answers (2026-10-04):
 | S10b-B EGRF core | S10b-3, S10b-4, S10b-5; R-3 change (near misses ignored); spoiled-ballot refusal in the guardian's view | S10b-A | done | f1ecff5 |
 | S10b-C EGRF carriers and JSON | S10b-6, S10b-7, S10b-10; V14 labeling (decision 2026-10-10, "14.structure for mismatches") | S10b-B | done | 3441580 |
 | S10b-D EGRF verification | S10b-8, S10b-9, S10b-11; JSONL final line feed optional and NQ-7 (decisions 2026-10-10) | S10b-C | done | abeea59 |
-| S10b-E EGRF reference reader and CLI | S10b-12, S10b-14; vendor sections removed and NQ-9 `DeviceKind` closed (decisions 2026-10-10, "S10b-D questions") | S10b-D | done | see next commit |
+| S10b-E EGRF reference reader and CLI | S10b-12, S10b-14; vendor sections removed and NQ-9 `DeviceKind` closed (decisions 2026-10-10, "S10b-D questions") | S10b-D | done | 60ad76f |
+| S10b-F EGRF migration, retirement, throughput, documentation | S10b-15, S10b-16, S10b-18; record-path parallel throughput | S10b-E | done | see next commit |
 | S10b-3 Canonicality checker | Method A and B (unknown fields per NQ-1 / W6), D1-D6, segment header, signed statements; first golden and negative vectors | S10b-A | done (S10b-B) | |
 | S10b-4 Domain mappers | one mapper per item; `RawZp`/`RawZq` range attribution; uncast split/join with the compact form (NQ-2); `RecordSetup`; reflection completeness test | S10b-3 | done (S10b-B) | |
 | S10b-5 Merkle, TOC, phase roots | RFC 9162 frontier and proofs; TOC; phase roots | S10b-A | done (S10b-B) | |
@@ -1175,10 +1184,10 @@ User answers (2026-10-04):
 | S10b-12 Python reference reader and golden records | `test/egrf/egrf_ref.py` (Method A with W6), golden records, schema-table diff against `test/egrf/schema.json` | S10b-6, S10b-7 | done (S10b-E) | |
 | S10b-13 TypeScript reader | protobuf-es conformance reader | — | deferred (NQ-3: "Defer") | |
 | S10b-14 `ElectionGuard.Verifier` | `egrecord` CLI | S10b-9, S10b-10 | done (S10b-E) | |
-| S10b-15 Migration of the consumers | console, egperf `writeRecord`/`verifyRecord`, Testing.Cli, `test/data/*` | S10b-9, S10b-10 | todo | |
-| S10b-16 Retire superseded code | old DTO tree, protobuf-net, JSON ballot/record serializers | S10b-15 | todo | |
+| S10b-15 Migration of the consumers | console, egperf `writeRecord`/`verifyRecord`, Testing.Cli, `test/data/*` | S10b-9, S10b-10 | done (S10b-F; Testing.Cli and `test/data/*` used no retired serializer and are unchanged) | |
+| S10b-16 Retire superseded code | old DTO tree, protobuf-net, JSON ballot/record serializers | S10b-15 | done (S10b-F; `RecordItemCodec` is the public one-ballot codec) | |
 | S10b-17 Live tailing | may be deferred | S10b-9 | todo | |
-| S10b-18 Documentation and publication | CLAUDE.md record bullet, formal-spec skeleton, registered option numbers (user action); NQ-7 answered 2026-10-10 ("Bump the major version") and applied in S10b-D; NQ-9, NQ-10 and NQ-11 answered 2026-10-10 (NQ-9 applied in S10b-E), NQ-8 moot (vendor sections removed, S10b-E) | S10b-16 | todo | |
+| S10b-18 Documentation and publication | CLAUDE.md record bullet, formal-spec skeleton, registered option numbers (user action); NQ-7 answered 2026-10-10 ("Bump the major version") and applied in S10b-D; NQ-9, NQ-10 and NQ-11 answered 2026-10-10 (NQ-9 applied in S10b-E), NQ-8 moot (vendor sections removed, S10b-E) | S10b-16 | done (S10b-F: CLAUDE.md bullets 7-8, `docs/spec-compliance/egrf-v2-spec.md` draft with generated schema tables, README); the registration of 50001-50003 is a user action, open | |
 | S10b-19 Guardians open uncast pre-encrypted ballots (NQ-5) | `TallyGuardian.DecryptBallotNonce` opens an uncast pre-encrypted item from a sealed, verified record; refuses an id_B, H_I or C_ξB,0 matching a cast or spoiled ballot of it (Q31; "Refuse spoiled too", 2026-10-09; the view holds both since S10b-B); no issued list, no once-only state | S10b-9 | todo (after S10b) | |
 
 ## Pinned-value inventory
@@ -1414,7 +1423,347 @@ written with `EGRF_WRITE_RECORDS=missing`: `version-jsonl-toc-numeric-section-ty
 entries whose codes rest on an implementation-chosen reader rule: the five round-2 TOC entries and eight new ones. No
 entry's codes, roots or completeness changed. The EGRF vectors did not change.
 
+S10b-F review round 1: nothing moved; only additions. `test/egrf/records/` gained two negatives, written with
+`EGRF_WRITE_RECORDS=missing`: `encoding-jsonl-spaced-base64` and `encoding-jsonl-base64-unused-bit` (both
+`R.encoding`, `basis` the JSON one-form rule awaiting sign-off). `index.json` gained their two entries (42 lines) and
+no other entry changed; the Python cross-check ran and agreed.
+
+S10b-F review round 2: nothing moved; only an addition. `test/egrf/records/` gained the negative
+`encoding-jsonl-timestamp-offset` (the unchained JSON golden with its first `encryptedAt` rewritten to the same
+instant at `+02:00`; `R.encoding`, `basis` the timestamp extension of the JSON one-form rule awaiting sign-off),
+written with `EGRF_WRITE_RECORDS=missing`; `index.json` gained its entry and no other entry changed. `egrf_ref.py`'s
+`_timestamp` follows the rule, and the Python cross-check agreed on every record and seeded mutation.
+
 ## Log
+
+### 2026-10-10 — S10b-F review round 2 (spec appendix comments and widths, JSON timestamp one form, record-path structure and proof-count tests, read-ahead failure test, docs)
+Worktree changes only; nothing committed. No hash input, KAT vector, `test/data` fixture, committed golden record or
+EGRF vector changed; one golden negative record was added (see the pinned-value inventory). Nothing was re-pinned.
+Seven findings, each judged; all fixed (none was wrong), one with a behaviour change (the timestamp one form).
+- **Appendix cut multi-line comments (spec, minor), fixed.** `test/egrf/spec_tables.py`'s `proto_comments` now
+  joins the comment-only lines that continue a field's trailing comment (at or beyond its `//` column, no blank line
+  between); a comment at a smaller column (a oneof group label such as `// digest leaves`, a leading comment) is not
+  joined. Regenerated: `ManifestFile.media_type`, `DeviceHeader.chaining_mode`, `SignedStatement.statement`,
+  `UncastNonceRelease.ballot_nonce` and `TocEntry.critical` now carry their whole notes; no other row changed. New
+  `EgrfSchemaLintTests.SpecAppendix_IsWhatSpecTablesWrites` (a `PythonFact`) runs `--check`, closing the S10b-F
+  carry-over that no test ran it.
+- **"k·w" width notation (spec, minor), fixed.** The appendix writes `multiple of w`, and a legend above A.1 (inside
+  the generated block) says a number is the exact length, "multiple of w" a positive whole multiple whose count the
+  field's note sets (D1, §4.3), "omittable" that the field may be left out.
+- **Weight clamp claim (spec, minor), fixed.** A uint32 of 2^31 or more is D4 (`CanonicalProtobuf`), and
+  `DecodeBallot` checks before the mapper runs, so the mapper's `Math.Min(item.Weight, int.MaxValue)` never changes
+  an item it accepts. The `RecordItemCodec` summary now names one divergence (`ballot_ref`) and says why a weight
+  cannot diverge; the round-1 entry is marked corrected; the mapper's clamp stays as a guard, with a comment. New row
+  `NonCanonicalItem_IsRefused("a weight of 2^31")` asserts D4. The `ballot_ref` user question is re-issued without the
+  weight clause. (The tally's `cast_weight` clamp to `long.MaxValue` is likewise never reached, uint64 being D4 from
+  2^63; its statements say nothing false, so they stay.)
+- **Missing C_ξB on the record path unpinned (spec, minor), fixed.** `RecordItemCodecTests.MissingList_...` gains
+  four rows: an item without `encrypted_ballot_nonce`, and without a contest's `contest_data` where b_Λ > 0, each
+  canonical, decoded (the nonce as null) and reported as 6.structure by V6 and 9.structure by the tally. The S10b-F
+  entry's "covered by RecordMapperTests" sentence is corrected (round trips only). Stale comments that said only a
+  JSON document can produce a null list or a missing nonce are corrected in `BallotStructure`, V6 and V7.
+- **JSON timestamp spellings (tests, major): option (a), the one-form rule extended, implemented and listed for
+  sign-off.** S10a pinned one JSON form (seven refused spellings and a number); S10b-16 deleted those tests, and the
+  record's JSON projection skipped `Timestamp` values, so Google.Protobuf's parser took an offset and 0-9 fraction
+  digits (several lines for one item; `egrf_ref.py` took them too). `RecordJson.RequireTimestampForm` now requires a
+  JSON string in the form the formatter writes for a value D3 allows (`Z`, no fraction for a whole second, else
+  exactly three digits), by parsing it and comparing with the formatter's output; a value outside D3 is left to D3,
+  a string that is no timestamp to the parser, and a number or object is `R.encoding`. `egrf_ref.py`'s `_timestamp`
+  applies the same rule. No hash can change (the canonical bytes are re-encoded either way). Tests: 11
+  `JsonNegatives` rows (offset, zero offset, four and six fraction digits, `.000`, lowercase `z`, a space for `T`, no
+  zone, no date, a number, an object), the control `JsonLine_WithATimestampInItsOneForm_Parses` (both forms, read and
+  written back), and the golden negative `encoding-jsonl-timestamp-offset`. Mutation check: with the comparison
+  disabled exactly the five rows the parser accepts (offset, zero offset, four and six digits, `.000`) failed; the
+  file was restored. Design §5.5's one-form bullet, the spec draft's §5.5 and §11 (d), and CLAUDE.md item 7 say so.
+  Chosen over (b), accepting the mapping's spellings, because rule (d) exists so that every reader takes the same
+  lines: as with base64, the mapping has parsers accept more than its writers emit (here offsets other than `Z`,
+  and fractions of any length), and this profile narrows a reader to the writer's form, so that no reader's date
+  parser decides what a line means.
+- **"6"/"7" said to be in-memory only (tests, minor), fixed.** New `RecordItemCodecTests.ProofOfTheWrongCount_IsCanonical_AndFailsTheProofCount`:
+  over canonical items, a range proof one pair short → V6 "6", a limit proof one pair short → V7 "7", the undervote
+  difference proof and the null-vote proof left out while declared → V7 "7". The `MissingProof_IsD1` docstring, the
+  tracker sentences and the V7 comment are corrected ("in memory only" now applies only to null lists and entries);
+  CLAUDE.md item 5 says how a record item reaches each code.
+- **Read-ahead failure untested (tests, minor), fixed.** `RecordVerifierBrokenSectionTests.AReadAheadReadFailure_IsThrownAsItself`
+  wraps the reader so that the second device section throws an `IOException` after three items, runs with 4 workers
+  and one item per batch, and asserts the run ends in that `IOException` itself (not a cancellation or an
+  `AggregateException`) after at least one finished batch, so the failing read is a read-ahead. It would also pass on
+  code that only awaited the workers and rethrew, since its workers succeed. The branches the whole run cannot reach (the workers failing too) are pinned directly: `AwaitWorkersAfterReadFailureAsync` is now
+  internal, and `AwaitWorkersAfterReadFailure_KeepsTheReadsFailure` covers all four (workers succeed, workers
+  cancelled, both failed → `AggregateException` read first, read cancelled → the workers' failure alone). The
+  cancellation test's docstring now says "between batches of a read-ahead run". Also fixed: `using Pb =ElectionGuard...`
+  (a missing space from round 1) in `RecordVerificationRun.Devices.cs`.
+
+Gate (after all changes; nothing broke, so before and after re-pinning are the same run):
+1. Build: "0 Warning(s)", "0 Error(s)".
+2. Smoke: "EncryptBallots 238 0.238 165.6 0.1656 12/3/2 1,000", "VerifyBallots 970 0.970 12.2 0.0122 0/0/0 1,000",
+   Tally 0.008, VerifyTally 0.004, DecryptTally 0.034, VerifyDecryption 0.008, "correctness passed" (round 1: 0.251
+   and 0.966; no hot path changed).
+3. Console: "Guardians' preliminary verification of the aggregated record: passed, phase Aggregated, 5 ballot items
+   on 1 device(s)", "Full verification of the protobuf record: passed, phase Final", "Full verification of the JSON
+   copy (c:\temp\eg\data\1\record-json.zip): passed, phase Final" (its timestamps pass the new rule), "Challenged
+   ballot 0-challenged, contest 0: 0-0=1, 0-1=0, contest data \"Write-in: Ada Lovelace\".", "Tally, contest 0: 0-0=3,
+   0-1=0, overvotes=0, null-votes=0, undervotes=0, undervote-difference=0, write-ins=0.", "Done.", then the expected
+   ReadKey exception; tally.json 0-0 voteCount 3, 0-1 voteCount 0.
+4. Tests: Verifier 53/53, Perf 243/243, Core "Passed: 2431, Skipped: 0, Total: 2431" (2406 + 25: the D4 weight row,
+   four missing-field rows, four proof-count rows, 11 timestamp rows and 2 controls, the read-failure test, the
+   helper test, the appendix check).
+
+Perf: the one hot-path-adjacent change is `RequireTimestampForm`, on the JSON read path only (a parse, a format and
+two small strings per timestamp). `smoke-record` once: `VerifyRecord` 1.167 ms/ballot (protobuf; S10b-F 1.176-1.199),
+`WriteRecord` 0.184, the codec's JSON 5,881 ser/s and 2,076 deser/s (the two S10b-F runs in
+`perf/results/sethpc2023.jsonl`: 1,922 and 2,177 deser/s), protobuf 20,132 deser/s; within run-to-run variance.
+
+Carry-over: the `ballot_ref` user question (round 1, weight clause removed); the provisional rule (d) now covers
+timestamps and awaits the same sign-off. Everything else as in the S10b-F entry, less "spec_tables.py --check is
+not run by any test".
+
+### 2026-10-10 — S10b-F review round 1 (base64 negatives, missing-proof test, read-ahead under broken sections, nonce byte search, docs)
+Worktree changes only; nothing committed. No hash input, KAT vector, `test/data` fixture, committed golden record or
+EGRF vector changed; two golden negative records were added (see the pinned-value inventory). Nothing was re-pinned.
+- **Base64 whitespace and unused bit (major), fixed.** S10a's `WithWhitespace` and `ZeroHashWithUnusedBitSet` had no
+  record counterpart: the URL-safe and unpadded negatives fail before `RecordJson.IsCanonicalBase64`'s round-trip
+  comparison. Added to `RecordJsonProjectionTests.JsonNegatives`: an `hDi` with four spaces inside (48 characters, a
+  multiple of 4) and one ending `...AB=`, both `R.encoding`, with a control (`JsonLine_WithCanonicalBase64_Parses`).
+  Mutation check: with the comparison removed (`TryFromBase64String` alone) both rows fail and the rest pass. The two
+  golden negatives above cross-check `egrf_ref.py`'s `_b64`.
+- **`RecordItemCodec` "byte for byte" (minor), docstring fixed, behaviour kept.** The summary claimed a ballot is
+  appended byte for byte what the device sent. It is not: the writer appends a domain ballot, and an item without
+  `ballot_ref` decodes with `Id` = hex(id_B), which `ToItem` writes back (a weight above `int.MaxValue` is clamped
+  too; wrong, corrected in review round 2: such a weight is D4 and never reaches the mapper). The summary now says the
+  record holds the library's re-encoding and names both exceptions (round 2: the one exception); CLAUDE.md item 8
+  says so. New `RecordItemCodecTests.ItemWithoutBallotRef_DecodesWithTheHexOfIdB_AndReEncodesWithIt` pins the
+  current behaviour. The alternative (omit `ballot_ref` when `Id` equals hex(id_B), making decode-then-encode the
+  identity for such an item, at the cost of dropping a `ballot_ref` a device set to that hex) changes the bytes the
+  writer emits, so it is a question for the user, not taken here.
+- **`MissingList_...` accepting either outcome (two findings, minor), fixed.** The limit-proof and range-proof rows
+  always took the D1 branch (both fields carry `width_multiple` and are not omittable) and the docstring said the
+  opposite. Split: `MissingList_DecodesEmpty_AndIsReportedByItsVerification` (contests, fields; asserts the item is
+  canonical, expects exactly 6.structure / 9.structure) and `MissingProof_IsD1_AndTheCodecRefusesIt` (asserts D1 and
+  `NonCanonicalEncodingException` unconditionally). The S10b-F entry's coverage note is corrected: on the record path a
+  missing proof is D1; the "6"/"7" proof counts are pinned in memory only (wrong, corrected in review round 2: they
+  are reachable from canonical items, and now pinned there).
+- **Read-ahead untested under broken sections (two findings, major/minor), fixed.** Every broken-section test pinned
+  `MaxDegreeOfParallelism = 1`, which turns the read-ahead off. `RecordVerifierBrokenSectionTests` now runs each
+  broken-section case (torn close, broken before a challenged ballot, broken pre-encrypting section, both stray tests)
+  under four batchings, {1, 1 byte}, {1, default}, {4, 1 byte}, {4, default}, and asserts the canonical reports are
+  equal (`VerifyAtEveryBatchingAsync`); {4, 1 byte} is the one that reads ahead. A BallotCorrectness run over the
+  broken device (a cast ballot read whole before the break and a ballot of the intact device) does the same.
+  `ElectionRecordVerifierFailureTests.VerifyAsync` takes any other parallelism as {n, 1 byte}; the regular and
+  pre-encrypted failure theories and the four robustness comparisons (5.A over torn sections included) add a run with
+  4. All pass: no race showed, as the reviewers' reading of the shared state predicted.
+- **Read failure lost to the workers' (minor), fixed.** `RecordVerificationRun.Devices.cs`: when the read-ahead
+  fails, the workers are awaited (`AwaitWorkersAfterReadFailureAsync`) and the read's exception is rethrown; if the
+  workers failed on their own too, both are thrown as an `AggregateException` (read first); a cancellation on either
+  side never wraps the other's failure, so a cancelled run still ends in `OperationCanceledException`
+  (`ACancelledReadAheadRun_ThrowsTheCancellation`, parallel with one item per batch).
+- **`BatchBytes` doc (minor), fixed.** `VerifyAllOptions.BatchBytes` now says two batches, up to twice the bound,
+  are held while the next is read ahead (parallel, no checkpoint, no early stop), one otherwise. Design §8.3's
+  pipeline row already said "twice that ... two batches"; no change there. The bound itself is unchanged, so the
+  measured figures stand.
+- **Nonce byte search (minor), fixed.** `RecordItemCodecTests.AssertNoNonce`, called from the regular round trip
+  (all four statuses) and the cast pre-encrypted round trip, requires every option and field nonce to be present on
+  the domain ballot, then absent from the item bytes and its base64 absent from the JSON line. CLAUDE.md item 7 now
+  names both checks (`NoSchemaField_CanHoldASecret` is a check of names only).
+
+Gate (after all changes; nothing broke, so before and after re-pinning are the same run):
+1. Build: "0 Warning(s)", "0 Error(s)".
+2. Smoke: "EncryptBallots 251 0.251 165.6 0.1656 12/3/2 1,000", "VerifyBallots 966 0.966 12.2 0.0122 0/0/0 1,000",
+   Tally 0.008, VerifyTally 0.004, DecryptTally 0.034, VerifyDecryption 0.008, "correctness passed" (S10b-F: 0.242 and
+   0.975; within run-to-run variance, and no hot path changed: the device-pass edit is on its error path only).
+3. Console: "Guardians' preliminary verification of the aggregated record: passed, phase Aggregated, 5 ballot items
+   on 1 device(s)", "Full verification of the protobuf record: passed, phase Final", "Full verification of the JSON
+   copy (c:\temp\eg\data\1\record-json.zip): passed, phase Final", "Tally, contest 0: 0-0=3, 0-1=0, overvotes=0,
+   null-votes=0, undervotes=0, undervote-difference=0, write-ins=0.", "Done.", then the expected ReadKey exception;
+   tally.json 0-0 voteCount 3, 0-1 voteCount 0.
+4. Tests: Verifier 53/53, Perf 243/243, Core "Passed: 2406, Skipped: 0, Total: 2406" (2401 + 5: two base64 rows, the
+   base64 control, the ballot_ref test, the cancellation test; the missing-proof rows moved to their own theory).
+
+Carry-over: the user question on `ballot_ref` (above). Everything else as in the S10b-F entry.
+
+### 2026-10-10 — S10b-F (consumers on the record format, superseded serializers retired, record-path throughput, docs and the formal-spec draft)
+Worktree changes only; nothing committed (S10b-E is staged; these changes are unstaged). No hash input, KAT vector,
+`test/data` fixture, committed golden record or vector changed, and no pinned expectation broke, so nothing was
+re-pinned (Pinned-value inventory unchanged).
+
+Per G-ID:
+- **S10b-15, console** (`src/ElectionGuard.InMemory.Console/Program.cs`). The pipeline writes the election as a
+  protobuf directory record at `C:\temp\eg\data\1\record` through `ElectionRecordWriter`'s phases: setup (read back:
+  every guardian checks `ToGuardianRecord()`, the device encrypts against `ToEncryptionRecord()`), one device section
+  (three cast, one challenged, one spoiled ballot, chain closed), the voting seal, then the administrator reads the
+  sealed ballots back through `RecordItemCodec`, aggregates them and seals the aggregate with a contest-data request
+  for every cast contest-data field. The writer is disposed; the guardians run `VerifyAggregatedAsync` with
+  `ExpectedAggregatedRoot` and decrypt the `VerifiedAggregate` (`TallyAdmin.Decrypt(guardians, aggregate)`), the
+  contest data, and the challenged ballots the report lists (`BallotsToOpen`, against `aggregate.PublishedBallots`);
+  `ElectionRecord.ResumeAsync` adds the decryptions and completes the record; `VerifyAllAsync` (Full) verifies it;
+  `ConvertAsync` writes a JSON `.zip` copy (`record-json.zip`), whose computed root must equal the protobuf record's,
+  and it is verified too. The contest-data, challenged-ballot and tally lines are printed as before, and
+  `tally.json` is written in its previous shape (contest → `contestIndex`, choices → `choiceIndex`, `voteCount`, `t`,
+  `challenge`, `response`) by the console itself, as a derived view outside the record. No input under
+  `C:\temp\eg\data\1` changed (no .bak); the old outputs there (`guardian-record.json`, `encrypted-json-ballots/`,
+  ...) are no longer written and are left as they were. Design §8.5's status-flip demonstration is not built (the
+  golden negative records pin the R.root finding it would show).
+- **S10b-15, egperf.** Two optional phases, `WriteRecord` and `VerifyRecord` (`PhaseNames`; scenario
+  `phases.writeRecord`/`verifyRecord`, an optional `record` object `{deviceCount, encoding}`; `--write-record`,
+  `--verify-record`, `--no-record`). `RecordSession` writes the record in a temporary directory as the run goes
+  (setup and headers before the first chunk, each chunk appended after encryption, closes and both seals after the
+  last, `CompleteAsync` after decryption) and verifies it from disk with `MaxDegreeOfParallelism` = the run's
+  parallelism: `VerifyAllAsync` (Full) on a final record, `VerifyAggregatedAsync` on an aggregated one (no
+  decryption: Full refuses a record below Final, found by a test). With `deviceCount` > 1 ballot i is encrypted by
+  device i mod deviceCount (under chaining it must be 1). Both flags and `record` are left out of the config hash
+  while off (`JsonIgnore` WhenWritingDefault/WhenWritingNull), so `smoke`'s hash is unchanged
+  (sha256:0650cb0e…, checked against its earlier records). New scenario `smoke-record` (smoke + both phases, 4
+  devices, protobuf). The serialization sub-benchmark measures `RecordItemCodec` (protobuf item and proto3 JSON
+  line) under the same `json`/`protobuf` keys (no record-schema change). `perf/README.md` documents it all. New
+  tests: `ScenarioRunnerTests` (record written and verified for 1 and 3 devices in protobuf and 2 in JSON, the
+  aggregated-only record, write without verify, chaining with one and two devices), `ScenarioLoaderTests` (the
+  hash is unchanged while the phases are off; verifyRecord without writeRecord, deviceCount 0, an unknown encoding
+  and an unknown `record` member are refused).
+- **S10b-15, Testing.Cli and `test/data/*`.** Neither used a retired serializer (they write manifests through
+  `ManifestSerializer` and plaintext ballots through System.Text.Json), so neither changed. Design §8.5's
+  "Testing.Cli emits records in both encodings" would make it run a key ceremony and encrypt, which the task did not
+  ask for; left out as a scope decision (below), recorded in design §8.5 "As built (S10b-F)".
+- **Record-path throughput.** Measured with the new phase (32 logical cores, server GC; `smoke-record` = the smoke
+  ballots): before, `VerifyRecord` 1.251 and 1.304 ms/ballot against `VerifyBallots`' 0.999 and 0.994; at 5,000
+  ballots 1.057 against 0.957 (+10 %). Stopwatches in the device pass (temporary, removed) showed the workers' stage
+  at 1,091 ms of 1,169 for 1,000 ballots (read 53, sequencer 17, leaves 1): the parallel stage itself was slower than
+  the direct path, not the serial parts. Causes: `Parallel.ForEach` over a `List` partitions by ranges, which strands
+  workers behind slow ballots (the direct path measured the same, `ScenarioRunner.VerifyChunk`), and batches of 4
+  items per worker end at a barrier every 128 ballots. Fixes (`RecordVerificationRun.Devices.cs`): one item at a time
+  (`EnumerablePartitionerOptions.NoBuffering`): stage 2 1,091 → 1,030 ms; batches of 16 items per worker (still
+  bounded by `BatchBytes`): → 995 ms; and the next batch read (frames and canonicality checks) while the workers
+  verify the current one, unless a checkpoint may be written after it or the run may stop early (`Checkpointing`,
+  `StopOnFirstFailure`, or `MaxDegreeOfParallelism` 1). After: 1.194, 1.199, 1.176 ms/ballot at 1,000 (VerifyBallots
+  0.991-0.994: +19-21 %, of which about 5 points are fixed costs the direct phase does not bill: V1-V4 24 ms, V9's
+  comparison, V10-V11 15 ms); 1.020 at 5,000 against 0.957 (+6.6 %; +6.1 % against V5-V11 billed directly,
+  VerifyBallots + VerifyTally + VerifyDecryption = 0.961); `limits` 3.700 against 3.386 + 0.021 (+8.6 %). Single
+  threaded the two paths are equal (15.66 against 15.00 ms/ballot on 300 ballots, the record path including V9-V11).
+  The S10b-D figure of 2.55 ms/ballot came from a deleted test-host probe and is not reproduced by egperf under
+  server or workstation GC (`DOTNET_gcServer=0`: 1.210); its cause there was not identified. The remaining record
+  cost is what only the record path does per ballot: reading, the canonicality check (a parse and re-serialize),
+  the decode into the domain (0.13 MB/ballot against 0.012 for the direct path, which starts from objects), the
+  leaf hash, 5.A's keyed prefix and the per-batch barrier. The 533 RecordFormat tests, which include the
+  batching-independence tests, passed after the change.
+- **S10b-16, retired** (design §9.2): `IEncryptedBallotSerializer`, `JsonEncryptedBallotSerializer`,
+  `ProtobufEncryptedBallotSerializer` and its `Protobuf*` DTO tree, `JsonElectionRecordSerializer`,
+  `JsonDeviceChainRecordSerializer`, `JsonPreEncryptedBallotSerializer`, `EncryptedBallotShape` (with
+  `EncryptionTimestampJsonConverter`), `StrictBase64` (unused after them), the `Serialization/Converters` folder
+  (every JSON converter), the protobuf-net package, and the domain types' JSON/protobuf-net attributes (kept:
+  `[JsonIgnore]` on the encryption nonces, against ad hoc dumps). Kept: `ManifestSerializer`, `StrictJson` (the
+  manifest and `RecordJson` use it), `NonCanonicalEncodingException` and the `FromCanonicalBytes` decoders. Added in
+  their place: **`RecordFormat.RecordItemCodec`** (public), one ballot at a time as a canonical `RecordItem`
+  (`EncodeBallot`/`DecodeBallot`) or its proto3 JSON line (`EncodeBallotJson`/`DecodeBallotJson`, `ToJson`,
+  `FromJson`); decoding takes the manifest and the device id, refuses a non-canonical item, a non-ballot item or a
+  JSON line the projection refuses with `NonCanonicalEncodingException`, and reports a value out of range as
+  `VerificationFailedException` under its §4.8 code; encoding refuses an unrecorded status. Benchmarks'
+  `SerializationBenchmarks` measure it.
+- **S10b-16, tests.** Deleted (59 test methods), with where their rule now lives:
+  - `JsonEncryptedBallotSerializerTests` (7), `ProtobufEncryptedBallotSerializerTests` (6),
+    `ChainingSerializationTests` (4), `EncryptedBallotNonceSerializationTests` (2),
+    `SupplementalFieldSerializationTests` (3): round trips of retired serializers. Covered by
+    `RecordMapperTests` (every item type's round trip, simple chaining, the device header/close, contest data, the
+    ballot nonce; round trips only: a ballot item without C_ξB, which S10a's `Json_MissingOrNullEncryptedBallotNonce_IsRefused`
+    and `StrictDecodingTests`' "ballot nonce missing" site refused at decode, is canonical in the record and
+    decodes, and is `RecordItemCodecTests.MissingList_...`'s "the ballot nonce" row, 6.structure and 9.structure;
+    added in review round 2, which found it unpinned) and the new `RecordItemCodecTests.Ballots_RoundTrip_InBothRepresentations_AndPassVerifications5To8`
+    (every supplemental field kind with both relation proofs, contest data, every status; V5-V8 on the decoded
+    ballot). The S10b-0 "no nonce reaches the wire" pin is two checks (corrected in review round 1):
+    `RecordCompletenessTests.NoSchemaField_CanHoldASecret` checks the schema's field names only, and
+    `RecordItemCodecTests.AssertNoNonce` (called by `Ballots_RoundTrip_...` and `PreEncryptedCastBallot_RoundTrips`)
+    searches the item bytes and the JSON line for every option and field nonce, as the deleted test did;
+    `ChallengedBallotDecryptionTests` checks the published challenged-ballot item and its JSON line for ξ_B.
+  - `MalformedBallotDocumentTests` (5): S10a's typed errors for null or missing lists and scalars in the retired JSON
+    and protobuf-net documents. In the record a missing list decodes empty (protobuf has no null) and a missing
+    required scalar is a decode-rule or structure finding: `RecordItemCodecTests.MissingList_DecodesEmpty_AndIsReportedByItsVerification`
+    (a missing contest or field list: 6.structure, 9.structure), `MissingProof_IsD1_AndTheCodecRefusesIt` (a missing
+    limit or range proof is decode rule D1, since both carry a `width_multiple` and are not omittable, so the record
+    path refuses it before any verification; corrected in review round 1, which found the earlier test passing either
+    way and never reaching "6"/"7") and `NonCanonicalItem_IsRefused`. The proof counts "6"/"7" are reachable from
+    canonical items too (corrected in review round 2: a proof one pair short passes D1, and the relation proofs are
+    omittable), pinned by `ProofOfTheWrongCount_IsCanonical_AndFailsTheProofCount`; only a null list or a null entry
+    is reachable in memory alone. The in-memory null cases
+    stay as verification tests (`SupplementalFieldVerificationTests.BallotWithANullProofListOrEntry_...`,
+    `BallotStructureTests.BallotWithANullSupplementalFieldList_...`, rewritten to build the ballot in memory).
+  - `ElectionRecordSerializationTests` (20): the domain halves are migrated to `RecordItemCodecTests` through the
+    tally items (decryption bound restored from the published cast weight, wrong weight 9.structure, too small fails
+    closed, forged weight refused with `TallyDecryptionException` without V9, `MaximumCount` saturation, saturated
+    bound, an extra field 9.structure, another decrypted count 10.C); the JSON-text halves (base64 spellings,
+    whitespace, lone surrogates, BOMs, unknown and repeated members, null entries) belong to the JSON projection
+    (`RecordJsonProjectionTests.JsonNegatives`, the §5.7 negatives and golden negative records; S10a's whitespace
+    and unused-bit base64 cases were added there and as golden negatives in review round 1, which found them not
+    migrated), range and width tamperings to
+    `RecordMapperTests` and `CanonicalProtobufTests`; 12.C and 13.B for decodable wrong values are covered by
+    `ContestDataDecryptionTests` and `ChallengedBallotDecryptionTests`. S10a's reader cap on a cast weight
+    (`ballotsCast × int.MaxValue`) has no record counterpart: the mapper clamps to `long.MaxValue`, V9 compares, and
+    decryption refuses a bound beyond its search (pinned with weights 2·int.MaxValue and long.MaxValue).
+  - `PreEncryptedSerializationTests` (12): the retired pre-encrypted and uncast JSON documents. Covered by
+    `RecordMapperTests` (cast pre-encrypted items, full and compact uncast split and join, their range findings) and
+    `RecordItemCodecTests.PreEncryptedCastBallot_RoundTrips`; the printed `PreEncryptedBallot` document has no
+    counterpart (a printed ballot is published only as an uncast item).
+  - `StrictDecodingTests`: its two serializer theories (JSON and protobuf-net non-canonical sites) are deleted; the
+    `FromCanonicalBytes` tests stay. Their sites are `RecordItemCodecTests.NonCanonicalItem_IsRefused` (a padded α,
+    id_B of 31 bytes, chaining fields of 35 and 37 bytes, a range proof of 63 bytes) and
+    `ValueOutOfRange_IsAVerificationFailure_UnderItsCode` (α = p 6.A, c = q 6.B, v = q 6.C and 7.C, contest data
+    C_0 = p 8.structure, C_ξB,0 = p 13.structure).
+  - `EncryptionTimestampTests`: its five serializer tests became three on the item (`encrypted_at` round trip in
+    both representations, absent stays absent, pre-1970 refused at encode; the JSON form `2026-10-08T12:34:56.789Z`;
+    D3 refusals at decode). Not said here at first (review round 2): S10a's `Json_TimestampNotInTheDocumentedForm_IsRefused`
+    (7 spellings) and `Json_TimestampAsANumber_IsRefused` were deleted without a counterpart, and the record's JSON
+    projection took an offset and 0-9 fraction digits. Round 2 extended the one-form rule to timestamps; the rows
+    are back as `RecordJsonProjectionTests.JsonNegatives` (11 timestamp rows: the spellings the parser accepts fail
+    the one-form rule, the rest the parser) with a control, and the golden negative `encoding-jsonl-timestamp-offset`.
+  - `BallotStatusAndWeightTests`: three serializer tests became two on the codec (status and weight round trip; an
+    unrecorded ballot or weight 0 cannot be encoded, an UNSPECIFIED status is D2, a weight-0 item decodes and is
+    rejected when tallied).
+- **S10b-18, documentation.** CLAUDE.md: the 26 KB Serialization bullet is now two bullets, 7 `Serialization` (what
+  remains, the strict decoders, the retired list) and 8 `RecordFormat` (schema, canonical form, the completeness rule
+  that replaced "add it to the DTO too", the public surface, verifying, conformance artifacts), each pointing at the
+  design and the new spec draft; the stale serializer statements in bullets 3, the tally and pre-encryption notes and
+  the `test/data` note are corrected; the perf overview names the record phases. New
+  `docs/spec-compliance/egrf-v2-spec.md`, marked DRAFT: conformance classes, the logical record, S1-S8, W1-W8,
+  D1-D6, the checking methods, the four representations and the layout and discovery rules, digests and roots,
+  statements and signatures, validity layers and the R-codes, verification order and the report, versioning, a
+  section on the placeholder option numbers 50001-50003 (to be replaced by registered numbers, a user action), the
+  five provisional reader rules of S10b-E round 3, and Appendix A, the message and enum tables generated from
+  `test/egrf/schema.json` and the `.proto`'s field comments by the new `test/egrf/spec_tables.py`
+  (`--check` verifies the appendix is current). `README.md` lists the projects. Design §6.7, §8.5 and §9.2 note what
+  was built.
+
+Decisions taken (low-stakes API and scope choices):
+- `RecordItemCodec` is the public one-ballot codec; it carries ballot items only (other items are written and read
+  as part of a record); decoding takes the device id because the item does not carry it.
+- egperf's `record` settings have no carrier option (always a directory); the aggregated-only record is verified with
+  the guardians' profile.
+- Testing.Cli does not emit encrypted records (design §8.5 deviation): nothing in the repository consumes such
+  fixtures, and the golden records already serve as committed encrypted fixtures.
+- The console keeps writing `tally.json` itself (the gate reads it), as a derived view outside the record.
+
+Gate. Before any pinned expectation could move (none did): build 0 warnings, 0 errors; smoke `correctness passed`;
+console `Tally, contest 0: 0-0=3, 0-1=0, overvotes=0, null-votes=0, undervotes=0, undervote-difference=0,
+write-ins=0.` then `Done.` and the expected ReadKey exception, `tally.json` 0-0 voteCount 3, 0-1 voteCount 0;
+tests Verifier 53/53, Perf 243/243 (231 + 12 new), Core 2401/2401 (2645 before: the deleted methods' cases, net of
+the 15 new `RecordItemCodecTests` methods and the rewritten ones), none skipped (the Python cross-check ran). The
+first full run had two Perf failures, both test updates (the HTML report test lists every phase in `PhaseNames.All`,
+so it gained the two record phases; a hash-value comparison by reference in the new codec test), fixed before the
+final run.
+
+Perf (smoke against S10b-E's 0.237 / 0.963 ms/ballot): final gate run `EncryptBallots 242 0.242 165.8 MB`,
+`VerifyBallots 975 0.975 12.2 MB`. `compare --repeat 5` against the staged S10b-E tree built separately (exported
+with `git checkout-index` into the ignored `obj/`, removed afterwards): EncryptBallots 0.218 → 0.213 ms (-2.2 %,
+allocation 0.00 %), VerifyBallots 0.960 → 0.939 (-2.1 %, allocation -0.02 %), Tally and VerifyTally allocation
++1.5 %; VerifyDecryption allocation 131.0 → 135.2 KB per run (+4.6 %, flagged, exit 1). That phase allocates
+0.13 MB per run in parallel tasks and its per-run values spread 118-203 KB in every group; a second baseline group
+gave 127.3 and 125.7 KB (baseline against baseline -1.3 %) and a second candidate group 127.3 KB, and no code it runs
+changed, so it is scheduling noise, not a regression. The serialization sub-benchmark now measures the item codec:
+protobuf 12,278 bytes, about 50,000-66,000 encodes and 17,800-20,800 decodes per second; JSON 16,945 bytes,
+4,700-6,300 and 1,900-2,200 (the retired serializers: 12,489 and about 21,300 bytes).
+
+Carry-overs:
+- `test/egrf/spec_tables.py --check` is not run by a test yet (it could join the Python cross-check in
+  `EgrfGoldenRecordTests`).
+- The registration of the option numbers 50001-50003 (S10b-18) is a user action.
+- The spec draft's provisional rules (a)-(e) still await the user's sign-off (S10b-E round 3 questions).
+- S10b-17 (live tailing) and S10b-19 (guardians open uncast pre-encrypted ballots) remain.
 
 ### 2026-10-10 — S10b-E review round 3 (non-device sections read in part, `egrecord` output bytes, streaming and header-at-open in the Python reader, JSON one form, attestations over what was read, a seeded mutation cross-check)
 Worktree changes only; nothing committed. Thirteen findings (four major, nine minor). Eleven were judged sound and

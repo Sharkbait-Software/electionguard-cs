@@ -22,8 +22,7 @@ public class RecordVerifierBrokenSectionTests
 
         // golden/regular-unchained with its device close cut 2 bytes short: three ballots (cast,
         // spoiled, cast), the last read whole before the torn close.
-        await using var reader = await ElectionRecord.OpenAsync(EgrfGoldenRecords.FullPath("negative/container-torn-tail"));
-        var report = await ElectionRecordVerifier.VerifyAllAsync(reader, new VerifyAllOptions { MaxDegreeOfParallelism = 1 });
+        var report = await VerifyAtEveryBatchingAsync(EgrfGoldenRecords.FullPath("negative/container-torn-tail"));
 
         Assert.False(report.Passed);
         var container = Assert.Single(report.Findings, x => x.SubSection == RecordCodes.Container);
@@ -69,8 +68,7 @@ public class RecordVerifierBrokenSectionTests
             int cut = (int)challenged.Position;
             File.WriteAllBytes(segment, [.. Join(frames[..cut]), .. frames[cut][..^1]]);
 
-            await using var reader = await ElectionRecord.OpenAsync(directory);
-            var report = await ElectionRecordVerifier.VerifyAllAsync(reader, new VerifyAllOptions { MaxDegreeOfParallelism = 1 });
+            var report = await VerifyAtEveryBatchingAsync(directory);
 
             Assert.Single(report.Findings, x => x.SubSection == RecordCodes.Container);
             Assert.DoesNotContain(report.Findings, x => x.SubSection is "12.structure" or "13.structure" or "14.structure");
@@ -116,8 +114,7 @@ public class RecordVerifierBrokenSectionTests
             int cut = (int)uncast + 1;  // frame 0 is the segment header
             File.WriteAllBytes(segment, [.. Join(frames[..cut]), .. frames[cut][..^1]]);
 
-            await using var reader = await ElectionRecord.OpenAsync(directory);
-            var report = await ElectionRecordVerifier.VerifyAllAsync(reader, new VerifyAllOptions { MaxDegreeOfParallelism = 1 });
+            var report = await VerifyAtEveryBatchingAsync(directory);
 
             Assert.False(report.Passed);
             var container = Assert.Single(report.Findings, x => x.SubSection == RecordCodes.Container);
@@ -158,6 +155,7 @@ public class RecordVerifierBrokenSectionTests
             // The device with the most items, so that at least two ballots are read whole before the
             // break and, with one item per batch, position 1 is processed before the break is read.
             DeviceKey device;
+            DeviceKey other;
             long castPosition;
             await using (var golden = await ElectionRecord.OpenAsync(directory))
             {
@@ -168,6 +166,7 @@ public class RecordVerifierBrokenSectionTests
                 }
 
                 device = counts.MaxBy(x => x.Value).Key;
+                other = golden.Devices.First(x => x != device);
                 Assert.True(counts[device] >= 5, $"{counts[device]} items");
 
                 // A cast ballot among the two read whole before the break below (positions 1 and 2).
@@ -196,18 +195,18 @@ public class RecordVerifierBrokenSectionTests
             var frames = Frames(File.ReadAllBytes(segment));
             File.WriteAllBytes(segment, [.. Join(frames[..4]), .. frames[4][..^1]]);
 
-            async Task<VerificationReport> RunAsync(long batchBytes)
-            {
-                await using var reader = await ElectionRecord.OpenAsync(directory);
-                return await ElectionRecordVerifier.VerifyAllAsync(reader, new VerifyAllOptions { MaxDegreeOfParallelism = 1, BatchBytes = batchBytes });
-            }
-
-            var oneItemPerBatch = await RunAsync(1);
-            var defaultBatches = await RunAsync(new VerifyAllOptions().BatchBytes);
-            Assert.Equal(ElectionRecordVerifierTests.Canonical(oneItemPerBatch), ElectionRecordVerifierTests.Canonical(defaultBatches));
+            var oneItemPerBatch = await VerifyAtEveryBatchingAsync(directory);
             var strays = oneItemPerBatch.Findings.Where(x => x.SubSection == "13.structure").Select(x => x.Locator).OrderBy(x => x!.Value.Position).ToList();
             Assert.Equal([new BallotLocator(device, 0), new BallotLocator(device, castPosition)], strays);
             Assert.Single(oneItemPerBatch.Findings, x => x.SubSection == RecordCodes.Container);
+
+            // BallotCorrectness over the broken device, with the read-ahead on (parallel, one item per
+            // batch): the cast ballot read whole before the break and a ballot of the intact device,
+            // chosen. NewDevice writes the leaves the inclusion proofs read while the workers run.
+            BallotLocator[] chosen = [new BallotLocator(device, castPosition), new BallotLocator(other, 1)];
+            var correctness = await VerifyAtEveryBatchingAsync(directory, new VerifyAllOptions { Profile = VerificationProfile.BallotCorrectness, Ballots = chosen });
+            Assert.Single(correctness.Findings, x => x.SubSection == RecordCodes.Container);
+            Assert.Contains(correctness.Inclusions, x => x.Locator == chosen[1]);
         }
         finally
         {
@@ -252,15 +251,7 @@ public class RecordVerifierBrokenSectionTests
             string segment = Path.Combine(directory, Path.Combine(RecordLayout.SegmentPath(SectionKey.Device(device), 0, RecordEncoding.Protobuf).Split('/')));
             File.WriteAllBytes(segment, [.. File.ReadAllBytes(segment), 0x05, 0x0A]);
 
-            async Task<VerificationReport> RunAsync(long batchBytes)
-            {
-                await using var reader = await ElectionRecord.OpenAsync(directory);
-                return await ElectionRecordVerifier.VerifyAllAsync(reader, new VerifyAllOptions { MaxDegreeOfParallelism = 1, BatchBytes = batchBytes });
-            }
-
-            var oneItemPerBatch = await RunAsync(1);
-            var defaultBatches = await RunAsync(new VerifyAllOptions().BatchBytes);
-            Assert.Equal(ElectionRecordVerifierTests.Canonical(oneItemPerBatch), ElectionRecordVerifierTests.Canonical(defaultBatches));
+            var oneItemPerBatch = await VerifyAtEveryBatchingAsync(directory);
             var container = Assert.Single(oneItemPerBatch.Findings, x => x.SubSection == RecordCodes.Container);
             Assert.Equal(SectionKey.Device(device), container.Section);
             var stray = Assert.Single(oneItemPerBatch.Findings, x => x.SubSection == "13.structure");
@@ -489,6 +480,172 @@ public class RecordVerifierBrokenSectionTests
         {
             Directory.Delete(directory, recursive: true);
         }
+    }
+
+    /// <summary>
+    /// A run cancelled between batches of a read-ahead run (parallel, one item per batch, no
+    /// checkpoint; cancelled from the progress report at the end of a batch) ends in the cancellation
+    /// itself, not an <see cref="AggregateException"/> (S10b-F review round 1). The read-ahead's
+    /// failure handling itself is <see cref="AReadAheadReadFailure_IsThrownAsItself"/> and
+    /// <see cref="AwaitWorkersAfterReadFailure_KeepsTheReadsFailure"/>.
+    /// </summary>
+    [Fact]
+    public async Task ACancelledReadAheadRun_ThrowsTheCancellation()
+    {
+        await EgrfGoldenRecords.EnsureAsync();
+        using var stop = new CancellationTokenSource();
+        var progress = new ElectionRecordVerifierTests.SynchronousProgress(p =>
+        {
+            if (p.Step == "ballots")
+            {
+                stop.Cancel();
+            }
+        });
+
+        await using var reader = await ElectionRecord.OpenAsync(EgrfGoldenRecords.FullPath("golden/regular-chained/protobuf"));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            ElectionRecordVerifier.VerifyAllAsync(reader, new VerifyAllOptions { MaxDegreeOfParallelism = 4, BatchBytes = 1 }, progress, stop.Token));
+    }
+
+    /// <summary>
+    /// A read that fails with something other than a record finding (here an <see cref="IOException"/>
+    /// from the carrier, after three items of the second device section) while the workers verify the
+    /// previous batch: the run ends in that failure itself, not a cancellation, an
+    /// <see cref="AggregateException"/> or nothing (S10b-F review round 2). At least one batch was
+    /// finished first, so the failing read is a read-ahead (with one item per batch and 4 workers,
+    /// every read after the first is).
+    /// </summary>
+    [Fact]
+    public async Task AReadAheadReadFailure_IsThrownAsItself()
+    {
+        await EgrfGoldenRecords.EnsureAsync();
+        int batches = 0;
+        var progress = new ElectionRecordVerifierTests.SynchronousProgress(p =>
+        {
+            if (p.Step == "ballots")
+            {
+                Interlocked.Increment(ref batches);
+            }
+        });
+
+        await using var golden = await ElectionRecord.OpenAsync(EgrfGoldenRecords.FullPath("golden/regular-chained/protobuf"));
+        var reader = new FailingDeviceRead(golden, SectionKey.Device(golden.Devices[1]), itemsBeforeFailure: 3);
+        var failure = await Record.ExceptionAsync(() =>
+            ElectionRecordVerifier.VerifyAllAsync(reader, new VerifyAllOptions { MaxDegreeOfParallelism = 4, BatchBytes = 1 }, progress));
+
+        Assert.IsType<IOException>(failure);
+        Assert.Equal(FailingDeviceRead.Message, failure.Message);
+        Assert.True(batches > 0, "the read failed before any batch was finished, so not in a read-ahead");
+    }
+
+    /// <summary>
+    /// The read-ahead's failure path (S10b-F review round 1, finding 6), branch by branch: the read's
+    /// failure is kept when the workers succeed or were only cancelled (the caller rethrows it); the
+    /// workers' failure alone is thrown when the read was only cancelled; both, the read's first,
+    /// when each failed on its own. The workers' failure has no injection point in a whole run.
+    /// </summary>
+    [Fact]
+    public async Task AwaitWorkersAfterReadFailure_KeepsTheReadsFailure()
+    {
+        var read = new IOException("read");
+        var work = new InvalidOperationException("work");
+
+        await RecordVerificationRun.AwaitWorkersAfterReadFailureAsync(Task.CompletedTask, read);
+        await RecordVerificationRun.AwaitWorkersAfterReadFailureAsync(Task.FromCanceled(new CancellationToken(canceled: true)), read);
+
+        var both = await Assert.ThrowsAsync<AggregateException>(() => RecordVerificationRun.AwaitWorkersAfterReadFailureAsync(Task.FromException(work), read));
+        Assert.Equal([read, work], both.InnerExceptions);
+
+        var workOnly = await Assert.ThrowsAsync<InvalidOperationException>(() => RecordVerificationRun.AwaitWorkersAfterReadFailureAsync(Task.FromException(work), new OperationCanceledException()));
+        Assert.Same(work, workOnly);
+    }
+
+    /// <summary>A reader whose device section <paramref name="failing"/> throws an <see cref="IOException"/> after <paramref name="itemsBeforeFailure"/> items.</summary>
+    private sealed class FailingDeviceRead(IElectionRecordReader inner, SectionKey failing, int itemsBeforeFailure) : IElectionRecordReader
+    {
+        public const string Message = "The carrier failed (injected).";
+
+        public RecordEncoding Encoding => inner.Encoding;
+
+        public RecordCarrier Carrier => inner.Carrier;
+
+        public RecordFormatVersion Format => inner.Format;
+
+        public RecordPhase Phase => inner.Phase;
+
+        public TableOfContents? ClaimedToc => inner.ClaimedToc;
+
+        public IReadOnlyList<SectionKey> Sections => inner.Sections;
+
+        public IReadOnlyList<DeviceKey> Devices => inner.Devices;
+
+        public IReadOnlyList<string> SignatureFiles => inner.SignatureFiles;
+
+        public ValueTask<RecordSetup> ReadSetupAsync(CancellationToken ct = default) => inner.ReadSetupAsync(ct);
+
+        public IDeviceSectionReader OpenDevice(DeviceKey device) => inner.OpenDevice(device);
+
+        public IAsyncEnumerable<RecordItemBytes> ReadSectionAsync(SectionKey section, long fromOrdinal = 0, CancellationToken ct = default) =>
+            section == failing ? Failing(inner.ReadSectionAsync(section, fromOrdinal, ct), itemsBeforeFailure, ct) : inner.ReadSectionAsync(section, fromOrdinal, ct);
+
+        public IAsyncEnumerable<RecordItemBytes> ReadSignaturesAsync(CancellationToken ct = default) => inner.ReadSignaturesAsync(ct);
+
+        public IAsyncEnumerable<RecordItemBytes> ReadSignatureFileAsync(string file, CancellationToken ct = default) => inner.ReadSignatureFileAsync(file, ct);
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        private static async IAsyncEnumerable<RecordItemBytes> Failing(IAsyncEnumerable<RecordItemBytes> items, int count, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+        {
+            int read = 0;
+            await foreach (var item in items.WithCancellation(ct))
+            {
+                if (read++ == count)
+                {
+                    throw new IOException(Message);
+                }
+
+                yield return item;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The batchings a broken-section report must not depend on: single-threaded with one item per
+    /// batch or the default bound, and in parallel with each (S10b-F review round 1). Parallel with one
+    /// item per batch is the one that runs the read-ahead (the next batch, and with it a torn frame's
+    /// <c>R.container</c>, the broken device's marking and the next device's start, read while the
+    /// workers verify the current batch); with the default bound a test record is one batch.
+    /// </summary>
+    private static readonly VerifyAllOptions[] Batchings =
+    [
+        new() { MaxDegreeOfParallelism = 1, BatchBytes = 1 },
+        new() { MaxDegreeOfParallelism = 1 },
+        new() { MaxDegreeOfParallelism = 4, BatchBytes = 1 },
+        new() { MaxDegreeOfParallelism = 4 },
+    ];
+
+    /// <summary>Verifies the record at <paramref name="path"/> under every batching, asserts the reports are the same, and returns the first.</summary>
+    private static async Task<VerificationReport> VerifyAtEveryBatchingAsync(string path, VerifyAllOptions? options = null)
+    {
+        options ??= new VerifyAllOptions();
+        VerificationReport? first = null;
+        foreach (var batching in Batchings)
+        {
+            await using var reader = await ElectionRecord.OpenAsync(path);
+            var report = await ElectionRecordVerifier.VerifyAllAsync(reader, options with { MaxDegreeOfParallelism = batching.MaxDegreeOfParallelism, BatchBytes = batching.BatchBytes });
+            if (first is null)
+            {
+                first = report;
+            }
+            else
+            {
+                string expected = ElectionRecordVerifierTests.Canonical(first);
+                string actual = ElectionRecordVerifierTests.Canonical(report);
+                Assert.True(expected == actual, $"parallelism {batching.MaxDegreeOfParallelism}, batch {batching.BatchBytes} bytes:\n{actual}\nversus\n{expected}");
+            }
+        }
+
+        return first!;
     }
 
     private static void CopyDirectory(string from, string to)

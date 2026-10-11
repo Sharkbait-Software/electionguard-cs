@@ -74,6 +74,7 @@ public class ElectionRecordVerifierRobustnessTests
         Assert.Equal((one, 3L), (duplicate.Section!.Value, duplicate.Ordinal!.Value));
         Assert.Contains(report.Findings, x => x.SubSection == code && x.Section == (code == RecordCodes.Encoding ? one : two));
         Assert.Equal(Canonical(report), Canonical(await VerifyAsync(directory, 1)));
+        Assert.Equal(Canonical(report), Canonical(await VerifyAsync(directory, 4)));
     }
 
     // ---- join sections that cannot be read to their end ----------------------------------------
@@ -121,6 +122,7 @@ public class ElectionRecordVerifierRobustnessTests
 
         var report = await VerifyAsync(directory, -1);
         Assert.Equal(Canonical(report), Canonical(await VerifyAsync(directory, 1)));
+        Assert.Equal(Canonical(report), Canonical(await VerifyAsync(directory, 4)));
         Assert.False(report.Passed);
         // Reported once: the drain notes the section unreadable, so step F does not digest it again.
         Assert.Single(report.Findings, x => x.SubSection == code && x.Section == section);
@@ -157,6 +159,7 @@ public class ElectionRecordVerifierRobustnessTests
 
         var report = await VerifyAsync(directory, -1);
         Assert.Equal(Canonical(report), Canonical(await VerifyAsync(directory, 1)));
+        Assert.Equal(Canonical(report), Canonical(await VerifyAsync(directory, 4)));
         Assert.False(report.Passed);
         Assert.False(report.Complete);
         var finding = Assert.Single(report.Findings);
@@ -223,6 +226,7 @@ public class ElectionRecordVerifierRobustnessTests
 
         var report = await VerifyAsync(directory, -1);
         Assert.Equal(Canonical(report), Canonical(await VerifyAsync(directory, 1)));
+        Assert.Equal(Canonical(report), Canonical(await VerifyAsync(directory, 4)));
         Assert.False(report.Passed);
         // A record of minor 1 is incomplete for this minor-0 reader whatever it holds.
         Assert.False(report.Complete);

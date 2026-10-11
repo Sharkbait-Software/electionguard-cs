@@ -1,13 +1,10 @@
 ﻿using ElectionGuard.Core.Crypto;
-using ProtoBuf;
-using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
 
 namespace ElectionGuard.Core.BallotEncryption;
 
 public record EncryptedSelection : EncryptedValueWithProofs
 {
-    [JsonPropertyName("choice_id")]
     public required string ChoiceId { get; init; }
 }
 
@@ -17,28 +14,27 @@ public record EncryptedSelection : EncryptedValueWithProofs
 /// </summary>
 public record EncryptedSupplementalField : EncryptedValueWithProofs
 {
-    [JsonPropertyName("field_id")]
     public required string FieldId { get; init; }
 }
 
 public record ChallengeResponsePair
 {
-    [JsonPropertyName("c")]
     public IntegerModQ Challenge { get; init; }
-    [JsonPropertyName("v")]
     public IntegerModQ Response { get; init; }
 }
 
 public record EncryptedValueWithProofs
 {
-    [JsonPropertyName("alpha")]
     public required IntegerModP Alpha { get; init; }
-    [JsonPropertyName("beta")]
     public required IntegerModP Beta { get; init; }
+
+    /// <summary>
+    /// The encryption nonce, held only by the encryptor. No record item has a field for it
+    /// (<c>RecordCompletenessTests</c>); the attribute keeps it out of any ad hoc JSON dump too.
+    /// </summary>
     [JsonIgnore]
     public IntegerModQ? EncryptionNonce { get; init; }
 
-    [JsonPropertyName("proof")]
     public required ChallengeResponsePair[] Proofs { get; init; }
 
     public static implicit operator EncryptedValue(EncryptedValueWithProofs value)
@@ -64,11 +60,10 @@ public record EncryptedValueWithProofs
 
 public struct EncryptedValue
 {
-    [JsonPropertyName("alpha")]
     public required IntegerModP Alpha { get; init; }
-    [JsonPropertyName("beta")]
     public required IntegerModP Beta { get; init; }
 
+    /// <summary>The encryption nonce, held only by the encryptor (see <see cref="EncryptedValueWithProofs.EncryptionNonce"/>).</summary>
     [JsonIgnore]
     public IntegerModQ? EncryptionNonce { get; init; }
 }

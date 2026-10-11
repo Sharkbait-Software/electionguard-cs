@@ -4,7 +4,9 @@ using System.Globalization;
 using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.Models;
+using ElectionGuard.Core.RecordFormat;
 using ElectionGuard.Core.Tally;
+using ElectionGuard.Core.Verify;
 using ElectionGuard.Core.Verify.Ballot;
 using ElectionGuard.Core.Verify.KeyGeneration;
 using ElectionGuard.Core.Verify.Tally;
@@ -105,6 +107,12 @@ public sealed class ScenarioRunner
         bool isChained;
         int parallelism;
 
+        // The simulated devices. One unless the scenario writes a record over several (design §8.5):
+        // ballot i is then encrypted by device i mod deviceCount, so its chaining field (B_C binds
+        // H_DI) and its record section agree.
+        string[] deviceIds = [DeviceId];
+        VotingDeviceInformationHash[] deviceHashes;
+
         try
         {
             // The guardians check H_B and key their comparison hash with it (§3.2.2 step 1), so the
@@ -136,6 +144,19 @@ public sealed class ScenarioRunner
             {
                 notes["parallelism"] = "forced:1:chainingMode";
             }
+
+            int deviceCount = _scenario.Phases.WriteRecord ? _scenario.Record?.DeviceCount ?? 1 : 1;
+            if (isChained && deviceCount > 1)
+            {
+                throw new InvalidOperationException($"record.deviceCount is {deviceCount}; under chaining one device encrypts the whole chain, so it must be 1.");
+            }
+
+            if (deviceCount > 1)
+            {
+                deviceIds = Enumerable.Range(1, deviceCount).Select(d => $"perf-device-{d}").ToArray();
+            }
+
+            deviceHashes = deviceIds.Select(id => new VotingDeviceInformationHash(records.ExtendedBaseHash, id)).ToArray();
 
             Warmup(records.EncryptionRecord, deviceHash, generator);
         }
@@ -227,10 +248,16 @@ public sealed class ScenarioRunner
             : null;
         bool tallyVerifyStarted = false;
 
+        // The election record (design §8.5), written as the run goes: the setup and the device
+        // headers before the first chunk, each chunk's ballots appended to their devices' sections,
+        // the chains closed and voting and the aggregate sealed after the last, the final phase after
+        // decryption. All of it is billed to WriteRecord; the record is deleted when the run ends.
+        var writeRecord = _scenario.Phases.WriteRecord ? new PhaseAccumulator(PhaseNames.WriteRecord, BudgetFor(PhaseNames.WriteRecord)) : null;
+        bool writeRecordStarted = false;
+        using var recordHolder = new RecordHolder();
+
         // The phases whose budgets are checked at every chunk boundary.
-        var budgetedPhases = tallyVerify is null
-            ? new[] { encrypt, ballotVerify, aggregate }
-            : new[] { encrypt, ballotVerify, aggregate, tallyVerify };
+        var budgetedPhases = new[] { encrypt, ballotVerify, aggregate, tallyVerify, writeRecord }.OfType<PhaseAccumulator>().ToArray();
 
         // Verification 5.A across the whole run, not per chunk: every identifier seen so far. An
         // identifier is 32 bytes and no ballot is retained, so this grows by one small entry per
@@ -261,6 +288,19 @@ public sealed class ScenarioRunner
 
         try
         {
+            if (writeRecord is not null)
+            {
+                writeRecordStarted = true;
+                using (writeRecord.Enter())
+                {
+                    recordHolder.Session = RecordSession.Create(records.EncryptionRecord, deviceIds,
+                        _scenario.Record?.Encoding == "json" ? RecordEncoding.Json : RecordEncoding.Protobuf);
+                }
+
+                notes["recordEncoding"] = recordHolder.Session.Encoding == RecordEncoding.Json ? "json" : "protobuf";
+                notes["recordDevices"] = deviceIds.Length.ToString(CultureInfo.InvariantCulture);
+            }
+
             while (generated < _scenario.BallotCount && !aborted)
             {
                 int chunkSize = Math.Min(_scenario.ChunkSize, _scenario.BallotCount - generated);
@@ -295,9 +335,11 @@ public sealed class ScenarioRunner
                     }
                     else
                     {
+                        int first = generated;
                         Parallel.For(0, chunkSize, new ParallelOptions { MaxDegreeOfParallelism = parallelism }, i =>
                         {
-                            var encryptor = new BallotEncryptor(records.EncryptionRecord, DeviceId, deviceHash);
+                            int device = (first + i) % deviceIds.Length;
+                            var encryptor = new BallotEncryptor(records.EncryptionRecord, deviceIds[device], deviceHashes[device]);
                             encryptedChunk[i] = encryptor.Encrypt(chunk[i], null);
                         });
                     }
@@ -328,6 +370,19 @@ public sealed class ScenarioRunner
                 }
 
                 representative ??= encryptedChunk[0];
+
+                if (writeRecord is not null && recordHolder.Session is { } session)
+                {
+                    using (writeRecord.Enter())
+                    {
+                        for (int i = 0; i < chunkSize; i++)
+                        {
+                            session.Append(encryptedChunk[i], (generated + i) % deviceIds.Length);
+                        }
+                    }
+
+                    writeRecord.RecordBallots(chunkSize);
+                }
 
                 if (chainLinks is not null)
                 {
@@ -443,6 +498,26 @@ public sealed class ScenarioRunner
                     notes["tallyVerification"] = "skipped:runAborted";
                 }
             }
+
+            // --- The record: close the chains, seal voting and the aggregate -------------------
+            if (writeRecord is not null && recordHolder.Session is { } sealing)
+            {
+                if (!aborted)
+                {
+                    using (writeRecord.Enter())
+                    {
+                        // The record holds a close time in whole milliseconds (design §4.6).
+                        var now = DateTimeOffset.UtcNow;
+                        sealing.SealAggregated(encryptedTally, now.AddTicks(-(now.Ticks % TimeSpan.TicksPerMillisecond)));
+                    }
+                }
+                else if (!writeRecord.Aborted)
+                {
+                    // Another phase's budget stopped the run: the record holds part of the election.
+                    writeRecord.MarkAborted();
+                    notes[PhaseNames.WriteRecord] = "skipped:runAborted";
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -474,6 +549,7 @@ public sealed class ScenarioRunner
             ballotVerify.MarkAborted();
             aggregate.MarkAborted();
             tallyVerify?.MarkAborted();
+            writeRecord?.MarkAborted();
         }
 
         // --- Stage 2: decrypt ----------------------------------------------------------
@@ -492,6 +568,9 @@ public sealed class ScenarioRunner
         {
             phases[PhaseNames.VerifyTally] = tallyVerify.ToMetrics();
         }
+
+        // The decrypted tally, for the record's final phase.
+        DecryptedTally? recordTally = null;
 
         CorrectnessResult correctness;
         if (failure is not null)
@@ -568,6 +647,7 @@ public sealed class ScenarioRunner
                     decrypt.RecordBallots(generated);
                     phases[PhaseNames.DecryptTally] = decrypt.ToMetrics();
                     correctness = TallyComparer.Compare(expectedTally.Build(), decryptedTally!);
+                    recordTally = decryptedTally;
                 }
             }
             catch (Exception ex)
@@ -620,6 +700,73 @@ public sealed class ScenarioRunner
 
                 phases[PhaseNames.VerifyDecryption] = decryptionVerify.ToMetrics();
             }
+        }
+
+        // --- The record: the final phase, then VerifyAllAsync from disk ---------------------
+        if (writeRecord is not null && recordHolder.Session is { } written && failure is null && !aborted && !writeRecord.Aborted)
+        {
+            try
+            {
+                using (writeRecord.Enter())
+                {
+                    if (recordTally is not null)
+                    {
+                        written.Complete(recordTally);
+                    }
+
+                    written.CloseWriter();
+                }
+
+                long bytes = written.Bytes;
+                var (lastPhase, root) = written.PhaseRoots.MaxBy(x => x.Key);
+                notes["recordPhase"] = lastPhase.ToString();
+                notes["recordRoot"] = root.ToString();
+                notes["recordBytes"] = bytes.ToString(CultureInfo.InvariantCulture);
+                notes["recordBytesPerBallot"] = (bytes / (double)Math.Max(1, generated)).ToString("F0", CultureInfo.InvariantCulture);
+            }
+            catch (Exception ex)
+            {
+                failure = Describe(ex);
+                notes["error"] = failure;
+                writeRecord.MarkAborted();
+                _log($"  writing the record failed: {failure}");
+            }
+        }
+
+        if (writeRecord is not null && writeRecordStarted)
+        {
+            phases[PhaseNames.WriteRecord] = writeRecord.ToMetrics();
+        }
+
+        if (_scenario.Phases.VerifyRecord && recordHolder.Session is { } toVerify && failure is null && !aborted && writeRecord is { Aborted: false })
+        {
+            var verifyRecord = new PhaseAccumulator(PhaseNames.VerifyRecord, BudgetFor(PhaseNames.VerifyRecord));
+            try
+            {
+                VerificationReport report;
+                using (verifyRecord.Enter())
+                {
+                    report = toVerify.Verify(parallelism);
+                }
+
+                verifyRecord.RecordBallots(generated);
+                if (!report.Passed)
+                {
+                    throw new InvalidOperationException($"VerifyAllAsync failed the record: {string.Join("; ", report.Findings.Take(3).Select(x => $"{x.SubSection} {x.Message}"))}");
+                }
+
+                notes["recordVerification"] = "passed";
+                _log($"  record verified ({report.Phase}, {report.Statistics.BallotItems:N0} ballot items) in {report.Elapsed.TotalMilliseconds:F0} ms");
+            }
+            catch (Exception ex)
+            {
+                failure = Describe(ex);
+                notes["error"] = failure;
+                verifyRecord.MarkAborted();
+                _log($"  record verification failed: {failure}");
+            }
+
+            phases[PhaseNames.VerifyRecord] = verifyRecord.ToMetrics();
         }
 
         // Error outranks Incomplete: a run that threw is not merely partial.
@@ -750,6 +897,14 @@ public sealed class ScenarioRunner
                     }
                 });
         }
+    }
+
+    /// <summary>Owns the run's record session, so that its temporary directory is deleted however the run ends.</summary>
+    private sealed class RecordHolder : IDisposable
+    {
+        public RecordSession? Session { get; set; }
+
+        public void Dispose() => Session?.Dispose();
     }
 
     /// <summary>Exception type plus message, as recorded in notes["error"].</summary>

@@ -1,5 +1,5 @@
 using ElectionGuard.Core.Models;
-using ElectionGuard.Core.Serialization;
+using ElectionGuard.Core.RecordFormat;
 using ElectionGuard.Perf.Cli.Running;
 using ElectionGuard.Testing.Common;
 
@@ -8,7 +8,7 @@ namespace ElectionGuard.Perf.UnitTests;
 public class SerializationBenchmarkTests
 {
     [Fact]
-    public void Measure_ReportsThroughputAndSizeForBothSerializers()
+    public void Measure_ReportsThroughputAndSizeForBothItemEncodings()
     {
         var guardianSet = ElectionFixtureBuilder.CreateGuardianSet();
         var (manifest, manifestFile) = ElectionFixtureBuilder.CreateMinimalManifest();
@@ -22,7 +22,7 @@ public class SerializationBenchmarkTests
                 manifest,
                 selectionValuesByChoiceId: new Dictionary<string, int> { ["choice-1"] = 1 }));
 
-        var metrics = SerializationBenchmark.Measure(ballot, iterations: 5);
+        var metrics = SerializationBenchmark.Measure(ballot, manifest, iterations: 5);
 
         Assert.True(metrics.Json.Bytes > 0);
         Assert.True(metrics.Protobuf.Bytes > 0);
@@ -31,44 +31,29 @@ public class SerializationBenchmarkTests
         Assert.True(metrics.Protobuf.SerializeOpsPerSec > 0);
         Assert.True(metrics.Protobuf.DeserializeOpsPerSec > 0);
 
-        // JSON writes indented text with hex-encoded big integers; protobuf writes raw bytes.
+        // The proto3 JSON line writes every byte string as base64; the item is the raw bytes.
         Assert.True(metrics.Protobuf.Bytes < metrics.Json.Bytes);
 
         // The measured ballot's shape is recorded alongside the throughput/size figures -- one
         // contest, two choices, per CreateMinimalManifest -- so a reader of a persisted result can
-        // judge how representative the numbers are. Both serializers measured the same ballot.
+        // judge how representative the numbers are. Both encodings measured the same ballot.
         Assert.Equal(1, metrics.Json.ContestCount);
         Assert.Equal(2, metrics.Json.SelectionCount);
         Assert.Equal(1, metrics.Protobuf.ContestCount);
         Assert.Equal(2, metrics.Protobuf.SelectionCount);
 
-        // Verify that Deserialize actually reconstructs the ballot correctly.
-        // Round-trip through JSON serializer.
-        var jsonSerializer = new JsonEncryptedBallotSerializer();
-        using (var jsonStream = new MemoryStream())
-        {
-            jsonSerializer.Serialize(jsonStream, ballot);
-            jsonStream.Position = 0;
-            var jsonRoundTrip = jsonSerializer.Deserialize(jsonStream);
-            Assert.NotNull(jsonRoundTrip);
-            Assert.Equal(ballot.Id, jsonRoundTrip.Id);
-            Assert.Equal(
-                ballot.Contests[0].Choices[0].Alpha,
-                jsonRoundTrip.Contests[0].Choices[0].Alpha);
-        }
+        // What is measured round-trips: the item codec in both encodings gives back the ballot,
+        // byte for byte in its canonical item.
+        byte[] item = RecordItemCodec.EncodeBallot(ballot, manifest);
+        Assert.Equal(item.LongLength, metrics.Protobuf.Bytes);
+        var fromItem = RecordItemCodec.DecodeBallot(item, manifest, "device");
+        Assert.Equal((byte[])ballot.SelectionEncryptionIdentifierHash, (byte[])fromItem.SelectionEncryptionIdentifierHash);
+        Assert.Equal(ballot.Contests[0].Choices[0].Alpha, fromItem.Contests[0].Choices[0].Alpha);
+        Assert.Equal(item, RecordItemCodec.EncodeBallot(fromItem, manifest));
 
-        // Round-trip through Protobuf serializer.
-        var protobufSerializer = new ProtobufEncryptedBallotSerializer();
-        using (var protobufStream = new MemoryStream())
-        {
-            protobufSerializer.Serialize(protobufStream, ballot);
-            protobufStream.Position = 0;
-            var protobufRoundTrip = protobufSerializer.Deserialize(protobufStream);
-            Assert.NotNull(protobufRoundTrip);
-            Assert.Equal(ballot.Id, protobufRoundTrip.Id);
-            Assert.Equal(
-                ballot.Contests[0].Choices[0].Alpha,
-                protobufRoundTrip.Contests[0].Choices[0].Alpha);
-        }
+        byte[] line = RecordItemCodec.EncodeBallotJson(ballot, manifest);
+        Assert.Equal(line.LongLength, metrics.Json.Bytes);
+        var fromLine = RecordItemCodec.DecodeBallotJson(line, manifest, "device");
+        Assert.Equal(item, RecordItemCodec.EncodeBallot(fromLine, manifest));
     }
 }

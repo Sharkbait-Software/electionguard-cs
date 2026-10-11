@@ -1,13 +1,22 @@
 using System.Diagnostics;
 using ElectionGuard.Core.BallotEncryption;
-using ElectionGuard.Core.Serialization;
+using ElectionGuard.Core.Models;
+using ElectionGuard.Core.RecordFormat;
 using ElectionGuard.Perf.Cli.Results;
 
 namespace ElectionGuard.Perf.Cli.Running;
 
+/// <summary>
+/// One encrypted ballot through the election record's item codec (<see cref="RecordItemCodec"/>,
+/// S10b-15): <c>protobuf</c> is the canonical <c>RecordItem</c> encoding a record stores and a device
+/// sends, <c>json</c> its proto3 JSON line (design §5.5). Decoding includes what a reader does with
+/// an item: the canonicality check, the parse and the mapping to the domain ballot. Until S10b-15
+/// these two keys measured the retired protobuf-net and System.Text.Json serializers, so a record of
+/// either era compares only with its own.
+/// </summary>
 public static class SerializationBenchmark
 {
-    public static SerializationMetrics Measure(EncryptedBallot ballot, int iterations = 100)
+    public static SerializationMetrics Measure(EncryptedBallot ballot, Manifest manifest, int iterations = 100)
     {
         if (iterations < 1)
         {
@@ -16,15 +25,22 @@ public static class SerializationBenchmark
 
         int contestCount = ballot.Contests.Count;
         int selectionCount = ballot.Contests.Sum(contest => contest.Choices.Count);
+        string deviceId = ballot.DeviceId;
 
         return new()
         {
-            Json = MeasureOne(new JsonEncryptedBallotSerializer(), ballot, iterations) with
+            Json = MeasureOne(
+                () => RecordItemCodec.EncodeBallotJson(ballot, manifest),
+                bytes => RecordItemCodec.DecodeBallotJson(bytes, manifest, deviceId),
+                iterations) with
             {
                 ContestCount = contestCount,
                 SelectionCount = selectionCount,
             },
-            Protobuf = MeasureOne(new ProtobufEncryptedBallotSerializer(), ballot, iterations) with
+            Protobuf = MeasureOne(
+                () => RecordItemCodec.EncodeBallot(ballot, manifest),
+                bytes => RecordItemCodec.DecodeBallot(bytes, manifest, deviceId),
+                iterations) with
             {
                 ContestCount = contestCount,
                 SelectionCount = selectionCount,
@@ -32,31 +48,18 @@ public static class SerializationBenchmark
         };
     }
 
-    private static SerializerMetrics MeasureOne(
-        IEncryptedBallotSerializer serializer,
-        EncryptedBallot ballot,
-        int iterations)
+    private static SerializerMetrics MeasureOne(Func<byte[]> encode, Func<byte[], EncryptedBallot> decode, int iterations)
     {
-        byte[] encoded = Encode(serializer, ballot);
+        byte[] encoded = encode();
 
         // Warm the call tree before measuring, for the same tiered-compilation reason the pipeline
         // has a warmup pass.
-        using (var warmup = new MemoryStream(encoded))
-        {
-            serializer.Deserialize(warmup);
-        }
+        decode(encoded);
 
         var stopwatch = Stopwatch.StartNew();
         for (int i = 0; i < iterations; i++)
         {
-            // Do not call .ToArray() in the timed loop; it allocates and copies a full buffer.
-            // Serialize into a fresh MemoryStream and discard it so serialize and deserialize
-            // throughput figures measure comparable amounts of work. Pre-size it to encoded.Length
-            // -- the length of a prior real serialization of this same ballot (see Encode below) --
-            // so this loop does not pay array-doubling growth that the deserialize loop's
-            // `new MemoryStream(encoded)` never pays by wrapping an existing buffer.
-            using var destination = new MemoryStream(encoded.Length);
-            serializer.Serialize(destination, ballot);
+            encode();
         }
 
         stopwatch.Stop();
@@ -65,8 +68,7 @@ public static class SerializationBenchmark
         stopwatch.Restart();
         for (int i = 0; i < iterations; i++)
         {
-            using var source = new MemoryStream(encoded);
-            serializer.Deserialize(source);
+            decode(encoded);
         }
 
         stopwatch.Stop();
@@ -78,12 +80,5 @@ public static class SerializationBenchmark
             DeserializeOpsPerSec = deserializeOpsPerSec,
             Bytes = encoded.LongLength,
         };
-    }
-
-    private static byte[] Encode(IEncryptedBallotSerializer serializer, EncryptedBallot ballot)
-    {
-        using var destination = new MemoryStream();
-        serializer.Serialize(destination, ballot);
-        return destination.ToArray();
     }
 }
