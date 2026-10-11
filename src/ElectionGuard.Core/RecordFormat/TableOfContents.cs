@@ -16,13 +16,15 @@ public sealed record TocEntry
 
     /// <summary>
     /// An entry. Throws <see cref="ArgumentOutOfRangeException"/> for a negative item count or a
-    /// pseudo-section type (0xFFFE, 0xFFFF), which never appear in a TOC.
+    /// type that is not a section type of EGRF v2 (0, the pseudo-sections 0xFFFE and 0xFFFF, and any
+    /// undeclared value: a new section kind comes with a new format major, user decision NQ-7, and
+    /// there are no vendor sections).
     /// </summary>
     public TocEntry(RecordSectionType type, ReadOnlySpan<byte> key, bool critical, long itemCount, Sha256Digest root)
     {
-        if ((ushort)type is 0 or > RecordSections.LastVendorType)
+        if (!RecordSections.IsStandard(type))
         {
-            throw new ArgumentOutOfRangeException(nameof(type), type, "Section types 0, 0xFFFE (TOC) and 0xFFFF (signatures) never appear in a TOC.");
+            throw new ArgumentOutOfRangeException(nameof(type), type, "Only the section types of EGRF v2 appear in a TOC; 0, 0xFFFE (TOC) and 0xFFFF (signatures) never do.");
         }
 
         ArgumentOutOfRangeException.ThrowIfNegative(itemCount);

@@ -176,12 +176,6 @@ internal static class RecordLayout
             return $"devices/{kind}-{Convert.ToHexStringLower(key[1..])}/{name}";
         }
 
-        if (RecordSections.IsVendor(section.Type))
-        {
-            string key = section.Key.IsEmpty ? "" : "-" + Convert.ToHexStringLower(section.Key.Span);
-            return $"vendor/{(ushort)section.Type:x4}{key}/{name}";
-        }
-
         throw new ArgumentException($"Section type 0x{(ushort)section.Type:x4} has no place in the layout.", nameof(section));
     }
 
@@ -295,25 +289,6 @@ internal static class RecordLayout
             }
 
             return new LayoutFile(path, LayoutFileKind.Segment, new SectionKey(RecordSectionType.Device, [kind, .. Convert.FromHexString(hex)]), index, ext);
-        }
-
-        if (directory.StartsWith("vendor/", StringComparison.Ordinal))
-        {
-            string name = directory["vendor/".Length..];
-            string typeHex = name.Length >= 4 ? name[..4] : "";
-            string keyHex = name.Length > 4 && name[4] == '-' ? name[5..] : "";
-            if (!IsLowerHex(typeHex, 4) || (name.Length > 4 && (name[4] != '-' || keyHex.Length == 0 || keyHex.Length % 2 != 0 || !IsLowerHex(keyHex, keyHex.Length))))
-            {
-                throw Unlisted(path);
-            }
-
-            var type = (RecordSectionType)ushort.Parse(typeHex, NumberStyles.HexNumber, CultureInfo.InvariantCulture);
-            if (!RecordSections.IsVendor(type))
-            {
-                throw Unlisted(path);
-            }
-
-            return new LayoutFile(path, LayoutFileKind.Segment, new SectionKey(type, Convert.FromHexString(keyHex)), index, ext);
         }
 
         throw Unlisted(path);

@@ -32,6 +32,7 @@ internal sealed partial class RecordVerificationRun
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private readonly ConcurrentDictionary<string, string> _skipped = new(StringComparer.Ordinal);
     private readonly List<TocEntry> _computed = [];
+    private readonly Dictionary<SectionKey, long> _unreadable = [];
     private readonly List<AttestationResult> _attestationResults = [];
     private readonly List<RecordSignatureResult> _signatureResults = [];
     private readonly ConcurrentDictionary<string, bool> _contestsOnSubmittedBallots = new(StringComparer.Ordinal);
@@ -49,6 +50,7 @@ internal sealed partial class RecordVerificationRun
     private TimeSpan _elapsedBefore;
     private SpillingIdentifierSet? _identifiers;
     private Dictionary<DeviceKey, List<Attestation>> _attestations = [];
+    private bool _attestationsWhole = true;
     private RecordDecoded<EncryptedTally>? _encryptedTally;
     private int _undecodableCast;
 
@@ -299,14 +301,25 @@ internal sealed partial class RecordVerificationRun
         }
     }
 
+    /// <summary>
+    /// The stored manifest's bytes, for the copy check; null when the section holds no canonical
+    /// manifest_file first or cannot be read. A failure reading it is not reported here: step B
+    /// digests the section and reports it there, once (design §6.9; S10b-E review round 3).
+    /// </summary>
     private async ValueTask<byte[]?> ReadManifestBytesAsync()
     {
-        await foreach (var item in _reader.ReadSectionAsync(SectionKey.Of(RecordSectionType.Manifest), 0, _ct).ConfigureAwait(false))
+        try
         {
-            if (item.Check.IsCanonical && Pb.RecordItem.Parser.ParseFrom(item.Bytes.Span) is { ItemCase: Pb.RecordItem.ItemOneofCase.ManifestFile } parsed)
+            await foreach (var item in _reader.ReadSectionAsync(SectionKey.Of(RecordSectionType.Manifest), 0, _ct).ConfigureAwait(false))
             {
-                return parsed.ManifestFile.Content.ToByteArray();
+                if (item.Check.IsCanonical && Pb.RecordItem.Parser.ParseFrom(item.Bytes.Span) is { ItemCase: Pb.RecordItem.ItemOneofCase.ManifestFile } parsed)
+                {
+                    return parsed.ManifestFile.Content.ToByteArray();
+                }
             }
+        }
+        catch (VerificationFailedException)
+        {
         }
 
         return null;
@@ -332,7 +345,7 @@ internal sealed partial class RecordVerificationRun
         {
             var section = SectionKey.Of(type);
             int count = 0;
-            await DigestAsync(section, item =>
+            bool whole = await DigestAsync(section, item =>
             {
                 count++;
                 if (!item.Check.IsCanonical)
@@ -353,6 +366,15 @@ internal sealed partial class RecordVerificationRun
 
                 items.Add(parsed);
             }).ConfigureAwait(false);
+
+            if (!whole)
+            {
+                // Its carrier failure is reported (R.container, R.encoding). How many items it holds is
+                // unknown, so no count is claimed (it is not R.structure), and Verifications 1-4 are not
+                // evaluable over the items read before the failure (S10b-E review round 3).
+                readable = false;
+                continue;
+            }
 
             if (many ? count == 0 : count != 1)
             {
@@ -466,15 +488,23 @@ internal sealed partial class RecordVerificationRun
         }
     }
 
-    /// <summary>Reads a whole section, digesting every item into its TOC entry, and hands each item to <paramref name="onItem"/>.</summary>
-    private async ValueTask DigestAsync(SectionKey section, Action<RecordItemBytes> onItem)
+    /// <summary>
+    /// Reads a whole section, digesting every item into its TOC entry, and hands each item to
+    /// <paramref name="onItem"/>. Returns false when the section could not be read to its end (its
+    /// failure is reported here, once): the items handed on are then a prefix of the section, and
+    /// whatever reads the section is not evaluable, never judged over that prefix (design §6.9; S10b-E
+    /// review round 3). True for a section read whole, and for one the record does not hold (the
+    /// presence rules are checked elsewhere).
+    /// </summary>
+    private async ValueTask<bool> DigestAsync(SectionKey section, Action<RecordItemBytes> onItem)
     {
         if (!_reader.Sections.Contains(section))
         {
-            return;
+            return true;
         }
 
         var frontier = new MerkleFrontier();
+        long lastWhole = -1;
         try
         {
             await foreach (var item in _reader.ReadSectionAsync(section, 0, _ct).ConfigureAwait(false))
@@ -482,16 +512,66 @@ internal sealed partial class RecordVerificationRun
                 frontier.Append(item.Bytes.Span);
                 _counters.Digest(item.Bytes.Length);
                 onItem(item);
+                lastWhole = item.Ordinal;
             }
         }
         catch (VerificationFailedException ex)
         {
             // A carrier or line failure mid-section (R.container, R.encoding): the section's root is unknown.
             Report(StepRecord, ex.SubSection, ex.Message, section);
-            return;
+            SectionUnreadable(section, lastWhole);
+            return false;
         }
 
         AddEntry(section, frontier);
+        return true;
+    }
+
+    /// <summary>
+    /// Notes a section that could not be read whole, with the ordinal of the last item read whole
+    /// before the failure (-1 for none, and for a section that is not a device section). Its failure
+    /// is reported once, where it was read: step F does not digest it again (design §6.9: each finding
+    /// once). A join item naming a position after that ordinal of an unreadable device section is not
+    /// a stray (<see cref="IsUnreadBallot"/>). Kept in the checkpoint. Returns false when the section
+    /// was noted already (a resumed run reading it again).
+    /// </summary>
+    private bool SectionUnreadable(SectionKey section, long lastWholeOrdinal = -1)
+    {
+        lock (_unreadable)
+        {
+            return _unreadable.TryAdd(section, lastWholeOrdinal);
+        }
+    }
+
+    private bool IsUnreadable(SectionKey section)
+    {
+        lock (_unreadable)
+        {
+            return _unreadable.ContainsKey(section);
+        }
+    }
+
+    /// <summary>
+    /// Whether <paramref name="locator"/> names a position of a device section that could not be read
+    /// whole, after the last item read whole: an item the run never saw. Every position at or before
+    /// that ordinal was read (position 0 is the header, never a ballot), so this is decided without
+    /// waiting for the failure, and a join item naming such a position is a stray at any batching or
+    /// parallelism (S10b-E review round 2).
+    /// </summary>
+    private bool IsUnreadBallot(BallotLocator locator)
+    {
+        lock (_unreadable)
+        {
+            return locator.Position > 0 && _unreadable.TryGetValue(SectionKey.Device(locator.Device), out long lastWhole) && locator.Position > lastWhole;
+        }
+    }
+
+    private List<(SectionKey Section, long LastWholeOrdinal)> UnreadableSections()
+    {
+        lock (_unreadable)
+        {
+            return [.. _unreadable.OrderBy(x => x.Key).Select(x => (x.Key, x.Value))];
+        }
     }
 
     private void AddEntry(SectionKey section, MerkleFrontier frontier)
@@ -518,7 +598,7 @@ internal sealed partial class RecordVerificationRun
         Pb.EncryptedTallyHeader? header = null;
         var contests = new List<Pb.EncryptedTallyContest>();
         bool readable = true;
-        await DigestAsync(tallySection, item =>
+        bool tallyWhole = await DigestAsync(tallySection, item =>
         {
             if (!item.Check.IsCanonical)
             {
@@ -544,7 +624,13 @@ internal sealed partial class RecordVerificationRun
             }
         }).ConfigureAwait(false);
 
-        if (header is null && readable)
+        if (!tallyWhole)
+        {
+            // Read in part (reported): the contests after the failure are unknown, so 9 and 10 are not
+            // evaluable rather than failed over the contests read (design §6.9).
+            readable = false;
+        }
+        else if (header is null && readable)
         {
             readable = false;
             Report(StepTally, RecordCodes.Structure, $"Section {tallySection} has no encrypted_tally_header (§4.5).", tallySection);
@@ -613,7 +699,7 @@ internal sealed partial class RecordVerificationRun
         var decryptedSection = SectionKey.Of(RecordSectionType.DecryptedTally);
         var decryptedContests = new List<Pb.DecryptedTallyContest>();
         bool decryptedReadable = true;
-        await DigestAsync(decryptedSection, item =>
+        bool decryptedWhole = await DigestAsync(decryptedSection, item =>
         {
             if (!item.Check.IsCanonical)
             {
@@ -635,7 +721,9 @@ internal sealed partial class RecordVerificationRun
             }
         }).ConfigureAwait(false);
 
-        if (!decryptedReadable || _record is null)
+        // Read in part (reported): 10 and 11 are not evaluable, never judged over the contests read
+        // before the failure (11.D would name a contest the unread part may hold).
+        if (!decryptedWhole || !decryptedReadable || _record is null)
         {
             _outcomes.NotEvaluable(10);
             _outcomes.NotEvaluable(11);
@@ -696,21 +784,14 @@ internal sealed partial class RecordVerificationRun
             }
         }
 
-        // Every other section (vendor sections; the final sections a guardian run does not read):
-        // digested, and a critical vendor section, which nothing here understands, is R.version.
+        // Any section of the verified phases that no step read is still digested, so the roots
+        // cover it. (Every section type is one the steps read: there are no vendor sections, and a
+        // new section kind comes with a new major, user decisions "Remove them" and NQ-7.)
         if (!IsBallotCorrectness)
         {
-            foreach (var section in _reader.Sections.Where(x => x.Phase <= Phase && !_computed.Any(e => e.Type == x.Type && e.Key.Span.SequenceEqual(x.Key.Span))))
+            foreach (var section in _reader.Sections.Where(x => x.Phase <= Phase && !IsUnreadable(x) && !_computed.Any(e => e.Type == x.Type && e.Key.Span.SequenceEqual(x.Key.Span))))
             {
                 await DigestAsync(section, item => NoteUnknownContent(item.Check, section)).ConfigureAwait(false);
-                if (RecordSections.IsVendor(section.Type))
-                {
-                    _counters.Vendor();
-                    if (ElectionRecord.CriticalBitOf(_reader, section))
-                    {
-                        Report(StepCompletion, RecordCodes.Version, $"Vendor section {section} is marked critical: its writer says it must be understood to verify the record, and this verifier does not understand vendor sections (design §7).", section);
-                    }
-                }
             }
         }
 
@@ -1017,7 +1098,7 @@ internal sealed partial class RecordVerificationRun
     /// <summary>The statistics' counters. Thread-safe.</summary>
     private sealed class Counters
     {
-        private long _ballots, _cast, _challenged, _spoiled, _preCast, _uncastFull, _uncastCompact, _devices, _vendor, _items, _bytes;
+        private long _ballots, _cast, _challenged, _spoiled, _preCast, _uncastFull, _uncastCompact, _devices, _items, _bytes;
 
         public long BallotItems => Interlocked.Read(ref _ballots);
 
@@ -1039,7 +1120,6 @@ internal sealed partial class RecordVerificationRun
 
         public void Device() => Interlocked.Increment(ref _devices);
 
-        public void Vendor() => Interlocked.Increment(ref _vendor);
 
         public void Digest(long bytes)
         {
@@ -1047,12 +1127,12 @@ internal sealed partial class RecordVerificationRun
             Interlocked.Add(ref _bytes, bytes);
         }
 
-        public long[] Export() => [_ballots, _cast, _challenged, _spoiled, _preCast, _uncastFull, _uncastCompact, _devices, _vendor, _items, _bytes];
+        public long[] Export() => [_ballots, _cast, _challenged, _spoiled, _preCast, _uncastFull, _uncastCompact, _devices, _items, _bytes];
 
         public void Import(long[] values)
         {
-            (_ballots, _cast, _challenged, _spoiled, _preCast, _uncastFull, _uncastCompact, _devices, _vendor, _items, _bytes) =
-                (values[0], values[1], values[2], values[3], values[4], values[5], values[6], values[7], values[8], values[9], values[10]);
+            (_ballots, _cast, _challenged, _spoiled, _preCast, _uncastFull, _uncastCompact, _devices, _items, _bytes) =
+                (values[0], values[1], values[2], values[3], values[4], values[5], values[6], values[7], values[8], values[9]);
         }
 
         public RecordStatistics Snapshot() => new()
@@ -1065,7 +1145,6 @@ internal sealed partial class RecordVerificationRun
             UncastFull = _uncastFull,
             UncastCompact = _uncastCompact,
             Devices = _devices,
-            VendorSections = _vendor,
             ItemsDigested = _items,
             BytesDigested = _bytes,
         };

@@ -20,6 +20,7 @@ internal sealed class EgrfSchema
     public const string RecordItemName = Package + ".RecordItem";
     public const string SegmentHeaderName = Package + ".SegmentHeader";
     public const string SectionTypeName = Package + ".SectionType";
+    public const string DeviceKindName = Package + ".DeviceKind";
     public const string TimestampName = "google.protobuf.Timestamp";
 
     public static EgrfSchema Instance { get; } = Build();
@@ -108,18 +109,16 @@ internal sealed record FieldShape(int Number, string Name, FieldType Type, bool 
 
 internal sealed record EnumShape(string FullName, IReadOnlySet<long> Values)
 {
-    /// <summary>
-    /// D2: a declared, non-zero member. <c>SectionType</c> also admits the vendor range
-    /// 32768-65533 (design §4.3).
-    /// </summary>
-    public bool IsDeclaredNonZero(long value) =>
-        value != 0 && (Values.Contains(value) || (FullName == EgrfSchema.SectionTypeName && value is >= RecordSections.FirstVendorType and <= RecordSections.LastVendorType));
+    /// <summary>D2: a declared, non-zero member (design §4.3).</summary>
+    public bool IsDeclaredNonZero(long value) => value != 0 && Values.Contains(value);
 
     /// <summary>
     /// Whether a later minor may declare a value of this enum, so that a reader older than the record
-    /// reports an undeclared one as content not understood rather than D2. Every enum but
-    /// <c>SectionType</c>: a new section kind comes only with a new format major (user decision NQ-7),
-    /// so an undeclared non-vendor section type is D2 at any reader age.
+    /// reports an undeclared one as content not understood rather than D2. Every enum but the two
+    /// closed ones: <c>SectionType</c> (a new section kind comes only with a new format major, user
+    /// decision NQ-7) and <c>DeviceKind</c> (a device kind is a section kind in all but name, user
+    /// decision NQ-9, "DeviceKind closed, others open", 2026-10-10). An undeclared value of either is
+    /// D2 at any reader age, wherever it occurs.
     /// </summary>
-    public bool MayGrowInAMinor => FullName != EgrfSchema.SectionTypeName;
+    public bool MayGrowInAMinor => FullName is not (EgrfSchema.SectionTypeName or EgrfSchema.DeviceKindName);
 }

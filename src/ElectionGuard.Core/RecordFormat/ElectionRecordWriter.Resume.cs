@@ -24,7 +24,7 @@ public sealed partial class ElectionRecordWriter
     /// </list>
     /// A corrupt item in the middle of a section, or a zero-length frame followed by data, is not
     /// repaired, and any other section not in the TOC (a device section after voting was sealed, a
-    /// vendor section, a section of a phase other than the next) is not removed
+    /// section of a phase other than the next) is not removed
     /// (<see cref="InvalidDataException"/> for both): the record stays as it is until an operator
     /// decides. A directory with no TOC has fixed no phase; write it again from the start.
     /// </summary>
@@ -93,7 +93,7 @@ public sealed partial class ElectionRecordWriter
         // Checked before anything is touched: a section this writer cannot have left behind is
         // foreign data, which is not deleted; an operator decides (design §5.2). That is a device
         // section after voting was sealed (sealing needs every device closed, and devices open only
-        // before it), a vendor section, or a section of a phase other than the next one.
+        // before it), or a section of a phase other than the next one.
         var unlisted = reader.Sections.Where(x => !listed.ContainsKey(x)).ToList();
         foreach (var section in unlisted)
         {

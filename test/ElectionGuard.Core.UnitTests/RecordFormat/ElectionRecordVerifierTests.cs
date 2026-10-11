@@ -263,6 +263,14 @@ public class ElectionRecordVerifierTests
             rows.Add("signed", stop);
         }
 
+        // A device section cut inside its fourth item: the stops fall before the failure is read, on
+        // the batch that finds it (the last item read whole) and after it, so a resumed run reports
+        // the failure once and counts the broken section once (S10b-E review round 2).
+        foreach (int stop in new[] { 2, 3, 4, 5 })
+        {
+            rows.Add("torn", stop);
+        }
+
         return rows;
     }
 
@@ -293,6 +301,26 @@ public class ElectionRecordVerifierTests
             default:
                 await WriteAsync(RegularElection.Value, directory, RecordEncoding.Protobuf);
                 break;
+        }
+
+        if (record == "torn")
+        {
+            // The device with the most items (header, ballots, close), cut inside its item 3.
+            DeviceKey largest = default;
+            int most = 0;
+            await using (var reader = await ElectionRecord.OpenAsync(directory))
+            {
+                foreach (var key in reader.Devices)
+                {
+                    int count = (await reader.ReadSectionAsync(SectionKey.Device(key)).ToListAsync()).Count;
+                    (largest, most) = count > most ? (key, count) : (largest, most);
+                }
+            }
+
+            Assert.True(most >= 5, $"{most} items");
+            string segment = RecordTamper.PathOf(directory, SectionKey.Device(largest));
+            var frames = RecordDirectoryCarrierTests.Frames(File.ReadAllBytes(segment));
+            File.WriteAllBytes(segment, [.. RecordDirectoryCarrierTests.Join(frames[..4]), .. frames[4][..^1]]);
         }
 
         if (record == "tampered")
@@ -335,6 +363,11 @@ public class ElectionRecordVerifierTests
             case "signed":
                 Assert.True(uninterrupted.Passed, Describe(uninterrupted));
                 Assert.Equal(4, uninterrupted.Attestations.Count(x => x.Signature?.Status == SignatureStatus.Valid));
+                break;
+            case "torn":
+                Assert.False(uninterrupted.Passed);
+                Assert.Single(uninterrupted.Findings, x => x.SubSection == RecordCodes.Container);
+                Assert.Equal(VerificationOutcome.NotEvaluable, uninterrupted.Verifications[9]);
                 break;
             default:
                 Assert.True(uninterrupted.Passed, Describe(uninterrupted));

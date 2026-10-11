@@ -162,6 +162,21 @@ internal sealed partial class RecordVerificationRun
         resumed?.Cursors.TryGetValue(((ushort)type).ToString(System.Globalization.CultureInfo.InvariantCulture), out state);
         return JoinCursor.Open(_reader, type, member, code, finding =>
         {
+            if (finding.Stray && finding.Locator is { } locator && IsUnreadBallot(locator))
+            {
+                // The ballot it names is at a position of a broken device section after its last item
+                // read whole (the failure is reported there): whether it can be joined is unknown, so
+                // it is not evaluable, not a stray. A position at or before that item was read, so a
+                // stray there is one, whenever the cursor reports it (S10b-E review round 2).
+                int verification = VerificationOf(finding.SubSection);
+                foreach (var v in (verification == 13 ? new[] { 13, 14 } : [verification]).Where(Runs))
+                {
+                    _outcomes.NotEvaluable(v);
+                }
+
+                return;
+            }
+
             // The ballot correctness profile does not verify the join sections, only the items it joins;
             // a failure that stops a section is reported under every profile, since the chosen ballots'
             // joins after it are then unknown.
@@ -178,7 +193,7 @@ internal sealed partial class RecordVerificationRun
         var section = SectionKey.Of(RecordSectionType.DeviceAttestations);
         var attestations = new Dictionary<DeviceKey, List<Attestation>>();
         (string Device, int Member, Sha256Digest Statement, string Item)? last = null;
-        await DigestAsync(section, item =>
+        _attestationsWhole = await DigestAsync(section, item =>
         {
             var check = CanonicalProtobuf.CheckSignedStatement(item.Bytes.Span, _reader.Format.Minor);
             if (!check.IsCanonical)
@@ -324,6 +339,10 @@ internal sealed partial class RecordVerificationRun
                 // A broken section has no root (its failure is reported): the claimed TOC's entry is then R.root.
                 AddEntry(cursor.Section, cursor.Frontier);
             }
+            else
+            {
+                SectionUnreadable(cursor.Section);
+            }
 
             await cursor.DisposeAsync().ConfigureAwait(false);
         }
@@ -350,6 +369,7 @@ internal sealed partial class RecordVerificationRun
             var section = SectionKey.Device(key);
             var items = _reader.ReadSectionAsync(section, from > 0 ? 0 : from, _ct).GetAsyncEnumerator(_ct);
             RecordItemBytes? pending = null;
+            long lastWhole = -1;
             try
             {
                 while (true)
@@ -363,6 +383,7 @@ internal sealed partial class RecordVerificationRun
                     {
                         Report(StepBallots, ex.SubSection, ex.Message, section);
                         context.Broken = true;
+                        BrokenDevice(context, counted: !SectionUnreadable(section, lastWhole));
                         break;
                     }
 
@@ -372,6 +393,7 @@ internal sealed partial class RecordVerificationRun
                     }
 
                     var raw = items.Current;
+                    lastWhole = raw.Ordinal;
                     if (raw.Ordinal < from)
                     {
                         // A resumed section: its header is read again for S_device, without its checks.
@@ -401,10 +423,56 @@ internal sealed partial class RecordVerificationRun
             {
                 yield return new Event(context, final, last: true);
             }
+            else if (pending is { } read && context.Broken && !IsCloseItem(read))
+            {
+                // The last item read before the failure was read whole: unless it is the close (whose
+                // chain end cannot be told from a truncated section's), it is verified like any other,
+                // as a ballot that is not the section's last, so its own findings are reported.
+                yield return new Event(context, read, last: false);
+            }
             else if (!context.Broken && from == 0)
             {
                 Report(StepBallots, context.StructureCode, $"Device section {section} holds no item (§4.5: a device_header first).", section);
             }
+        }
+    }
+
+    /// <summary>
+    /// A device section that could not be read whole (reported): its unread items, and its close, are
+    /// unknown, so every verification they would feed is not evaluable, never <c>Passed</c> over items
+    /// it never saw (design §6.9). The items may be cast ballots, so the recount misses an unknown
+    /// number of factors: Verification 9 and the tally header's R.summary are not evaluable, as for a
+    /// cast ballot with a finding (design §6.2; found by the Python reference reader's cross-check,
+    /// S10b-E). 11.D reads every submitted ballot's contests. In a final record an unread regular ballot may
+    /// be challenged without a decryption (13, 14); a pre-encrypting section's may be cast or uncast
+    /// (15-19). The join items naming a position after its last item read whole are not strays but leave their verification not
+    /// evaluable (<see cref="OpenCursor"/>), which covers contest data (12).
+    /// Verification 10 reads only the tally sections and is left alone.
+    /// </summary>
+    private void BrokenDevice(DeviceContext device, bool counted)
+    {
+        if (!counted)
+        {
+            // A resumed run that reads the section again finds what its checkpoint already counted.
+            Interlocked.Increment(ref _undecodableCast);
+        }
+
+        var affected = new List<int> { 5, 6, 7, 9, 11, device.ChainVerification };
+        if (device.PreEncrypting)
+        {
+            affected.AddRange([15, 17, 18, 19]);
+        }
+        else if (Phase >= RecordPhase.Final)
+        {
+            // Every challenged ballot has a decryption (#8): an unread one's missing decryption cannot be
+            // seen. Contest data has no such obligation: a request or decryption naming an unread ballot
+            // is a join item, and its 12 is not evaluable through the stray rule.
+            affected.AddRange([13, 14]);
+        }
+
+        foreach (var verification in affected.Where(Runs))
+        {
+            _outcomes.NotEvaluable(verification);
         }
     }
 
@@ -554,10 +622,10 @@ internal sealed partial class RecordVerificationRun
             return;
         }
 
-        // Compared on the wire values: v2's layout has a section only for a declared device kind
-        // (§5.3.1), so a header naming another kind (a later minor's, design §7 "Enum value") does not
-        // match its section and is the device's structure finding, never an exception. The header is
-        // not taken, so the device's chain is not evaluable (at its close).
+        // Compared on the wire values: a header naming another declared kind or another H_DI does not
+        // match its section and is the device's structure finding, never an exception. (An undeclared
+        // kind never gets here: DeviceKind is closed, NQ-9, so the canonicality check reports it as
+        // D2.) The header is not taken, so the device's chain is not evaluable (at its close).
         if (!DeviceMapper.NamesKey(parsed.DeviceHeader, device.Key))
         {
             Report(StepBallots, device.StructureCode, DeviceMapper.KeyMismatch(device.Section, parsed.DeviceHeader), device.Section, 0);
@@ -1221,9 +1289,10 @@ internal sealed partial class RecordVerificationRun
         var section = SectionKey.Of(RecordSectionType.DeviceAttestations);
         bool chainClose = false;
         bool validChainClose = false;
+        bool chainCloseUnknown = false;
         foreach (var attestation in _attestations.GetValueOrDefault(device.Key) ?? [])
         {
-            var (kind, mismatch) = AttestationContents(device, attestation.Statement);
+            var (kind, mismatch, complete) = AttestationContents(device, attestation.Statement);
             if (mismatch is not null)
             {
                 Report(StepBallots, RecordCodes.Attestation, $"The {kind} attestation of device {device.DeviceId} does not match its section: {mismatch} (design §4.9).", section, attestation.Ordinal);
@@ -1237,13 +1306,15 @@ internal sealed partial class RecordVerificationRun
 
             lock (_attestationResults)
             {
-                _attestationResults.Add(new AttestationResult(device.Key, kind, true, mismatch is null, signature, mismatch ?? $"The {kind} attestation matches the section."));
+                _attestationResults.Add(new AttestationResult(device.Key, kind, true, mismatch is null && complete, signature,
+                    mismatch ?? (complete ? $"The {kind} attestation matches the section." : $"The {kind} attestation could not be compared in full: the section's header, a ballot or its close was not read (not evaluable, design §6.9).")));
             }
 
             if (kind == AttestationKind.ChainClose)
             {
                 chainClose = true;
-                validChainClose |= mismatch is null && signature.Status == SignatureStatus.Valid;
+                validChainClose |= mismatch is null && complete && signature.Status == SignatureStatus.Valid;
+                chainCloseUnknown |= mismatch is null && !complete && signature.Status == SignatureStatus.Valid;
             }
         }
 
@@ -1255,17 +1326,27 @@ internal sealed partial class RecordVerificationRun
             }
         }
 
-        if (_options.SignaturePolicy == SignaturePolicy.RequireValid && !validChainClose)
+        // A validly signed chain close that could not be compared in full may match: not decided.
+        // So may one in the part of the attestations section that could not be read.
+        if (_options.SignaturePolicy == SignaturePolicy.RequireValid && !validChainClose && !chainCloseUnknown && _attestationsWhole)
         {
             Report(StepBallots, RecordCodes.Attestation, $"Device {device.DeviceId} has no validly signed chain-close attestation that matches its section; the policy requires one (design §4.9).", device.Section);
         }
     }
 
-    private (AttestationKind Kind, string? Mismatch) AttestationContents(DeviceContext device, Pb.RecordItem statement)
+    private (AttestationKind Kind, string? Mismatch, bool Complete) AttestationContents(DeviceContext device, Pb.RecordItem statement)
     {
         var mismatches = new List<string>();
         byte[] he = _record!.ExtendedBaseHash;
         byte[] key = device.Key.ToBytes();
+
+        // What a chain-close or prefix statement binds (the header's S_device and mode, the close, the
+        // codes in chain order) is known only when the header was taken, every ballot link was walked
+        // and the close was read. Otherwise those parts are not evaluable and are not compared: a
+        // header or ballot that is not canonical says nothing about whether the statement matches
+        // (design §6.9; S10b-E review round 3). H_E and the device key are always compared, and a
+        // section seal binds only the section's root, known whenever the section was read whole.
+        bool chainKnown = device.HeaderOk && device.Walker.IsComplete;
         switch (statement.ItemCase)
         {
             case Pb.RecordItem.ItemOneofCase.ChainCloseStatement:
@@ -1273,17 +1354,19 @@ internal sealed partial class RecordVerificationRun
                 var s = statement.ChainCloseStatement;
                 Compare(s.HE.Span.SequenceEqual(he), "H_E");
                 Compare(s.DeviceKey.Span.SequenceEqual(key), "the device key");
-                Compare(s.DeviceId == device.Header?.DeviceId, "S_device");
-                Compare(device.Header is { } header && s.ChainingMode == (uint)header.ChainingMode, "the chaining mode");
-                Compare(device.Close is { } close && (long)s.BallotCount == close.BallotCount && (long)s.BallotCount == device.Walker.Count, "the ballot count ℓ");
-                if (device.Walker.IsComplete)
+                bool complete = chainKnown && device.Close is not null;
+                if (complete && device.Close is { } close)
                 {
+                    var header = device.Header!;
+                    Compare(s.DeviceId == header.DeviceId, "S_device");
+                    Compare(s.ChainingMode == (uint)header.ChainingMode, "the chaining mode");
+                    Compare((long)s.BallotCount == close.BallotCount && (long)s.BallotCount == device.Walker.Count, "the ballot count ℓ");
                     Compare(s.CodesRoot.Span.SequenceEqual(device.Walker.CodesRoot.ToArray()), "codes_root over the confirmation codes in chain order");
+                    byte[] closing = close.ClosingHash is { } hash ? hash : [];
+                    Compare(s.ClosingHash.Span.SequenceEqual(closing), "the closing hash H̄");
                 }
 
-                byte[] closing = device.Close?.ClosingHash is { } hash ? hash : [];
-                Compare(s.ClosingHash.Span.SequenceEqual(closing), "the closing hash H̄");
-                return (AttestationKind.ChainClose, Joined());
+                return (AttestationKind.ChainClose, Joined(), complete);
             }
 
             case Pb.RecordItem.ItemOneofCase.SectionSealStatement:
@@ -1293,7 +1376,7 @@ internal sealed partial class RecordVerificationRun
                 Compare(s.DeviceKey.Span.SequenceEqual(key), "the device key");
                 Compare((long)s.ItemCount == device.Frontier.Count, "the item count ℓ + 2");
                 Compare(s.SectionRoot.Span.SequenceEqual(device.Frontier.Root().ToArray()), "the section root");
-                return (AttestationKind.SectionSeal, Joined());
+                return (AttestationKind.SectionSeal, Joined(), true);
             }
 
             default:
@@ -1306,12 +1389,12 @@ internal sealed partial class RecordVerificationRun
                 {
                     Compare(s.CodesRoot.Span.SequenceEqual(MerkleTree.EmptyRoot.ToArray()), "codes_root of no ballots");
                 }
-                else if (device.Walker.IsComplete)
+                else if (chainKnown)
                 {
                     Compare(device.PrefixRoots.TryGetValue(count, out var root) && s.CodesRoot.Span.SequenceEqual(root.ToArray()), $"codes_root over the first {count} confirmation codes");
                 }
 
-                return (AttestationKind.PrefixCheckpoint, Joined());
+                return (AttestationKind.PrefixCheckpoint, Joined(), count == 0 || chainKnown);
             }
         }
 

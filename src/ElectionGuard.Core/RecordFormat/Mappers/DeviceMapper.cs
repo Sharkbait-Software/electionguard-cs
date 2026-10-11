@@ -14,20 +14,19 @@ namespace ElectionGuard.Core.RecordFormat.Mappers;
 internal static class DeviceMapper
 {
     /// <summary>
-    /// Whether <paramref name="kind"/> is a device kind of this library's format. A canonical item of a
-    /// newer minor may carry one it does not declare (<c>DeviceKind</c> may grow in a minor; design §7
-    /// "Enum value"); in a ballot locator its readers report that as <c>R.version</c> before
-    /// <see cref="FromItem(Pb.BallotLocator?)"/>, which refuses it. A device header is checked by
-    /// <see cref="NamesKey"/> instead: v2's layout has no section for such a kind.
+    /// Whether <paramref name="kind"/> is a device kind of this library's format. <c>DeviceKind</c> is
+    /// closed (user decision NQ-9, "DeviceKind closed, others open", 2026-10-10): a new kind needs a new
+    /// format major, and the canonicality check reports an undeclared value anywhere as D2, at any
+    /// reader age. So a canonical item never carries one; the readers still check before
+    /// <see cref="FromItem(Pb.BallotLocator?)"/>, which refuses it, so that no publisher-controlled
+    /// value can make them throw.
     /// </summary>
     public static bool IsDeclared(Pb.DeviceKind kind) => DeviceKey.KindOf((long)kind) is not null;
 
     /// <summary>
     /// Whether a device header names its section's key (design §4.5), compared on the wire values: the
-    /// raw <c>DeviceKind</c> number and H_DI. v2's layout names a device section only for a declared
-    /// kind (§5.3.1: <c>regular-</c>, <c>pre-encrypting-</c>), so a header of any other kind is a
-    /// header that does not match its section, never an exception. Check it before
-    /// <see cref="FromItem(Pb.DeviceHeader)"/>.
+    /// raw <c>DeviceKind</c> number and H_DI (a regular kind in a pre-encrypting section, another
+    /// device's H_DI). Check it before <see cref="FromItem(Pb.DeviceHeader)"/>.
     /// </summary>
     public static bool NamesKey(Pb.DeviceHeader header, DeviceKey key)
     {

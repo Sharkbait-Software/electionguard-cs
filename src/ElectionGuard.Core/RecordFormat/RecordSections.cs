@@ -2,9 +2,10 @@ namespace ElectionGuard.Core.RecordFormat;
 
 /// <summary>
 /// The election record format's version (design §7). The major version is the <c>.proto</c>
-/// package (<c>electionguard.egrf.v2</c>); a minor version only appends (fields, item types,
-/// section types, enum values), so a reader of an older minor verifies what it understands of a
-/// newer record and reports the rest.
+/// package (<c>electionguard.egrf.v2</c>); a minor version only appends (fields, item types, and
+/// values of the enums other than <c>SectionType</c> and <c>DeviceKind</c>), so a reader of an older
+/// minor verifies what it understands of a newer record and reports the rest. A new section kind or
+/// device kind needs a new major (user decisions NQ-7, NQ-9).
 /// </summary>
 public readonly record struct RecordFormatVersion(ushort Major, ushort Minor)
 {
@@ -29,7 +30,9 @@ public enum RecordPhase : byte
 
 /// <summary>
 /// The section types of EGRF v2.0 (design §4.5); the values equal the schema's <c>SectionType</c>
-/// numbers. 0x8000-0xFFFD are vendor sections (final phase), which travel as numbers.
+/// numbers. There are no others: a new section kind needs a new format major (user decision NQ-7),
+/// and there are no vendor sections (vendors extend only the manifest; user decisions NQ-1 and
+/// "Remove them", 2026-10-10).
 /// </summary>
 public enum RecordSectionType : ushort
 {
@@ -51,26 +54,17 @@ public enum RecordSectionType : ushort
 /// <summary>The fixed properties of section types (design §4.5).</summary>
 public static class RecordSections
 {
-    /// <summary>The first vendor section type.</summary>
-    public const ushort FirstVendorType = 0x8000;
-
-    /// <summary>The last vendor section type; 0xFFFE and 0xFFFF are the TOC and signature pseudo-sections.</summary>
-    public const ushort LastVendorType = 0xFFFD;
-
     /// <summary>Phase = min(type >> 8, 3), as <see cref="RecordPhase"/> (that number plus one).</summary>
     public static RecordPhase PhaseOf(RecordSectionType type) => (RecordPhase)(Math.Min((ushort)type >> 8, 3) + 1);
 
     /// <summary>Whether <paramref name="type"/> is a section type of EGRF v2.0.</summary>
     public static bool IsStandard(RecordSectionType type) => Enum.IsDefined(type);
 
-    /// <summary>Whether <paramref name="type"/> lies in the vendor range 0x8000-0xFFFD.</summary>
-    public static bool IsVendor(RecordSectionType type) => (ushort)type is >= FirstVendorType and <= LastVendorType;
-
     /// <summary>
-    /// The critical bit a TOC entry of a standard type must carry: true for every v2.0 type (design
-    /// §4.5). Null for any other type: a vendor type, whose bit a reader takes from the claimed TOC
-    /// entry. No other type reaches a v2 reader: a new standard section kind comes with a new format
-    /// major (user decision NQ-7), and the reader refuses a TOC entry naming one as <c>R.version</c>.
+    /// The critical bit a TOC entry of a section type must carry: true for every v2.0 type (design
+    /// §4.5). Null for any other value, which no record reaches a v2 reader with: a new section kind
+    /// comes with a new format major (user decision NQ-7), and the reader refuses a TOC entry naming
+    /// one as <c>R.version</c>.
     /// </summary>
     public static bool? FixedCritical(RecordSectionType type) => IsStandard(type) ? true : null;
 }

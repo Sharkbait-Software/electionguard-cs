@@ -66,9 +66,10 @@ extend google.protobuf.FieldOptions {
 // ---- enumerations -------------------------------------------------------------------------------
 
 // Section types. The phase is min(type >> 8, 3): 0 setup, 1 voting (sealed), 2 aggregated, 3 final.
-// 32768-65533 are vendor sections (final phase); proto3 enums are open, so they travel as numbers.
-// A new standard section type needs a new format major (user decision NQ-7): minor versions add
-// only fields (a new RecordItem member is a field).
+// Closed: a new section type needs a new format major (user decision NQ-7), so an undeclared value
+// is a decode-rule failure (D2) for a reader of any minor; minor versions add only fields (a new
+// RecordItem member is a field). There are no vendor sections: vendors extend only the manifest
+// (user decisions NQ-1 and "Remove them", 2026-10-10).
 enum SectionType {
   SECTION_TYPE_UNSPECIFIED = 0;
   SECTION_TYPE_HEADER = 1;
@@ -88,6 +89,11 @@ enum SectionType {
   SECTION_TYPE_SIGNATURES = 65535;                   // pseudo-section: outside every root
 }
 
+// Closed like SectionType (user decision NQ-9, "DeviceKind closed, others open", 2026-10-10): a
+// device kind is a section kind in all but name, so a new one needs a new format major, and an
+// undeclared value is D2 for a reader of any minor, wherever it occurs (DeviceHeader, BallotLocator).
+// The other enums may gain values in a minor; a reader older than the record treats such a value as
+// content it does not understand.
 enum DeviceKind {
   DEVICE_KIND_UNSPECIFIED = 0;
   DEVICE_KIND_REGULAR = 1;          // Verification 8; H_DI by eq. (72)
@@ -161,17 +167,11 @@ message RecordItem {
     // digest leaves
     TocEntry toc_entry = 50;                        // TOC pseudo-section and the TOC tree
     ConfirmationCodeLeaf confirmation_code_leaf = 51; // codes_root leaves; never stored
-    // vendor sections only
-    VendorItem vendor_item = 100;
   }
   // A RecordItem has exactly one field, the member of `item`. A later minor adds item types as new
   // members, at any number not declared or reserved here; RecordItem never gets a regular field.
+  reserved 100;   // draft only (vendor_item, never published; vendor sections removed, 2026-10-10)
   reserved 2047;  // draft only (per-item extensions, never published; removed by user decision NQ-1)
-}
-
-message VendorItem {
-  string type_url = 1;  // vendor-chosen identifier; never verified
-  bytes value = 2;
 }
 
 // ---- setup --------------------------------------------------------------------------------------
@@ -511,10 +511,10 @@ message RecordStatement {
 message TocEntry {
   SectionType section_type = 1;
   bytes key = 2;
-  bool critical = 3;               // fixed per standard section type (design §4.5: true for every
-                                   // v2.0 type); for a vendor type, taken from the claimed TOC
-                                   // entry. A new standard type comes only with a new format major
-                                   // (user decision NQ-7); a v2 reader refuses one (R.version)
+  bool critical = 3;               // fixed per section type (design §4.5: true for every v2 type);
+                                   // a claimed TOC entry that disagrees is R.root. A new section
+                                   // type comes only with a new format major (user decision NQ-7);
+                                   // a v2 reader refuses one (R.version)
   uint64 item_count = 4;
   bytes root = 5 [(width) = 32];   // the section's Merkle root
 }

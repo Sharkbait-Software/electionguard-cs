@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using ElectionGuard.Core.Models;
 using Pb = ElectionGuard.Core.RecordFormat.Protobuf;
 
 namespace ElectionGuard.Core.RecordFormat;
@@ -14,9 +15,6 @@ public enum RecordDifferenceKind
 
     /// <summary>A section only the second record holds.</summary>
     SectionOnlyInB,
-
-    /// <summary>A section both hold whose TOC entries differ only in the critical bit.</summary>
-    Critical,
 
     /// <summary>An item both sections hold at this ordinal, with different bytes.</summary>
     ItemChanged,
@@ -150,7 +148,7 @@ public static class ElectionRecord
         return differences;
     }
 
-    /// <summary>The critical bit of <paramref name="section"/> in <paramref name="record"/> (§4.5): fixed for a standard type, the claimed TOC's for a vendor one (false without one).</summary>
+    /// <summary>The critical bit of <paramref name="section"/> (§4.5): fixed per section type, true for every v2 type.</summary>
     internal static bool CriticalBitOf(IElectionRecordReader record, SectionKey section) => CriticalOf(record, section);
 
     /// <summary>
@@ -325,6 +323,46 @@ public static class ElectionRecord
     }
 
     /// <summary>
+    /// The ballots of <paramref name="record"/> whose confirmation code H_C is <paramref name="code"/>
+    /// (design §5.6: the confirmation-code lookup a voter's tool needs), as locators in canonical
+    /// order: every ballot item of every kind and status in every device section, read in full (a
+    /// scan; the <c>derived/</c> lookup index is not read, it is outside every root). Normally one;
+    /// none when the record holds no such ballot. An item that is not canonical is skipped (its section
+    /// fails verification anyway); a section that cannot be read throws, as reading it does.
+    /// </summary>
+    public static async IAsyncEnumerable<BallotLocator> FindBallotsAsync(IElectionRecordReader record, ConfirmationCode code, [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        byte[] wanted = code;
+        foreach (var device in record.Devices)
+        {
+            await foreach (var item in record.ReadSectionAsync(SectionKey.Device(device), 0, ct).ConfigureAwait(false))
+            {
+                if (!item.Check.IsCanonical)
+                {
+                    continue;
+                }
+
+                var parsed = Pb.RecordItem.Parser.ParseFrom(item.Bytes.Span);
+                var stated = parsed.ItemCase switch
+                {
+                    Pb.RecordItem.ItemOneofCase.EncryptedBallot => parsed.EncryptedBallot.ConfirmationCode,
+                    Pb.RecordItem.ItemOneofCase.PreEncryptedCastBallot => parsed.PreEncryptedCastBallot.ConfirmationCode,
+                    Pb.RecordItem.ItemOneofCase.PreEncryptedUncastBallot => parsed.PreEncryptedUncastBallot.ConfirmationCode,
+                    Pb.RecordItem.ItemOneofCase.PreEncryptedCompactUncastBallot => parsed.PreEncryptedCompactUncastBallot.ConfirmationCode,
+                    _ => null,
+                };
+
+                // A ballot's ordinal in its section is its chain position j: the header is item 0.
+                if (stated is not null && stated.Span.SequenceEqual(wanted))
+                {
+                    yield return new BallotLocator(device, item.Ordinal);
+                }
+            }
+        }
+    }
+
+    /// <summary>
     /// The differences between two records, by descent from the roots (design §5.1, §8.3): the TOCs
     /// are recomputed, sections whose entries are equal are skipped unread, and only sections whose
     /// roots differ are read, both at once, item by item, comparing leaf hashes. Yields the phase if
@@ -360,12 +398,6 @@ public static class ElectionRecord
 
             if (entryA.Equals(entryB))
             {
-                continue;
-            }
-
-            if (entryA.Root == entryB.Root && entryA.ItemCount == entryB.ItemCount)
-            {
-                yield return new RecordDifference(RecordDifferenceKind.Critical, section, null, null, null, $"Section {section}'s critical bit is {entryA.Critical} in the first record and {entryB.Critical} in the second.");
                 continue;
             }
 
@@ -409,9 +441,7 @@ public static class ElectionRecord
     }
 
     private static bool CriticalOf(IElectionRecordReader record, SectionKey section) =>
-        RecordSections.FixedCritical(section.Type)
-        ?? record.ClaimedToc?.Entries.FirstOrDefault(x => x.Type == section.Type && x.Key.Span.SequenceEqual(section.Key.Span))?.Critical
-        ?? false;
+        RecordSections.FixedCritical(section.Type) ?? throw new InvalidOperationException($"Section {section} is not a section type of EGRF v2; the reader admits no other (NQ-7).");
 
     private static void TryDelete(Action delete)
     {

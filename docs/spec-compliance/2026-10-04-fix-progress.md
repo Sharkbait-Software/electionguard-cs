@@ -360,6 +360,15 @@ User answers (2026-10-04):
     - Other enums may grow in a minor, and an item with an unknown value is `R.version`, not evaluable.
   - **NQ-10, guardian-run checks on uncast items before release:** "Keep as built".
   - **NQ-11, V17 in the GuardianPreliminary profile:** "Keep it out".
+  - *Applied in S10b-E (2026-10-10):* vendor sections removed (schema, layout, reader, verifier, tests, design; NQ-8
+    closed as moot) and `DeviceKind` closed (D2 anywhere at any reader age; JSON names likewise). See the S10b-E log
+    entry and "S10b-E design and API choices".
+- **S10b-E reader rules (a)-(e), answered 2026-10-10:** "Accept all five". Kept as built:
+  - (a) A claimed TOC that is not well formed stops the read at open.
+  - (b) An unreadable header section stops the read at open.
+  - (c) A broken JSON-lines segment-header line is R.container.
+  - (d) JSON values must use the one standard form (padded standard base64, plain decimal integers), else R.encoding.
+  - (e) An undeclared section kind written as a JSON enum name is R.encoding.
 - **Cadence:** "Keep going". After each stage: commit, update this tracker, push, start the next stage. Stop only
   for a new spec contradiction or question.
 - **S7 design and API choices** (2026-10-06; implementer choices, none changes bytes the spec fixes; the first two are
@@ -1043,6 +1052,93 @@ User answers (2026-10-04):
     attestation without a section, now unreachable, is removed; `AddRecordSignatureAsync` runs under its own
     `SemaphoreSlim`, keeps the fixed `<file>.tmp` name (so a crash's leftover is replaced by the next add rather than
     left as an unlisted file) and deletes it when a write fails; writers in different processes must coordinate.
+- **S10b-E design and API choices** (2026-10-10; low-stakes implementer choices under the S10b-D answers and design
+  §5.7, §8.2, §9.2 S10b-12/S10b-14; none changes a hash input, `git diff HEAD -- test/kat test/data` is empty and
+  every KAT family passes; design §8.3 "As built (S10b-E)"):
+  - **Vendor removal.** `RecordItem` member 100 becomes `reserved 100` (S6: removed numbers are reserved, never
+    reused); `VendorItem` is deleted. The append-only lint refuses a removed message, so `test/egrf/schema.json` was
+    regenerated as a new baseline (deleted, then `EGRF_WRITE_SCHEMA=1`): v2 is unpublished and the removal is the
+    user's decision; the lint itself is unchanged. `TocEntry` refuses any type v2 does not define (it refused only 0
+    and the pseudo-sections). `RecordDifferenceKind.Critical` is removed (unreachable: a computed TOC's bits are
+    fixed). `RecordStatistics.VendorSections` is removed; the checkpoint format is version 2 (its counters lost one
+    entry), so an older checkpoint is deleted and the run starts over.
+  - **`DeviceKind` closed.** `EnumShape.MayGrowInAMinor` is false for `SectionType` and `DeviceKind`. The verifier's
+    and `JoinCursor`'s undeclared-kind branches are kept as guards (a canonical item never reaches them now);
+    `JoinCursor`'s reports `R.encoding` (D2) if ever reached. In JSON an undeclared name of a closed enum is
+    `R.encoding` at any record minor (`RecordJson`), as an undeclared value of one is D2 at any reader age.
+  - **Golden records** (`test/egrf/records/`, `EgrfGoldenRecords`): three elections (regular unchained, attested and
+    signed; `RecordCarrierElections`' regular chained one, attested and signed; its pre-encrypted one) × four
+    representations; 4 positive and 25 negative records, each one mutation of a golden record (most from the smallest,
+    `regular-unchained`, to keep the directory at about 4 MB); `index.json` holds the C# reader's R-codes, phase roots
+    and completeness, with `expect` (the code the mutation targets, asserted at generation); `trust/signer.pem` is the
+    signer's public key (fresh per regeneration). `EGRF_WRITE_RECORDS=1` regenerates everything (nonces and the key
+    are random); a `.gitattributes` with `* -text` keeps checkouts byte-exact. The C# verdict a record is compared
+    under is the R-codes of `VerifyAllAsync` with default options, or the code `OpenAsync` refuses it with.
+  - **Cross-check comparison rule.** R-code sets, phase roots whenever either reader computes them (both must, or
+    neither) and completeness, on every record (review round 1; before it, roots only when the C# run had no R-code
+    and completeness only on records with no R-code). `NotComparedCodes` is empty: signature validity, the one thing the Python reader cannot
+    check, gives no code under the default policy. The Python tests are `[PythonFact]` (skipped with the reason when
+    no interpreter is found: `EGRF_PYTHON`, then `python3`, `python`, `py` on the PATH, then
+    `%LOCALAPPDATA%\Python\*` and `%LOCALAPPDATA%\Programs\Python\*`, each required to print "Python 3" for
+    `--version`, since the Store alias exists but fails). They run the script with `-I`.
+  - **`egrecord`.** A new console project `src/ElectionGuard.Verifier` (assembly `egrecord`, Spectre.Console.Cli 0.55.0,
+    strict parsing) with its tests in `test/ElectionGuard.Verifier.UnitTests`; both in the solution. Exit codes as the
+    task fixed them (0, 2, 1, 3); a record the reader refuses at open is exit 1 with its R-code on stderr (a verdict
+    on the record, which its publisher controls), not 3. `verify --signature-policy` takes report or require only
+    (no ignore: the task named two). `convert` takes the carrier from the destination's extension. `prove` takes a code
+    as 64 hex digits or base64; it needs a claimed TOC for the TOC-path proof (otherwise exit 1, "not proven").
+    `show` reads the claimed TOC's counts and every device's header and close; it verifies nothing.
+  - **`ElectionRecord.FindBallotsAsync(reader, ConfirmationCode)`** (public, new): the confirmation-code lookup as a
+    scan of every device section, skipping non-canonical items. The `derived/` index (§5.6) is still not built.
+  - **Review round 1** (2026-10-10): a device section that breaks part way leaves every verification its items feed
+    not evaluable (5, 6, 7, 9, 11 and its chain verification; 13-14 for a regular device in a final record; 15, 17,
+    18, 19 for a pre-encrypting one; 12 only through its join items), the last item read whole before the
+    failure is verified unless it is the close, and a join item naming a ballot of such a section is not a stray
+    (its verification is not evaluable). A section that could not be read whole is reported once: step F does not
+    digest it again, and the set is in the checkpoint (format version 3). The cross-check compares completeness on
+    every record and phase roots whenever either reader computes them (both or neither); the Python reader now
+    reports a differing `setup/manifest.json` as a finding instead of stopping (C# did so already). `egrecord` sets
+    the console output encoding to UTF-8 (no BOM) whether or not the output is redirected; `show` prints a manifest
+    that does not parse as such and exits 1, and a record value or manifest that does not decode is exit 1 in every
+    command (`NonCanonicalEncodingException`, `InvalidManifestException`), not 3.
+  - **Review round 2** (2026-10-10): **a claimed TOC that is not a well-formed list of `toc_entry` items stops the
+    read at open** (the rule the design had not stated; C#'s existing behaviour, now the Python reader's too):
+    its file's framing, segment header and lines under their own codes (`R.container`, or a JSON line's), then item
+    by item `R.version` for a section type v2 does not define (before the item's D2), `R.encoding` for an item that
+    is not canonical (in JSON an undeclared `SectionType` name), `R.root` for an item that is not a `toc_entry` or
+    names a pseudo-section, then `R.root` for no entry or entries out of canonical (type, key) order. A well-formed
+    claimed TOC that differs from the recomputed one stays an `R.root` finding with the read going on. Chosen over
+    "a finding, roots still computed" because the claimed TOC is the record's identity at open (checkpoint identity,
+    `ResumeAsync`, `ConvertAsync` and `prove`'s TOC path read it), and its R.version case already stops; it changes
+    no byte and no verdict's pass/fail (the record fails either way), only completeness and whether roots are
+    reported. A join item is a stray unless it names a position of an unreadable device section **after its last
+    item read whole** (position 0 always a stray), so the decision no longer depends on batching or parallelism; the
+    checkpoint (format version 4) keeps each unreadable section's last whole ordinal. `egrecord`'s
+    `Program.UseUtf8Output` is public (its in-process test). `EGRF_WRITE_RECORDS=missing` writes only the golden
+    records not yet on disk, from the committed golden ones, and rewrites `index.json`.
+  - **Review round 3** (2026-10-10). Reader rules taken from the C# reader where nothing fixed them, each pinned by
+    negative records labelled `basis: implementation-chosen, awaiting sign-off` in `index.json` and listed as a
+    question for the user (they change no byte and no pass/fail, only which R-code a failing record gets, whether
+    roots are reported, and completeness): **(a)** the claimed-TOC rule of round 2; **(b)** a header section that
+    cannot be read stops the read at open (segment `R.container`; a second item `R.structure`; an item that is not
+    canonical `R.encoding`; no `record_header` `R.structure`; another major `R.version`), as `ReadFormatAsync`
+    already did, because the header fixes the minor every item is judged at; **(c)** D6 governs a `.jsonl` segment
+    header line, so a line that does not parse, an unknown member, an undeclared enum name or a BOM there is
+    `R.container`, not the item line's `R.encoding`; **(d)** in JSON, bytes are standard padded base64 with zero
+    unused bits and integers (enum numbers included) plain decimal, other forms `R.encoding` (C# had refused
+    URL-safe, unpadded and `"01"`, which Python accepted; the mapping lets parsers take more forms; the library's
+    `StrictBase64` rule elsewhere is the same one-form rule); **(e)** an
+    undeclared `SectionType` *name* in a JSON claimed TOC stays `R.encoding` (only a number is NQ-7's `R.version`).
+    Also decided (design rules applied, no question): a non-device section read in part leaves its readers not
+    evaluable and claims no count; attestation contents are compared only over what was read (section seal: the
+    section read whole; chain close: header taken, walk complete, close read; prefix of count > 0: header taken,
+    walk complete); under `RequireValid` a validly signed chain close not compared in full, or any device's after a
+    torn attestations section, is not reported missing. `egrecord`'s `Main` installs UTF-8 writers over the standard
+    handles when they are redirected and calls `Program.Run` (public, the tests' entry point); a terminal keeps the
+    console's writer with its code page set to UTF-8. The cross-check gains a seeded mutation test
+    (`EGRF_MUTATIONS`, `EGRF_MUTATION_SEED`; 8 per golden directory record by default) and compares `R.summary`
+    only when C# has no verification finding at a ballot, and `R.summary`/`R.attestation` only when there is no V1-V4
+    finding. `EgrfGoldenRecords.Entry` has an optional `Basis` (index.json `basis`).
 
 ## Stages
 
@@ -1065,7 +1161,8 @@ User answers (2026-10-04):
 | S10b-A EGRF groundwork | design update for NQ-1..NQ-6; S10b-0 nonce DTO cleanup; S10b-1 statuses (`Unrecorded`, `Spoiled`); S10b-1b manifest election facts and unknown-property tolerance (NQ-1, NQ-4); S10b-2 schema at `proto/electionguard/egrf/v2/egrf.proto`, codegen, schema lint | S10a | done | 72ce53c |
 | S10b-B EGRF core | S10b-3, S10b-4, S10b-5; R-3 change (near misses ignored); spoiled-ballot refusal in the guardian's view | S10b-A | done | f1ecff5 |
 | S10b-C EGRF carriers and JSON | S10b-6, S10b-7, S10b-10; V14 labeling (decision 2026-10-10, "14.structure for mismatches") | S10b-B | done | 3441580 |
-| S10b-D EGRF verification | S10b-8, S10b-9, S10b-11; JSONL final line feed optional and NQ-7 (decisions 2026-10-10) | S10b-C | done | see next commit |
+| S10b-D EGRF verification | S10b-8, S10b-9, S10b-11; JSONL final line feed optional and NQ-7 (decisions 2026-10-10) | S10b-C | done | abeea59 |
+| S10b-E EGRF reference reader and CLI | S10b-12, S10b-14; vendor sections removed and NQ-9 `DeviceKind` closed (decisions 2026-10-10, "S10b-D questions") | S10b-D | done | see next commit |
 | S10b-3 Canonicality checker | Method A and B (unknown fields per NQ-1 / W6), D1-D6, segment header, signed statements; first golden and negative vectors | S10b-A | done (S10b-B) | |
 | S10b-4 Domain mappers | one mapper per item; `RawZp`/`RawZq` range attribution; uncast split/join with the compact form (NQ-2); `RecordSetup`; reflection completeness test | S10b-3 | done (S10b-B) | |
 | S10b-5 Merkle, TOC, phase roots | RFC 9162 frontier and proofs; TOC; phase roots | S10b-A | done (S10b-B) | |
@@ -1075,13 +1172,13 @@ User answers (2026-10-04):
 | S10b-9 `VerifyAllAsync` | steps A-F, profiles, report (`Complete` informational for a newer minor; compact items counted as 17.A/19.A-D held by construction), checkpoints, `VerifiedAggregate`; tests that a spoiled ballot's id_B is in 5.A (a spoiled ballot sharing id_B with a cast one fails 5.A); build the guardian's `IPublishedCastAndSpoiledBallots` from the sealed record (spoiled refusal decided 2026-10-09, "Refuse spoiled too"; done for regular ballots in S10b-B), from the parsed items with the raw-value `Add(status, id_B, H_I, C_ξB,0)` so items with range findings are held too (S10b-B review round 1); report every mapper finding under its code even where its owner does not run on the item (a cast or spoiled ballot's C_ξB: V13 runs on challenged ballots only; a cast pre-encrypted ballot's contests out of order, 16.structure); pass the decoded ballot items to V9's record overload (S10b-B review round 2); step E: call `BallotAggregationVerifier.VerifySummary` on the merged recount and report a mismatch of the tally header as `R.summary`, beside V9's outcome; report a contest-data request's decode finding (no locator, 12.structure) and let step C's framing pre-scan, which reads each join item's leading locator, treat an item with no locator as that structure finding, not as `R.order`; read the claimed TOC and report a standard-type entry whose `critical` bit differs from `RecordSections.FixedCritical` as `R.root` (design §4.5), with the §5.7 negative vector for it (S10b-B review round 3); that check exists since S10b-C as `ElectionRecord.CheckClaimedTocAsync` (count, root, critical bit, membership; R.root): call it, do not rebuild it; the zip reader checks an entry's CRC-32 when its last byte is read, so a corrupted item inside a STORED entry can surface as R.encoding (or a finding) before the entry's R.container: report both, in step order (S10b-C) | S10b-6, S10b-8 | done (S10b-D) | |
 | S10b-10 JSON projection, converter, diff | proto3 JSON with duplicate-member refusal; `ConvertAsync`; `DiffAsync` | S10b-6 | done (S10b-C; identical `VerificationReport`s across representations wait for S10b-9) | |
 | S10b-11 Attestations and signatures | statements, signers, verifiers, policies | S10b-9 | done (S10b-D; `ecdsa-p256-sha256` only; the other algorithms are pluggable through `ISignatureVerifier`) | |
-| S10b-12 Python reference reader and golden records | `test/egrf/egrf_ref.py` (Method A with W6), golden records, schema-table diff against `test/egrf/schema.json` | S10b-6, S10b-7 | todo | |
+| S10b-12 Python reference reader and golden records | `test/egrf/egrf_ref.py` (Method A with W6), golden records, schema-table diff against `test/egrf/schema.json` | S10b-6, S10b-7 | done (S10b-E) | |
 | S10b-13 TypeScript reader | protobuf-es conformance reader | — | deferred (NQ-3: "Defer") | |
-| S10b-14 `ElectionGuard.Verifier` | `egrecord` CLI | S10b-9, S10b-10 | todo | |
+| S10b-14 `ElectionGuard.Verifier` | `egrecord` CLI | S10b-9, S10b-10 | done (S10b-E) | |
 | S10b-15 Migration of the consumers | console, egperf `writeRecord`/`verifyRecord`, Testing.Cli, `test/data/*` | S10b-9, S10b-10 | todo | |
 | S10b-16 Retire superseded code | old DTO tree, protobuf-net, JSON ballot/record serializers | S10b-15 | todo | |
 | S10b-17 Live tailing | may be deferred | S10b-9 | todo | |
-| S10b-18 Documentation and publication | CLAUDE.md record bullet, formal-spec skeleton, registered option numbers (user action); NQ-7 answered 2026-10-10 ("Bump the major version") and applied in S10b-D; NQ-8, NQ-9, NQ-10 and NQ-11 (design §12) open, not blocking | S10b-16 | todo | |
+| S10b-18 Documentation and publication | CLAUDE.md record bullet, formal-spec skeleton, registered option numbers (user action); NQ-7 answered 2026-10-10 ("Bump the major version") and applied in S10b-D; NQ-9, NQ-10 and NQ-11 answered 2026-10-10 (NQ-9 applied in S10b-E), NQ-8 moot (vendor sections removed, S10b-E) | S10b-16 | todo | |
 | S10b-19 Guardians open uncast pre-encrypted ballots (NQ-5) | `TallyGuardian.DecryptBallotNonce` opens an uncast pre-encrypted item from a sealed, verified record; refuses an id_B, H_I or C_ξB,0 matching a cast or spoiled ballot of it (Q31; "Refuse spoiled too", 2026-10-09; the view holds both since S10b-B); no issued list, no once-only state | S10b-9 | todo (after S10b) | |
 
 ## Pinned-value inventory
@@ -1289,7 +1386,416 @@ vector "SectionType 0x0203 in a segment header, a later minor's section" left `i
 "toc_entry naming section type 0x0203 in a newer-minor record" (D2) (NQ-7; `EGRF_WRITE_VECTORS=1`, diff reviewed);
 and the `LineReader_AppliesTheLineRules` row "a\nb" now reads two lines (JSONL "Optional"). They pin no value.
 
+S10b-E: no hash, nonce, ciphertext, contest hash, confirmation code or KAT value moved (`git diff HEAD -- test/kat
+test/data` is empty; every KAT family passes). Moved by the two decisions of 2026-10-10, not re-captured:
+`test/egrf/schema.json` (new baseline: `VendorItem` gone, `RecordItem` reserves 100); `items.json` lost its
+`vendor_item` golden item (26 items, one per remaining member); `negatives.json` gained four vectors (an undeclared
+device kind in a header and in a locator of a newer-minor record, D2; `toc_entry` naming 0x8001, D2; an unknown item
+type at the reserved 100, W6), all regenerated with `EGRF_WRITE_VECTORS=1` and the diff reviewed;
+`TableOfContentsTests` (the final TOC has 15 entries, not 16, without its vendor entry). New, regenerable and pinned
+by nothing in code: `test/egrf/records/` (`EGRF_WRITE_RECORDS=1`; the tests compare both readers on the committed
+files).
+
+S10b-E review round 2: nothing moved; only additions. `items.json` gained one newer-minor vector (a ballot status of
+-1, sign-extended: canonical, content not understood) and `negatives.json` four D2 vectors (status -1 and -2^31 at the
+reader's minor, status 2^64 - 2^31 - 1 at a newer minor, `DeviceKind` -1 at a newer minor), with `EGRF_WRITE_VECTORS=1`
+and the diff reviewed (additions only). `test/egrf/records/` gained five negatives (`encoding-toc-noncanonical-item`,
+`encoding-jsonl-toc-undeclared-section-type`, `root-toc-item-not-a-toc-entry`, `root-toc-entries-out-of-order`,
+`container-toc-torn-tail`) with `EGRF_WRITE_RECORDS=missing`, which keeps every committed record: `index.json` gained
+their five entries and no other entry changed.
+
+S10b-E review round 3: nothing moved; only additions and labels. `test/egrf/records/` gained twelve negatives,
+written with `EGRF_WRITE_RECORDS=missing`: `version-jsonl-toc-numeric-section-type`,
+`encoding-toc-noncanonical-item-then-torn-tail`, `encoding-noncanonical-item-then-torn-tail`,
+`container-header-section-torn`, `encoding-header-item-noncanonical`, `structure-header-two-items`,
+`container-singleton-setup-section-torn`, `container-jsonl-segment-header-unknown-member`,
+`attestation-section-seal-with-noncanonical-ballot`, `encoding-jsonl-urlsafe-base64`,
+`encoding-jsonl-unpadded-base64` and `encoding-jsonl-integer-leading-zero`. `index.json` gained a `basis` field on
+entries whose codes rest on an implementation-chosen reader rule: the five round-2 TOC entries and eight new ones. No
+entry's codes, roots or completeness changed. The EGRF vectors did not change.
+
 ## Log
+
+### 2026-10-10 — S10b-E review round 3 (non-device sections read in part, `egrecord` output bytes, streaming and header-at-open in the Python reader, JSON one form, attestations over what was read, a seeded mutation cross-check)
+Worktree changes only; nothing committed. Thirteen findings (four major, nine minor). Eleven were judged sound and
+fixed. One was sound in effect but its test idea was wrong (the `> lastWhole` stray test), and one is answered by
+listing a question rather than changing code (the `SectionType` name in a JSON TOC). No hash input, KAT vector,
+`test/data` fixture or committed golden record moved (`git diff HEAD -- test/kat test/data` empty). The vectors did
+not change. The records gained twelve negatives, and five round-2 entries gained a `basis` label; no index entry's
+codes, roots or completeness changed. Five reader rules taken from the C# reader are listed for the user (questions
+below and "S10b-E design and API choices", "Review round 3").
+
+Per finding:
+- **`egrecord --json` wrote § as 0x15 when stdout was redirected from Git Bash** (spec major). Not reproduced here:
+  this session's Git Bash has a console at code page 437, and the setter succeeded, so file and pipe output were
+  C2 A7. A process with no console at all (started detached) defaults to UTF-8 and was correct too. The fix removes
+  the dependence by construction: `Main` installs `StreamWriter(Console.OpenStandardOutput()/Error(), UTF-8 without
+  BOM)` for a redirected handle and sets a terminal's code page as before, then calls `Program.Run` (the in-process
+  tests' entry point, so their `Console.SetOut` writer is kept). The child-process test is a theory over a code-page
+  437 console and a detached start with no console (`DetachedProcess`, `CreateProcessW` with `DETACHED_PROCESS`,
+  since `Process` cannot do it), decoding strict UTF-8 and parsing the JSON; the in-process test checks the writers'
+  encoding when redirected. Neither start mode failed against the old code on this machine, which is reported, not
+  hidden. The `Â§` mojibake in Program.cs is fixed.
+- **A non-device section read in part reported verifications over what it never read** (spec minor). `DigestAsync`
+  returns whether it read the section whole. A setup section read in part makes the setup unreadable (V1-V4 and all
+  cryptography not evaluable), with no count claimed; a torn encrypted tally leaves V9 and V10 not evaluable, and a
+  torn decrypted tally V10 and V11 (before: "10 Passed", 11.D failed; guardians "found 2" under 2.A/3.A; the
+  encrypted tally 9.structure and 10.structure). JSON lines `{}`, `[1]` and `{"decryptedTallyContest":null}` throw
+  out of the line parse into the same path. Join sections were handled already (`DrainCursorsAsync`, the `*Known`
+  flags). Test `ASetupOrTallySectionCutShort_IsReportedOnce_AndLeavesItsReadersNotEvaluable` (parameters, manifest,
+  guardians, election keys, both tallies): one R.container at the section, no R.structure, no finding outside R,
+  the readers not evaluable.
+- **The two readers disagreed on every failure of a `.jsonl` segment header line** (spec minor). Decided: D6
+  governs the header line (any failure `R.container`), so the Python reader now matches C#; §5.3.1 and §5.5 say so.
+  Negative `container-jsonl-segment-header-unknown-member`. Listed for sign-off.
+- **An undeclared `SectionType` name in a JSON claimed TOC is R.encoding, a number R.version** (spec minor). Kept,
+  not changed: a name cannot be mapped to a kind at all, and a later major's JSON record is `R.version` at its header
+  section's segment header before its TOC is read, so the numeric form is the only one a v2-shaped record can carry.
+  Recorded in §5.3.1, the round-2 negative labelled, and listed as a question (options: keep; or make an undeclared
+  name in a TOC line `R.version` as the number is).
+- **The Python reader split a whole `.binpb` file into frames before checking any item** (code major). `frames_binpb`
+  and `lines_jsonl` are generators, and one `segment_items` reads every segment (header now, items lazily), used by
+  the sections, the claimed TOC, the header section and the signature files. Negatives
+  `encoding-toc-noncanonical-item-then-torn-tail` (R.encoding at open) and
+  `encoding-noncanonical-item-then-torn-tail` (R.container, R.encoding, R.root, R.signature). A seeded single-byte
+  mutation test (`PythonReferenceReader_AgreesWithThisLibrary_OnSeededMutationsOfTheGoldenRecords`: flip, insert,
+  delete or cut at a random offset of a random file of each golden directory record; 8 per record by default,
+  `EGRF_MUTATIONS`, `EGRF_MUTATION_SEED`) found, over exploratory runs of 1,500 to 1,800 mutations per seed, the further disagreements below, all
+  fixed; on the final code 4,800 mutations over three seeds (20261010, 7, 99) agree.
+- **The Python reader judged an unreadable header section leniently** (code major). `_record_minor` became
+  `_read_format`, which mirrors `ReadFormatAsync` (segment `R.container`; a second item `R.structure`; an item not
+  canonical `R.encoding`; no `record_header` `R.structure`; another major `R.version`) and stops the read; the
+  layout's phase and presence rules now run before it, as in C#'s `OpenAsync`. Negatives
+  `container-header-section-torn`, `encoding-header-item-noncanonical`, `structure-header-two-items`. Listed for
+  sign-off (design §5.3.1).
+- **The Python reader skipped a device's attestations when any item was not canonical; C# compared them** (code
+  minor). Design §4.9/§6.9 decide it per statement: a section seal binds only the section root, known whenever the
+  section was read whole, so both compare it; a chain close binds the header, the codes and the close, and a prefix
+  checkpoint the codes, so both leave those not evaluable unless the header was taken (canonical, naming the key),
+  every link walked and (chain close) the close read. C# compared S_device and the mode against a header it had not
+  taken and the codes root of a walk that had not begun ("does not match"); fixed, with the result saying it could
+  not be compared in full and `RequireValid` not reporting such a chain close (or, after a torn attestations
+  section, any device's) as missing. Test `ADeviceHeaderNotCanonical_LeavesTheChainCloseAttestationNotEvaluable_NotMismatched`;
+  negative `attestation-section-seal-with-noncanonical-ballot`.
+- **A torn singleton section added a false R.structure, and the manifest's failure was reported twice** (code
+  minor). Fixed with the second finding (no count from a section read in part; step A no longer reports the
+  manifest read step B reports). Negative `container-singleton-setup-section-torn`.
+- **JSON leniencies split the readers** (code minor). Decided: one written form (standard padded base64 with zero
+  unused bits; plain-decimal integers, enum numbers included), other forms `R.encoding`, in both readers (C#
+  `RecordJson.RequirePlainForm`, Python `_b64`/`_integer` with the number token's text). §5.5's sentence that the
+  leniencies were harmless is corrected. Negatives `encoding-jsonl-urlsafe-base64`, `encoding-jsonl-unpadded-base64`,
+  `encoding-jsonl-integer-leading-zero`. Listed for sign-off.
+- **R.summary was not comparable on a record with a failing cast ballot** (code minor). The Python reader leaves it
+  not evaluable for a cast ballot of weight below 1, a ballot status it does not know, an item that is no ballot of
+  its device's kind, an undecodable tally, or a setup not read; the comparison sets `R.summary` aside when C# reports
+  a verification finding at a ballot, and `R.summary` and `R.attestation` when C# reports a V1-V4 finding (both are
+  decided in the device pass, which a failed setup stops). The `NotComparedCodes` comment says so.
+- **The `> lastWhole` half of the stray rule was untested** (tests major). The suggested test (a second decryption
+  naming a cast ballot at position 1 or 2) cannot detect it: a ballot read whole takes its own join items, so
+  `IsUnreadBallot` is never consulted for positions 1 to lastWhole; with the clause removed that test still passed
+  (checked). The clause decides only for the close of a section broken after it. New test
+  `AJoinItemNamingTheCloseOfADeviceBrokenAfterIt_IsAStray_AtAnyBatching` (a torn frame after the close, a
+  decryption naming the close's position): with the clause removed it fails (the stray is lost); restored, it
+  passes. The round-2 test also keeps a cast-position join, judged on its own ballot.
+- **The claimed-TOC rule rested on no decision** (tests minor). Listed as a question; the five round-2 entries carry
+  `basis: implementation-chosen, awaiting sign-off`, as do the new header, header-line and one-form negatives.
+- **Two edge cases had no record** (tests minor). `version-jsonl-toc-numeric-section-type` (R.version in both) and
+  the header-line negative above.
+
+Found by the mutation test and fixed:
+- C#: a `.jsonl` header line whose `magic` held a byte that is not UTF-8 threw `InvalidOperationException` out of
+  `RequireLibraryMajorAsync`'s peek (`JsonElement.GetString`), a publisher-controlled crash; now caught, and the
+  segment's D6 check refuses it (`R.container`). Test `AHeaderLineWithAnInvalidUtf8Magic_IsRContainerAtOpen_NeverAnException`.
+- Python: no `R.version` for a manifest media type it does not read (design §4.6); no `R.structure` for setup and
+  tally contents (§4.5: members, counts, the tally header); no `R.attestation` for an attestations item that is not
+  a `device_attestation`; attestation contents compared when the setup was not read; the manifest copy compared
+  with a stored manifest it had not read.
+
+Gate. No pinned expectation broke at any point, so nothing was re-pinned. Before the records were added, after
+every code change: build 0 warnings, 0 errors, and all 531 RecordFormat tests passed, the Python cross-check
+included. The twelve negatives were then written with `EGRF_WRITE_RECORDS=missing` (additions only; five round-2
+entries gained a `basis`; no entry's codes, roots or completeness changed, checked by diff). Final gate, every
+change in:
+- Build: 0 warnings, 0 errors.
+- Smoke: EncryptBallots 244 ms (0.244 ms/ballot, 165.7 MB); VerifyBallots 970 ms (0.970 ms/ballot, 12.3 MB);
+  "correctness passed".
+- Console: "Tally, contest 0: 0-0=3, 0-1=0, overvotes=0, null-votes=0, undervotes=0, undervote-difference=0,
+  write-ins=0." then "Done.", then the expected ReadKey `InvalidOperationException`. tally.json has 0-0
+  voteCount 3 and 0-1 voteCount 0.
+- Tests: Verifier.UnitTests 53/53, Perf.UnitTests 231/231, Core.UnitTests 2645/2645, none skipped, so the Python
+  cross-check and the mutation test ran.
+- `egrf_ref.py --check`: 26 items, 69 negatives, 5+5 Merkle proofs, 58 records, 0 failures.
+- `git diff HEAD -- test/kat test/data` is empty.
+
+Perf: no hot path changed. `RecordJson`'s one-form check walks only the JSON reading path, and the attestation and
+`DigestAsync` changes run once per section. Smoke is within the spread of rounds 1 and 2 (0.244 / 0.969 there).
+
+Questions for the user (each implemented provisionally, as the C# reader already behaved, and pinned by labelled
+negatives; none changes a byte or a pass/fail, only which R-code a failing record gets, whether roots are reported,
+and completeness): (a) the claimed-TOC stop at open; (b) the header-section stop at open; (c) D6 for a `.jsonl`
+header line; (d) JSON one written form; (e) a `SectionType` name in a JSON TOC stays `R.encoding`.
+
+Carry-overs: these five rules join the S10b-18 formal-spec list. The round-1 carry-overs are unchanged: the
+`derived/` index, signature validity in Python, and the two oversized negatives. The Python reader still does not run
+V1-V4, so the comparison sets `R.summary`/`R.attestation` aside after a setup verification failure. Its `_peek_header`
+reads a binary header with the strict walk, where C#'s peek parses leniently; no mutation has shown a difference.
+A 64-bit integer written as a JSON *number* above 2^53 passes the plain-decimal rule. Google.Protobuf parses
+number tokens as doubles, while Python reads them exactly, so the two readers could disagree on such a line. No
+conforming writer emits one (the mapping writes 64-bit values as strings), and no mutation produced one. The fix
+would be one more one-form rule in both readers.
+
+### 2026-10-10 — S10b-E review round 2 (claimed TOC stops the read, strays independent of batching, negative enum values, test gaps)
+Worktree changes only; nothing committed. Seven findings (one spec major, six minor); every one was judged sound and
+fixed. No hash input, KAT vector, `test/data` fixture or committed golden record moved (`git diff HEAD -- test/kat
+test/data` empty); only additions to the EGRF vectors and records (see the Pinned-value inventory). No new spec
+contradiction and no open question: the one unstated rule was a reader-behaviour choice, decided and recorded under
+"S10b-E design and API choices", "Review round 2".
+
+Per finding:
+- **The two readers disagreed on a claimed TOC that is not well formed** (spec major). C# refused at open (no roots,
+  incomplete); the Python reader reported a finding, computed every root and called the record complete. The split
+  was wider than the two cases found: every frame, segment-header, item, member, pseudo-section, empty and order
+  failure of `toc.<ext>`, and the per-item order (Python scanned all items for `R.version` first). Rule decided:
+  stop at open, in C#'s order (frames and header, then per item R.version, R.encoding, R.root, then R.root for no
+  entry or bad order); a well-formed claim that differs stays an `R.root` finding. Python's
+  `_read_claimed_toc` now reads it at open in that order and the late comparison is only `claimed != computed`. C#
+  unchanged. Five negatives pin it (`encoding-toc-noncanonical-item`, `encoding-jsonl-toc-undeclared-section-type`,
+  `root-toc-item-not-a-toc-entry`, `root-toc-entries-out-of-order`, `container-toc-torn-tail`); both readers give
+  each one code, no roots, incomplete; a numeric 32769 in `toc.jsonl` is `R.version` in both. Design §5.3.1 and §8.3
+  "As built (S10b-E)" state the rule.
+- **The Python reader made every enum varint >= 2^31 D2** (code minor), including a negative int32's 10-byte
+  sign-extended form, which C# (and the tracker's D2 rule) decide as an undeclared value: D2 for a closed enum or at
+  the reader's minor, content not understood for an open enum of a newer minor. Fixed: D2 only in [2^31, 2^64 -
+  2^31), values above mapped to v - 2^64. Vectors: newer-minor status -1 (canonical); negatives status -1 and -2^31
+  at minor 0, 2^64 - 2^31 - 1 at minor 1, `DeviceKind` -1 at minor 1 (D2).
+- **A stray's verdict depended on batching** (code minor). Since round 1 a stray was suppressed when its device
+  section was already known broken, which a join item naming position 0 hit or missed depending on whether the
+  generator had read past the break when the batch holding position 1 was processed. Now `_unreadable` keeps each
+  section's last whole ordinal and a stray is suppressed only for a position after it (position 0 never): every
+  position at or before it was read, and one after it can only be reported once the break is known, so the verdict
+  is the same at any batching. The checkpoint saves the ordinal (format version 4); a resumed run that reads the
+  broken section again does not count it twice. Test: `AJoinItemNamingPositionZeroOfABrokenDevice_IsAStray_AtAnyBatching`
+  (one item per batch and default batching give equal reports and one `13.structure` at (device, 0)); with the old
+  condition it fails ("Strings differ").
+- **The pre-encrypting branch of a broken device section had no test, nor the final-record 13/14 branch** (spec and
+  tests minor). New `APreEncryptingDeviceSectionBrokenAtAnUncastBallot_LeavesV15ToV19NotEvaluable_AndItsReleasesAreNotStrays`
+  (golden pre-encrypted cut inside its first uncast item: 5, 6, 7, 9, 11, 15-19 not evaluable, one R.container, no
+  16/18.structure, 10 passed); `ATornDeviceClose` also asserts 13 and 14 not evaluable.
+- **No resumed run over a broken section** (tests minor). `ARunStoppedAtABatch_Resumes_AndGivesTheSameReport` has a
+  "torn" record (the largest device cut inside item 3) stopped after batches 2-5; uninterrupted and resumed reports are
+  equal and hold one R.container. Without restoring the checkpoint's unreadable set the stops after the break (4, 5)
+  fail. The torn-join test now asserts its section's code once (`Assert.Single`).
+- **The undeclared-device-kind header case no longer asserted V8** (tests minor). It asserts V8 `NotEvaluable` (the
+  close finds no header taken; the header is `R.encoding`, so there is no structure finding to fail it).
+- **The redirected-output UTF-8 test depended on the host's console** (tests minor). On Windows the child now runs as
+  `cmd /d /s /c "chcp 437>nul && dotnet egrecord.dll ..."` in a console of its own (`CreateNoWindow`, so the host's
+  code page is untouched); with `UseUtf8Output` commented out it fails ("Item found in collection"). New in-process
+  `UseUtf8Output_SetsUtf8WithoutABom` checks the setting on every host (`UseUtf8Output` made public).
+
+Gate before re-pinning (after every code and test change, before the vectors and records were regenerated): build 0
+warnings, 0 errors; smoke EncryptBallots 236 ms (0.236 ms/ballot, 165.6 MB), VerifyBallots 976 ms (0.976 ms/ballot,
+12.2 MB), "correctness passed"; console "Tally, contest 0: 0-0=3, 0-1=0, ..." then "Done." (the expected ReadKey
+exception after), tally.json 0-0 = 3, 0-1 = 0; tests Verifier.UnitTests 52/52, Perf.UnitTests 231/231,
+Core.UnitTests 2634/2635, the one failure `CanonicalProtobufTests.CommittedVectors_AreTheGeneratedOnes` (the five
+new vectors not yet written). Then `EGRF_WRITE_VECTORS=1` (additions only) and `EGRF_WRITE_RECORDS=missing` (five
+records added, no other index entry changed). Gate after (final, every change in): build 0 warnings, 0 errors; smoke
+EncryptBallots 244 ms (0.244 ms/ballot, 165.8 MB), VerifyBallots 969 ms (0.969 ms/ballot, 12.3 MB), "correctness
+passed"; console as before (0-0=3, 0-1=0, "Done."); tests Verifier.UnitTests 52/52, Perf.UnitTests 231/231,
+Core.UnitTests 2635/2635, none skipped (so the Python cross-check ran); `egrf_ref.py --check` 26 items, 69
+negatives, 5+5 Merkle proofs, 46 records, 0 failures; `git diff HEAD -- test/kat test/data` empty. Nothing was
+re-pinned: the one failure before was a committed-vector file behind its generator, rewritten, not re-captured.
+Perf: no hot path changed (a dictionary lookup in place of a set lookup on a broken section's stray only); smoke is
+within the spread of round 1 (0.235 / 0.967 ms/ballot).
+
+Carry-overs: unchanged from round 1 (the `derived/` index, signature validity in Python, the two oversized
+negatives); the claimed-TOC rule joins the S10b-18 formal-spec list.
+
+### 2026-10-10 — S10b-E review round 1 (broken device sections, `egrecord` output encoding, cross-check rule, `FindBallotsAsync` tests)
+Worktree changes only; nothing committed. Eleven findings from the spec, code and tests lenses (several the same
+defect seen twice); every one was judged sound and fixed. No hash input, KAT vector, `test/data` fixture, golden record
+or `index.json` moved (`git diff HEAD -- test/kat test/data` empty; `CommittedRecords_ReadAsTheirIndexStates` passes
+unchanged: not evaluable is not an R-code, and a duplicate removed changes no code set). No pinned expectation broke,
+so nothing was re-pinned. No new spec contradiction and no open question.
+
+Per finding:
+- **A device section that breaks part way left V5-V8 (and V11) `Passed`** (spec major, tests minor). Design §6.9: a
+  verification is never `Passed` over an item it did not see. `RecordVerificationRun.BrokenDevice` now marks not
+  evaluable every verification the section's items feed: 5, 6, 7, 9 (as before, via `_undecodableCast`, with
+  `R.summary`), 11 (11.D reads every submitted ballot's contests) and the chain verification (8 or 16); for a
+  regular device in a final record 13 and 14 (an unread challenged ballot's missing decryption cannot be seen); for a
+  pre-encrypting one 15, 17, 18 and 19. 10 reads only the tally sections and stays. The last item read whole before
+  the failure is now verified (as an item that is not the section's last) unless it is the close, so the torn-tail
+  record counts 3 ballot items, not 2. A join item naming a ballot of a broken device section is no longer a stray
+  (a false 12/13/18.structure): `JoinCursorFinding.Stray`, and the cursor callback marks the item's verification
+  (13 with 14) not evaluable instead; contest data (12) is covered by this rule alone, since a ballot without a
+  request owes no decryption. Pinned by `RecordVerifierBrokenSectionTests`
+  (`ATornDeviceClose_LeavesEveryVerificationItFeedsNotEvaluable_AndIsReportedOnce`: 5-9 and 11 not evaluable, 10
+  passed, one R.container, 3 ballot items, no R.summary; `ADeviceSectionBrokenBeforeAChallengedBallot_...`: chained
+  record cut before its challenged ballot, no 12/13/14.structure, 13 and 14 not evaluable).
+- **The same R.container reported twice** (spec minor). A broken device section had no TOC entry, so step F's "every
+  section no step read" loop digested it again and reported its failure under step A (the device pass's is under step
+  D, and `FindingSet` dedups within a step). Now every place that finds a section unreadable (the device pass, a join
+  cursor's drain, `DigestAsync`) adds it to `_unreadable`, which step F skips; the set is in the checkpoint
+  (`CheckpointState.Unreadable`, format version 3) so a resumed run does not report it twice either.
+- **`egrecord ... --json` was not valid JSON when redirected on Windows** (spec, code and tests: major). `Main` set
+  `Console.OutputEncoding` only for a terminal, so a pipe or file got the OEM code page and § became 0x15. Now
+  `Program.UseUtf8Output` sets UTF-8 without a BOM always (the setter keeps a `Console.SetOut` writer, so the in-process
+  tests still capture; an `IOException` from a process without a console is ignored, .NET's default being UTF-8).
+  `Verify_Json_IsUtf8_WhenStandardOutputIsRedirected` runs `egrecord.dll` as a child process with stdout redirected
+  and parses the raw bytes (C2 A7 present, no 0x15, no BOM); with the call commented out it fails ("Item found in
+  collection"), so it sees the defect.
+- **`show` exited 3 on a manifest that does not parse** (code minor). `ShowCommand` catches `InvalidManifestException`,
+  prints the rest with "the manifest does not parse (...)" (JSON `manifestError`) and exits 1; `HandleException` maps
+  `InvalidManifestException` and `NonCanonicalEncodingException` (record content; user input that does not parse is a
+  plain `FormatException`) to exit 1 in every command. Test: `Show_AManifestThatDoesNotParse_IsAVerdictOnTheRecord_...`.
+- **Cross-check compared roots and completeness only on passing records** (spec and tests minor). The C# test and
+  `egrf_ref.py --check` now compare completeness on every record and phase roots whenever either reader computes them
+  (both must, or neither). The one divergence it exposed, `container-manifest-copy-differs` (Python stopped, so
+  incomplete; C# reports the finding and goes on), was the Python reader's: it now reports the copy as a finding. All
+  41 records agree; `--check` 0 failures. Design §8.3 "As built (S10b-E)" states the rule and the manifest-copy reading.
+- **The tracker's `## Stages` heading was lost** (spec minor): restored above the stage table.
+- **`FindBallotsAsync` had no Core test** (tests minor): `FindBallotsAsync_FindsEveryBallotKind_ByItsConfirmationCode`
+  (golden pre-encrypted: cast, full uncast and compact uncast items each found at its own locator; an unknown code
+  finds nothing; a regular ballot) and `FindBallotsAsync_SkipsANonCanonicalItem` (a ballot whose member length is a
+  padded varint, W4: same parse, not canonical, not found); CLI `Prove_FindsEveryPreEncryptedBallotKind`.
+
+Gate (nothing was re-pinned, so there is no separate before-re-pinning run; this is the final run, after every
+change): build 0 warnings, 0 errors; smoke EncryptBallots 235 ms (0.235 ms/ballot, 165.6 MB), VerifyBallots 967 ms
+(0.967 ms/ballot, 12.2 MB), "correctness passed"; console "Tally, contest 0: 0-0=3, 0-1=0, ..." then "Done." (the expected ReadKey exception after), tally.json
+0-0 = 3, 0-1 = 0; tests Verifier.UnitTests 51/51, Perf.UnitTests 231/231, Core.UnitTests 2629/2629, none skipped.
+Perf: no hot path changed (only a broken section's handling and step F's section filter); smoke is within the run-to-run
+spread of the S10b-E numbers (0.241 / 0.977 ms/ballot).
+
+Carry-overs: the `derived/` confirmation-code index (§5.6) is still not built; the Python reader still cannot check
+signature validity; the two oversized negatives stay uncommitted.
+
+### 2026-10-10 — S10b-E (vendor sections removed, `DeviceKind` closed, Python reference reader and golden records, `egrecord`)
+Worktree changes only; nothing committed (a background loop committed S10b-D as abeea59 while this stage ran). Items:
+S10b-12, S10b-14, and the two decision changes of "S10b-D questions, answered 2026-10-10" (vendor sections "Remove
+them"; NQ-9 "DeviceKind closed, others open"). No hash input, KAT vector or `test/data` fixture moved (`git diff HEAD
+-- test/kat test/data` empty; every KAT family passes). No new spec contradiction and no open question.
+
+Per item:
+- **Vendor sections removed** (decision change). Schema: `VendorItem` deleted, `RecordItem` reserves 100, the
+  `SectionType`/`TocEntry.critical` comments say no range is open. Code: `RecordSections` lost the vendor range and
+  `IsVendor`; `EnumShape.IsDeclaredNonZero` admits only declared values; the `vendor/` layout path is gone (such a
+  file is an unlisted path, R.container); the claimed TOC refuses any undeclared type with R.version before its D2
+  (`UnknownSectionKind` now covers 0x8000-0xFFFD too) and any non-v2 type in an entry with R.root; `TocEntry`
+  refuses non-v2 types; `ElectionRecord.CriticalOf` no longer reads the claimed TOC; `RecordDifferenceKind.Critical`
+  and `RecordStatistics.VendorSections` are removed (checkpoint version 2); the writer's resume comments. Tests: the
+  vendor tests are replaced by their opposites (a claimed TOC entry naming 0x8001 is R.version at open; a section at
+  `vendor/8001/` is R.container; `TocEntry` refuses 0x8000); the lint fixtures that borrowed `VendorItem` as a
+  message type use `ConfirmationCodeLeaf`. Vectors: `vendor_item` left `items.json`; `negatives.json` gained
+  "toc_entry naming section type 0x8001 (once the vendor range)" (D2) and "unknown item type at the reserved number
+  100" (W6). Design: every vendor mention outside the manifest's vendor properties (§0, §1, §4.2.1, §4.3 D2, §4.5,
+  §4.6, §4.9, §5.1, §5.2, §5.3, §5.3.1, §6.9, §7, §8.3, §11, §12 NQ-8 "moot").
+- **NQ-9, `DeviceKind` closed** (decision change). `EnumShape.MayGrowInAMinor` is false for `DeviceKind` too, so the
+  canonicality check reports kind 3 as D2 at any reader age, in a header and in a locator: the item is R.encoding,
+  digested as read, joins nothing. The S10b-D R.version-at-locator path and the header's "names kind 3" 8.structure are
+  now unreachable for a canonical item (kept as guards; `JoinCursor`'s reports R.encoding). `RecordJson`: an
+  undeclared name of a closed enum is R.encoding at any record minor. Vectors: "device header of undeclared kind 3 in a
+  newer-minor record" and "ballot locator of undeclared device kind 3 in a newer-minor record" (both D2). Tests:
+  `AnUndeclaredDeviceKind_IsD2_InARecordOfANewerMinor_AndNeverThrows` (was `ADeviceKindOfANewerMinor_IsRVersion_...`:
+  R.encoding with "D2" at the item, no R.version, the roots still match, 13.structure / 18.structure for the item that
+  joins nothing, `ReadHeaderAsync` R.encoding); `UndeclaredNameOfAClosedEnum_IsREncoding_AtAnyMinor` (3 rows); the
+  newer-minor JSON row uses `RECORD_PHASE_AUDITED` instead of `DEVICE_KIND_TABLET`. Design §4.3 D2, §7 "Enum value",
+  §11, §12 NQ-9 answered.
+- **S10b-12, the Python reference reader** (`test/egrf/egrf_ref.py`, about 1,700 lines, standard library only). It was
+  written first, from the design and the `.proto` only, before any C# record code was opened for this stage (the KAT
+  oracle's discipline): the schema transcribed by hand (`--check` diffs it against `test/egrf/schema.json`), Method A
+  with W1-W8, W6's newer-minor branch, D1-D6, the signed-statement check, framing with the 64 MiB ceiling, the
+  directory and zip carriers (EOCD/ZIP64, central directory fill, local header agreement with the bit-3 rule,
+  duplicates, encryption, methods, CRC and size on read, directory entries; `zipfile` reads the entries), JSON lines
+  (proto3 JSON parsed into canonical bytes, with duplicate, alias, two-oneof and unknown-member refusal), the Merkle
+  tree (inclusion and consistency proofs), section roots, the TOC and the phase roots, and the R-checks that need no
+  cryptography (R.root, R.structure, R.order for joins and attestations, R.summary, attestation and record-signature
+  contents; no signature validity). On its first run it matched every golden item, every newer-minor item and all 61
+  negatives of S10b-D's `negatives.json` (and the 4 new ones), and the RFC 9162 vectors.
+- **S10b-12, golden records and the cross-check** (`test/egrf/records/`, about 4 MB; `EgrfGoldenRecords`,
+  `EgrfGoldenRecordTests`). 12 golden representations, 4 positives, 25 negatives covering every R-code (list in design
+  §5.7). The first cross-check disagreed on 7 rows of 41; each was settled from the design:
+  - *C# defect (fixed):* a device section that cannot be read whole (torn tail, zero-length frame) left the recount
+    without its unread ballots and the last item read, yet the tally header was still compared with it: R.summary on
+    `container-torn-tail` of the unchained record (its last ballot is cast; the chained record's device-1 ends with a
+    challenged ballot, so it hid there). Now a broken device section counts like a cast ballot with a finding
+    (`_undecodableCast`): V9 and R.summary not evaluable. Pinned by the record's index entry and the cross-check.
+  - *Design gaps, stated now (design §5.3.1, §8.3 "As built (S10b-E)"):* a record at no phase stops the read
+    (R.structure; the record root is undefined) — the Python reader had gone on and also reported R.signature, C#
+    refuses at open; an attestation over a device section that cannot be read whole is not evaluable (no
+    R.attestation) — the Python reader had reported it; a signature file's `<phase>` is the phase's name.
+  - *Python defect (fixed):* it read a claimed TOC entry's type through the decode rules, so 0x8001 gave D2 (R.encoding)
+    instead of §4.5's R.version-before-D2.
+  - *Comparison rule:* completeness is compared only on records that pass (C# reports it false for a record refused at
+    open; how far a reader goes after a failure is not specified). The Python reader also reports a newer-minor
+    record incomplete whatever it holds (R-2), as C# does.
+  After these, all 41 records agree (R-codes, phase roots, completeness) and `egrf_ref.py --check` reports 0 failures
+  (26 items, 65 negatives, 5 + 5 Merkle proofs, 41 records).
+- **S10b-14, `egrecord`** (`src/ElectionGuard.Verifier`, `test/ElectionGuard.Verifier.UnitTests`, both added to the
+  solution). `verify` (profiles full, guardian, ballot with `--locator`; `--parallelism`, `--checkpoint`,
+  `--signature-policy report|require`, `--trust key.pem`, `--max-findings`, `--json`), `digest`, `convert`, `diff`,
+  `prove` (by confirmation code: the new public `ElectionRecord.FindBallotsAsync`, then the ballot-correctness profile
+  and both inclusion proofs checked) and `show`; exit codes 0 / 2 / 1 / 3. 48 tests over the golden records: every
+  golden representation passes (0); the newer-minor positive exits 2; six negatives fail with their code in the JSON
+  report and four refused at open exit 1 with the R-code on stderr; 13 usage and I/O errors exit 3; the guardian
+  profile, `require` with the signer's key (0), without a key (1) and with another key (1, and 0 under `report`); the
+  ballot profile's inclusion; a checkpoint run; `digest` equal across representations and to `index.json`, and exit 1
+  on a claimed TOC that differs; `convert` to JSON zip and protobuf directory preserving every root; `diff` 0 and 1;
+  `prove` by base64 and hex code (0) and an unknown code (1); `show`.
+
+Gate:
+Gate before re-pinning (after the part-0 code changes, before any pinned expectation, vector or schema file was
+touched; 2026-10-10):
+
+```
+dotnet build electionguard-cs.sln -c Release      ->  0 Warning(s)  0 Error(s)
+egperf run --scenario smoke                        ->  EncryptBallots 239 ms 0.239 ms/ballot 165.7 MB
+                                                       VerifyBallots  976 ms 0.976 ms/ballot  12.2 MB
+                                                       correctness passed
+InMemory.Console                                   ->  Tally, contest 0: 0-0=3, 0-1=0, overvotes=0, null-votes=0,
+                                                       undervotes=0, undervote-difference=0, write-ins=0.  Done.
+                                                       (then the expected ReadKey InvalidOperationException)
+dotnet test --no-build                             ->  Perf.UnitTests  Passed 231/231
+                                                       Core.UnitTests  Failed! - Failed: 12, Passed: 2607, Total: 2619
+```
+
+The 12 failing tests at that moment, each a pin of the removed vendor range or of the old open `DeviceKind`:
+`TableOfContentsTests.Constructor_RefusesNonCanonicalOrder_RepeatsAndPseudoSections`,
+`.PhaseRoots_ArePrefixes_AndConsistent`, `.Extends_HoldsForEveryEarlierPhase_AndProvesIt`,
+`.Extends_FailsWhenAnythingAtOrBeforeTheEarlierPhaseChanged` (their fixture TOC held a 0x8001 vendor entry);
+`ElectionRecordVerifierRobustnessTests.ADeviceKindOfANewerMinor_IsRVersion_AndNeverThrows` ×3 (kind 3 was R.version /
+8.structure); `CanonicalProtobufTests.CommittedVectors_AreTheGeneratedOnes` and `.GoldenItems_AreCanonical_ByBothMethods`
+(the committed vectors still had `vendor_item`); `EgrfSchemaLintTests.SchemaJson_MatchesTheSchema_AndEveryChangeIsAppendOnly`
+(the committed table still had `VendorItem`) and `.AppendOnly_CatchesEachBreak("a reservation dropped")` (RecordItem now
+has two reservations); `RecordJsonProjectionTests.UnknownJsonContent_InANewerMinorRecord_IsRVersion("an undeclared
+enum name")` (its row was a `DEVICE_KIND_TABLET`, now closed).
+
+Re-pinned after that gate, each because of the decision named: the 12 tests above (the TOC fixture lost its vendor
+entry and the final TOC has 15 entries; the device-kind test now expects D2/R.encoding; the vectors and
+`schema.json` regenerated, `schema.json` as a new baseline because the append-only lint refuses a removed message;
+the lint's "reservation dropped" row removes only 2047; the JSON newer-minor row uses an open enum). No test was
+skipped or deleted without replacement: the two vendor tests (`AVendorSection_IsCounted_AndFailsOnlyWhenCritical`,
+`Diff_ReportsAVendorSectionWhoseEntriesDifferOnlyInTheCriticalBit`) tested the removed feature and are replaced by
+tests of its refusal.
+
+Gate after (2026-10-10, everything above in place):
+
+```
+dotnet build electionguard-cs.sln -c Release      ->  0 Warning(s)  0 Error(s)
+egperf run --scenario smoke                        ->  EncryptBallots 241 ms 0.241 ms/ballot 165.8 MB
+                                                       VerifyBallots  977 ms 0.977 ms/ballot  12.2 MB
+                                                       correctness passed
+InMemory.Console                                   ->  Tally, contest 0: 0-0=3, 0-1=0, ... Done.
+                                                       (C:\temp\eg\data\1\tally.json: 0-0 3, 0-1 0)
+dotnet test --no-build                             ->  Verifier.UnitTests 48/48, Perf.UnitTests 231/231,
+                                                       Core.UnitTests 2625/2625 (Python cross-check ran, not skipped)
+```
+
+Perf: smoke Encrypt 0.241 / Verify 0.977 ms/ballot against S10b-D's 0.233 / 0.952: within run-to-run noise (no hot
+path changed; the only verifier change is one counter on a section read failure). Alloc unchanged (165.8 / 12.2 MB).
+
+Carry-overs: the `derived/` confirmation-code index (§5.6) is still not built (`prove` scans); a line over 128 MiB
+and a > 4 GiB zip entry are not committed records (C# tests and a manual run); signature validity is outside the
+Python reader (no ECDSA in the standard library); S10b-15 (consumers) is next.
 
 ### 2026-10-10 — S10b-D review round 3 (16.C on a compact uncast item before its release, a device header checked against its key first, attestations of an empty device, serialized signature adds, test gaps)
 Worktree changes only; nothing committed. 7 findings (spec 1, code 3, tests 3); all judged valid. Six are fixed as

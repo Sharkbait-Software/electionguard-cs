@@ -453,6 +453,8 @@ public class RecordDirectoryCarrierTests
         { "a ballot item made non-canonical", RecordCodes.Encoding, "EncryptedBallot.weight (5) follows field" },
         { "the header made major 3", RecordCodes.Version, "this reader reads major 2" },
         { "a TOC entry naming a section kind v2 does not define", RecordCodes.Version, "a new section kind comes with a new format major" },
+        { "a TOC entry naming a former vendor section type", RecordCodes.Version, "a new section kind comes with a new format major" },
+        { "a section at the former vendor path", RecordCodes.Container, "vendor/8001/00000000.binpb" },
         { "two TOC entries out of canonical order", RecordCodes.Root, "The claimed table of contents is not one" },
     };
 
@@ -471,7 +473,9 @@ public class RecordDirectoryCarrierTests
         switch (tamper)
         {
             case "a TOC entry for a section that has no files":
-                RewriteToc(directory, entries => entries.Add(new Pb.TocEntry { SectionType = (Pb.SectionType)0x8001, ItemCount = 1, Root = ByteString.CopyFrom(new byte[32]) }));
+                // A device the record has no section for, in canonical order (after every device key
+                // that starts 0x01 0x00...).
+                RewriteToc(directory, entries => entries.Insert(entries.FindLastIndex(x => x.SectionType == Pb.SectionType.Device) + 1, new Pb.TocEntry { SectionType = Pb.SectionType.Device, Key = ByteString.CopyFrom([2, .. new byte[32]]), Critical = true, ItemCount = 3, Root = ByteString.CopyFrom(new byte[32]) }));
                 break;
             case "a TOC item that is not a toc_entry":
                 string tocPath = Path.Combine(directory, "toc.binpb");
@@ -486,6 +490,16 @@ public class RecordDirectoryCarrierTests
                 // A later tally kind (design §4.5's old example, 0x0203), in canonical order. User
                 // decision NQ-7: a new section kind comes only with a new format major.
                 RewriteToc(directory, entries => entries.Insert(entries.FindIndex(x => (int)x.SectionType > 0x0203), new Pb.TocEntry { SectionType = (Pb.SectionType)0x0203, ItemCount = 1, Root = ByteString.CopyFrom(new byte[32]) }));
+                break;
+            case "a TOC entry naming a former vendor section type":
+                // Vendor sections are removed (user decision "Remove them", 2026-10-10): 0x8001 is a
+                // section kind v2 does not define, like any other.
+                RewriteToc(directory, entries => entries.Add(new Pb.TocEntry { SectionType = (Pb.SectionType)0x8001, Critical = false, ItemCount = 1, Root = ByteString.CopyFrom(new byte[32]) }));
+                break;
+            case "a section at the former vendor path":
+                // ... and the layout has no path for one: vendor/<type>/ is an unlisted file (§5.3.1).
+                Directory.CreateDirectory(Path.Combine(directory, "vendor", "8001"));
+                File.WriteAllBytes(Path.Combine(directory, "vendor", "8001", "00000000.binpb"), [.. Frame(new Pb.SegmentHeader { Magic = "EGRF", FormatMajor = 2, SectionType = (Pb.SectionType)0x8001 }.ToByteArray()), .. Frame([0xA2, 0x06, 0x00])]);
                 break;
             case "a TOC entry naming the TOC's own type":
                 RewriteToc(directory, entries => entries[^1].SectionType = Pb.SectionType.Toc);
@@ -1110,34 +1124,6 @@ public class RecordDirectoryCarrierTests
             Assert.Equal((RecordDifferenceKind.ItemOnlyInA, extra), (onlyInA.Kind, onlyInA.Ordinal!.Value));
             Assert.Null(onlyInA.LeafB);
         }
-    }
-
-    /// <summary>
-    /// Two records holding the same vendor section (whose critical bit, unlike a standard type's, a
-    /// reader takes from the claimed TOC, §4.5), claimed critical in one and not in the other: the
-    /// only difference is that bit.
-    /// </summary>
-    [Fact]
-    public async Task Diff_ReportsAVendorSectionWhoseEntriesDifferOnlyInTheCriticalBit()
-    {
-        string a = await WrittenRegular();
-        string b = await WrittenRegular();
-        byte[] item = new Pb.RecordItem { VendorItem = new Pb.VendorItem { TypeUrl = "example.org/note", Value = ByteString.CopyFromUtf8("x") } }.ToByteArray();
-        foreach (var (directory, critical) in new[] { (a, true), (b, false) })
-        {
-            string vendor = Path.Combine(directory, "vendor", "8001");
-            Directory.CreateDirectory(vendor);
-            var header = new Pb.SegmentHeader { Magic = "EGRF", FormatMajor = 2, SectionType = (Pb.SectionType)0x8001 };
-            File.WriteAllBytes(Path.Combine(vendor, "00000000.binpb"), [.. Frame(header.ToByteArray()), .. Frame(item)]);
-            RewriteToc(directory, entries => entries.Add(new Pb.TocEntry { SectionType = (Pb.SectionType)0x8001, Critical = critical, ItemCount = 1, Root = ByteString.CopyFrom(MerkleTree.LeafHash(item).ToArray()) }));
-        }
-
-        await using var readerA = await ElectionRecord.OpenAsync(a);
-        await using var readerB = await ElectionRecord.OpenAsync(b);
-        Assert.Equal(RecordPhase.Final, readerA.Phase);
-        await ElectionRecord.CheckClaimedTocAsync(readerA);
-        var difference = Assert.Single(await ElectionRecord.DiffAsync(readerA, readerB).ToListAsync());
-        Assert.Equal((RecordDifferenceKind.Critical, (RecordSectionType)0x8001), (difference.Kind, difference.Section!.Value.Type));
     }
 
     // ---- conversion --------------------------------------------------------------------------------

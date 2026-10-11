@@ -58,6 +58,19 @@ item's 16.C from its printed χ, B_C and H_C before its release (§8.3, NQ-10); 
 kind as a header that does not match its section, since v2's layout has no path for such a device (§7, NQ-9); and
 makes the writer drop the attestations of a device that closes empty and serialize its record-signature adds.
 
+**Revision 7 (2026-10-10, stage S10b-E): vendor sections removed, `DeviceKind` closed, the Python reference reader,
+the golden records and `egrecord`.** The user answered the S10b-D questions (tracker, "S10b-D questions, answered
+2026-10-10"). **Vendor sections: "Remove them"**: vendors extend only the manifest (NQ-1); the vendor section-type
+range, `VendorItem` (its `RecordItem` member 100 is now reserved) and the `vendor/` path are gone, any section kind a
+reader does not know is `R.version` (NQ-7), and NQ-8 is moot (§4.3 D2, §4.5, §4.6, §5.3, §5.3.1, §6.9, §7, §12).
+**NQ-9: "DeviceKind closed, others open"**: a new device kind needs a new major, the canonicality check reports an
+undeclared `DeviceKind` anywhere (a device header, a ballot locator) as D2 at any reader age, and the other enums
+(`BallotStatus`, `RecordPhase`) may still grow in a minor (§4.3 D2, §7 "Enum value"). S10b-12 is built: the Python
+reference reader `test/egrf/egrf_ref.py`, written from this document and the `.proto` alone, and the golden,
+positive and negative records under `test/egrf/records/`, on which it and the C# reader agree record by record (§5.7);
+the cross-check found one C# defect and three places this document did not say what a reader does (§8.3 "As built
+(S10b-E)"). S10b-14 is built: `src/ElectionGuard.Verifier`, the `egrecord` command line (§8.3).
+
 Revision 2 summary (kept for the tracker's references):
 
 **Review round 1 and the feasibility proof are applied** (same day). Two design reviews and a four-runtime
@@ -100,7 +113,7 @@ the other.
 | Single-pass reading | a `.zip` read from a pipe in one pass | dropped; a non-seekable input is spooled to disk first (§5.4) | review round 1; NQ-6 |
 | Frame size | unbounded | at most 64 MiB per frame (§5.2) | review round 1 |
 | Out-of-range values | asked (Q-11) | the format checks widths only; the verifier reports ranges under the lettered checks (§4.8) | #11 |
-| Per-item extensions | in-band list with a critical bit | none; vendor data goes in the manifest or a vendor section (§7) | NQ-1 |
+| Per-item extensions | in-band list with a critical bit | none; vendor data goes in the manifest only (§7; vendor sections were removed, 2026-10-10) | NQ-1, "Remove them" |
 | Unknown fields | refused | allowed only after every known field, in field-number order; kept on re-encoding; a newer minor is reported, not failed (W6, §4.4, §7) | NQ-1 |
 | Codec | hand-written | Google.Protobuf code generated from the normative `.proto`; protobuf-net retired (§8.1) | implementer choice, justified |
 
@@ -170,7 +183,7 @@ CLI in `ElectionGuard.Verifier` (#15).
 - Key management, PKI and trust anchors. The format carries signatures; who is trusted is verifier configuration.
 - Voter-facing presentation (§4.4.1). Derived views are regenerable and outside the root.
 - Guardian-to-guardian traffic: encrypted shares, partial decryptions, commitment and response messages. They are
-  not in §3.7's list, and a vendor section can carry them.
+  not in §3.7's list, and the record has no place for them (vendor sections were removed, 2026-10-10).
 - Guardian-private data: secret keys, shares, the nonces of cast ballots, ξ_B of challenged regular ballots, and the
   combined pre-encryption nonces of cast ballots. **No message in the schema has a field for any of them, so no
   representation can carry one.** A reflection test pins this (S10b-4).
@@ -429,7 +442,7 @@ deliberately broken copy, so a future edit cannot break them silently.
 - **S7.** Every `bytes` field that carries a fixed-width value is annotated with `(width)` or `(width_multiple)`,
   plus `(omittable) = true` when it may be absent. Every enum has `..._UNSPECIFIED = 0`, which is invalid wherever
   the field is required. The lint test holds the list of variable-length `bytes` fields (segment and TOC keys, the
-  manifest content, vendor values, the parts of a signed statement), so a new unannotated `bytes` field fails it.
+  manifest content, the parts of a signed statement), so a new unannotated `bytes` field fails it.
 - **S8.** No regular (non-oneof) field number lies between the lowest and highest member numbers of a oneof in the
   same message. Rust's prost encodes a oneof at the position of its lowest-numbered member, whichever member is set
   (prost-derive's source says so in a TODO). With S8 that position is still field-number order. Today `RecordItem`
@@ -506,11 +519,12 @@ Re-serialization cannot see these, so every reader checks them explicitly. A fai
 - **D2 Enums.** The value is a declared member, and not `UNSPECIFIED` where the field is required. Proto3 enums are
   open, so a runtime keeps an unknown integer; a reader that knows the record's minor rejects it. A reader older than
   the record treats an undeclared value as content it does not understand (a later minor may add enum values, §7):
-  the checks that depend on it are `NotEvaluable` with `R.version`, and the item is still digested. `SectionType`
-  additionally admits the vendor range 32768-65533 in `SegmentHeader` and `TocEntry`, and is the one enum no minor
-  extends: a new section kind needs a new format major (user decision NQ-7, §7), so an undeclared non-vendor
-  `SectionType` is D2 for a reader of any minor (and a reader refuses a claimed TOC entry naming one with
-  `R.version` before its D2, §4.5).
+  the checks that depend on it are `NotEvaluable` with `R.version`, and the item is still digested. Two enums are
+  **closed**: no minor extends them, so an undeclared value is D2 for a reader of any minor. `SectionType`: a new
+  section kind needs a new format major (user decision NQ-7, §7), and a reader refuses a claimed TOC entry naming one
+  with `R.version` before its D2 (§4.5); there is no vendor range (vendor sections were removed, 2026-10-10).
+  `DeviceKind`: a device kind is a section kind in all but name (user decision NQ-9, "DeviceKind closed, others
+  open", 2026-10-10), so an undeclared kind is D2 wherever it occurs, in a `DeviceHeader` or a `BallotLocator`.
 - **D3 Timestamps.** `seconds` in [0, 253402300799], which is 1970-01-01T00:00:00Z to 9999-12-31T23:59:59Z, and
   `nanos` in {0, 1,000,000, ..., 999,000,000}: UTC, millisecond precision, as S10a's `EncryptionTimestamp`
   (follow-up #6). S10a's `DateTimeOffset` also admits times before 1970, so the writer's mapper refuses a pre-1970
@@ -653,7 +667,6 @@ order also follows the protocol's phase order.
 | 0x0302 | challenged_ballot_decryptions | final | empty | `challenged_ballot_decryption`, ascending locator, unique | exactly once once final; may be empty | yes |
 | 0x0303 | contest_data_decryptions | final | empty | `contest_data_decryption`, ascending (locator, contest index), unique | exactly once once final; may be empty | yes |
 | 0x0304 | uncast_nonce_releases | final | empty | `uncast_nonce_release`, ascending locator, unique | exactly once once final; may be empty | yes |
-| 0x8000-0xFFFD | vendor | final | vendor-chosen | `vendor_item` | optional | the writer's choice; taken from the claimed TOC |
 | 0xFFFE | toc (pseudo) | none | empty | `toc_entry` | the claimed TOC; never in a TOC | n/a |
 | 0xFFFF | signatures (pseudo) | none | empty | `record_signature` | outside every root | n/a |
 
@@ -661,17 +674,16 @@ Phase = min(type >> 8, 3): 0 setup, 1 voting, 2 aggregated, 3 final (`RecordPhas
 record is *at phase p* when it holds every required section of phases ≤ p and nothing of a later phase. Anything else
 is `R.structure`.
 
-**The `critical` bit is a leaf input of every phase root, so it is fixed wherever it can be.** For every section type
-a reader knows, the bit is the table's value, and a claimed TOC entry that disagrees is `R.root`. For a vendor
-section, the one kind of section whose type the table does not fix, the reader has no other source, so it takes the
-bit from the claimed TOC entry. That is the one place a verifier uses a claimed TOC value, and a flipped bit still
-changes the root, so signatures cover it. With these rules and the presence rules, two conformant writers of the same
-content produce the same TOC.
+**The `critical` bit is a leaf input of every phase root, so it is fixed.** For every section type the bit is the
+table's value (true for every v2 type), and a claimed TOC entry that disagrees is `R.root`. (Until S10b-E a vendor
+section took its bit from the claimed TOC; vendor sections are removed, so a verifier uses no claimed TOC value.) With
+these rules and the presence rules, two conformant writers of the same content produce the same TOC.
 
 **No other section kind exists within a major (user decision NQ-7, "Bump the major version", 2026-10-10).** Adding a
 section kind requires a new `format_major`; minor versions add only fields (§7). A reader therefore refuses a claimed
-TOC entry whose type is neither in this table nor in the vendor range with `R.version` (checked before the entry's
-own D2), and the layout has no path for such a section (§5.3.1), so its files are `R.container`.
+TOC entry whose type is not in this table with `R.version` (checked before the entry's own D2), and the layout has no
+path for such a section (§5.3.1), so its files are `R.container`. There are no vendor sections (user decision "Remove
+them", 2026-10-10: vendors extend only the manifest, NQ-1), so no range of types is open either.
 
 **Canonical ballot order** is device sections in key order, and chain order within each section. Locator order
 (kind, H_DI bytes, position) is the same order, and the final-phase join sections are sorted by it, which is what
@@ -726,10 +738,10 @@ What the schema holds, by `RecordItem` member (the oneof field number is the ite
 | 30-33 | final | `DecryptedTallyContest`, `ChallengedBallotDecryption`, `ContestDataDecryption`, `UncastNonceRelease` |
 | 40-44 | statements | `ChainCloseStatement`, `SectionSealStatement`, `PrefixCheckpointStatement`, `RecordStatement`, `record_signature` (`SignedStatement`) |
 | 50-51 | digest leaves | `TocEntry`, `ConfirmationCodeLeaf` |
-| 100 | vendor sections | `VendorItem` |
 
-`RecordItem` has no other field. Number 2047 (the draft's per-item extension list) and `RecordHeader` field 3 (the
-draft's `election_info`) are `reserved`: neither was ever published, but draft feasibility vectors used them.
+`RecordItem` has no other field. Number 2047 (the draft's per-item extension list), number 100 (`vendor_item`, removed
+with vendor sections in S10b-E) and `RecordHeader` field 3 (the draft's `election_info`) are `reserved`: none was
+ever published, but draft vectors used them.
 
 
 Decisions behind the layout:
@@ -956,7 +968,7 @@ another:
 | R_setup | the encryption record (sections 0x0001-0x0005) | before voting | devices and observers pin it |
 | R_sealed | R_setup plus every device section and the attestations | when voting closes | Q36: the record is sealed before any decryption |
 | R_aggregated | R_sealed plus the encrypted tally and the contest-data requests | after aggregation | §3.6.1: guardians run V4-V9 on exactly this, then decrypt |
-| R_final | R_aggregated plus the decryptions, the uncast nonce releases and vendor sections | at publication | the public |
+| R_final | R_aggregated plus the decryptions and the uncast nonce releases | at publication | the public |
 
 An RFC 9162 consistency proof, or recomputation from the TOC, shows that a later root extends an earlier one, so
 nothing published after the seal can have altered a ballot.
@@ -1031,8 +1043,7 @@ Default policy (#7): `SignaturePolicy.Report`, with `RequireValid` recommended f
 - `egrecord digest <path>` prints the phase roots of any representation, and printing the same roots is the
   equivalence check. A converter is correct iff it preserves every phase root.
 - **JSON bytes are never hashed.** A JSON reader hashes the canonical protobuf encoding of what it parsed.
-- **Opaque content survives conversion.** `VendorItem.value` is `bytes`, so it crosses every representation
-  unchanged. Unknown *fields* (NQ-1) survive any protobuf-to-protobuf copy or re-encode, because readers keep them
+- **Opaque content survives conversion.** Unknown *fields* (NQ-1) survive any protobuf-to-protobuf copy or re-encode, because readers keep them
   (§4.4), but they cannot cross into JSON: the proto3 JSON mapping has no form for a field the converter cannot name.
   So a converter that meets content it does not fully understand (an unknown field, oneof member or enum value)
   **refuses** (`R.version`) to write it as JSON rather than dropping it, and no conversion can change a root. A newer
@@ -1054,7 +1065,7 @@ This is the standard length-delimited stream, written and read by stock APIs: C#
 minimal (W4).
 
 - **Frame ceiling (normative).** A frame's length is at least 1 and at most **64 MiB (67,108,864 bytes)**. This holds
-  for the `SegmentHeader` and for every `RecordItem`, `ManifestFile` and `VendorItem` included. A writer refuses a
+  for the `SegmentHeader` and for every `RecordItem`, `ManifestFile` included. A writer refuses a
   larger item. A reader rejects a larger length (`R.container`) before it allocates, so a hostile length varint cannot
   make a streaming reader allocate up to 2 GiB. A zero length would be an empty `RecordItem` (D5) and is never
   written. Stock delimited readers differ, so a reader sets the limit explicitly:
@@ -1097,7 +1108,7 @@ minimal (W4).
   zero-length frame, a length that is not minimal (W4) or a frame of zeros followed by anything other than zeros, is
   not repaired: the section stays unsealable until an operator decides (deliberate). Nor is a section the TOC does
   not list removed unless it is a section of the next phase, which an unfinished seal or completion leaves (a device
-  section after voting was sealed, a vendor section or another phase's section is refused and kept; S10b-C review
+  section after voting was sealed or another phase's section is refused and kept; S10b-C review
   round 2). A verifier never repairs anything; for it a zero-length frame or a length that is not minimal anywhere is
   `R.container`.
 - **A returned phase root is durable** (the library's writer; S10b-C review round 3). Every segment is flushed to
@@ -1123,7 +1134,6 @@ minimal (W4).
   final/challenged_ballot_decryptions/00000000.binpb
   final/contest_data_decryptions/00000000.binpb
   final/uncast_nonce_releases/00000000.binpb
-  vendor/<type hex>-<key hex>/00000000.binpb
   signatures/<phase>-<SHA-256(statement) hex>.binpb     OUTSIDE the root
   derived/                                    OUTSIDE the root (§5.6)
   meta.json                                   OUTSIDE the root: producer software, creation time, notes
@@ -1139,9 +1149,9 @@ Two conformant readers must assemble the same logical record from the same bytes
 logical record, and anything outside it is an error rather than something a reader may resolve its own way.
 
 - **Paths are derived, never chosen.** Each section's directory or file name is fixed by its type and key, as in the
-  tree above. Hex is **lowercase**, with no separators. A vendor section is `vendor/<type as 4 hex digits>` followed by
-  `-<key hex>` when its key is non-empty. A device directory's kind word (`regular` or `pre-encrypting`) and hex
-  together are the 33-byte key.
+  tree above. Hex is **lowercase**, with no separators. A device directory's kind word (`regular` or
+  `pre-encrypting`) and hex together are the 33-byte key. A signature file's `<phase>` is the phase's name, `setup`,
+  `sealed`, `aggregated` or `final` (S10b-E: the Python reader needed it stated).
 - **Segment files** are named `<8-digit zero-padded decimal index>.<ext>`, starting at `00000000` with no gaps. Their
   order is the numeric order of those names. The first segment's `first_ordinal` is 0, and each later one's equals the
   previous one's `first_ordinal` plus its item count. Anything else is `R.container`. A section that the tree shows
@@ -1169,8 +1179,37 @@ logical record, and anything outside it is an error rather than something a read
   an unlisted path in a record whose header section says major 2 is still `R.container` (S10b-D review round 2).
 - **The TOC never decides membership.** The sections are the ones the layout finds. A required section that is
   missing is `R.structure`. A section in the claimed TOC that has no files, or files with no TOC entry, is `R.root`.
+- **A claimed TOC is read at open, and one that is not well formed stops the read** (S10b-E review round 2). It is
+  the record's identity before any section is read (a verifier's checkpoint, a writer's resume, a conversion and
+  an inclusion proof's TOC path start from it). Its file is read like a segment (framing, then its segment header,
+  D6, first ordinal 0; a JSON line's parse), each failure under its own code; then item by item: a section type
+  v2 does not define is `R.version` (before the item's D2, NQ-7), an item that is not canonical is `R.encoding`
+  (in JSON an undeclared `SectionType` name), an item that is not a `toc_entry`, or names the TOC or signatures
+  pseudo-section, is `R.root`; then a TOC with no entry, or with entries not in strictly ascending (type, key)
+  order, is `R.root`. Any of these refuses the record: no phase root is reported and the record is incomplete. A
+  well-formed claimed TOC that differs from the TOC recomputed from the sections is `R.root` found after open, and
+  the read goes on. (In JSON, an undeclared `SectionType` *name* is `R.encoding` and only a number is `R.version`:
+  a name cannot be mapped to a kind at all, and a later major's JSON record is `R.version` at its header section's
+  segment header before its TOC is read. Implementation-chosen, listed for the user's sign-off, S10b-E review
+  round 3.)
+- **The header section is read at open, and one that cannot be read stops the read** (S10b-E review round 3;
+  implementation-chosen, listed for sign-off): its `record_header` fixes the minor every other item is judged at.
+  After the layout, phase and presence rules (`R.structure`), it is read as a reader older than any minor reads it
+  (unknown fields allowed, W6): its segment as any segment (`R.container`), then item by item a second item
+  `R.structure` and an item that is not canonical `R.encoding`; then no `record_header` item `R.structure`, and a
+  `format_major` other than the reader's (or a minor over 65535) `R.version`. Any of these refuses the record like a
+  claimed TOC that is not well formed: no phase root, incomplete. The header item is checked again at the record's
+  own minor when the header section is digested.
+- **Segments are read frame by frame** (§5.2). An item is judged (`R.encoding` when it is not canonical) before the
+  next frame's length or the next line is read, so an item read whole before a torn tail or a bad frame has its own
+  finding, and the failure after it is the section's (`R.container`, or the line's code). Both reference readers
+  stream; a reader that splits a whole file first must still report in this order (S10b-E review round 3).
+- **D6 governs a `.jsonl` segment header line.** Any failure of the first line of a `.jsonl` segment, a line that
+  does not parse, an unknown member, an undeclared enum name or a byte-order mark included, is `R.container`, as a
+  `.binpb` segment header's is; §5.5's line codes (`R.encoding` for a line that does not parse) apply to item lines
+  (S10b-E review round 3; implementation-chosen, listed for sign-off).
 - **JSON items obey the frame ceiling too.** A `.jsonl` line whose canonical protobuf encoding exceeds 64 MiB is
-  `R.container`.
+  `R.container`; one whose encoding is empty (`{}`) is no item, `R.encoding`.
 
 ### 5.4 The `.zip` carrier
 
@@ -1255,11 +1294,13 @@ Each `.jsonl` file's first line is the `SegmentHeader` and every following line 
     unterminated last line of its own segment as the torn tail (§5.2): the line's ballot was never flushed.
   - One carriage return (0x0D) just before a line feed, or at the end of an unterminated last line, is removed, so
     CRLF files read as LF files.
-  - An empty line (nothing, or only that carriage return, before the line feed) is `R.container`. Any other line
-    must parse as one JSON value (whitespace around it is JSON's own), else `R.encoding`.
+  - An empty line (nothing, or only that carriage return, before the line feed) is `R.container`. Any other item
+    line must parse as one JSON value (whitespace around it is JSON's own), else `R.encoding`. A segment's first
+    line, its header, is D6's: any failure of it is `R.container` (§5.3.1).
   - A line longer than 128 MiB (2^27 bytes, without its line feed) is `R.container` before it is parsed, whatever it
     holds; within that, a line whose canonical protobuf encoding exceeds 64 MiB is `R.container` too (§5.3.1).
-  - Text that is not UTF-8, a byte-order mark included, fails JSON parsing: `R.encoding`.
+  - Text that is not UTF-8, a byte-order mark included, fails JSON parsing: `R.encoding` on an item line,
+    `R.container` on a header line.
 - **The library's writer** emits one item per line, LF line endings and members in field-number order, so `diff` is
   meaningful. Its lines are compact: C# re-writes `JsonFormatter`'s output through `Utf8JsonWriter` with indentation
   off. How non-ASCII characters are escaped is not specified.
@@ -1273,8 +1314,16 @@ Each `.jsonl` file's first line is the `SegmentHeader` and every following line 
   - two members of the same oneof in one object, such as a `RecordItem` line with two item members. A last-wins parse
     would hide this from D5.
 
-  The other leniencies the mapping allows (unpadded or URL-safe base64, `null` for a default, numbers given as strings)
-  cannot change what is hashed, because the reader hashes the canonical protobuf encoding of what it parsed.
+  - **a value not in its one written form** (S10b-E review round 3; implementation-chosen, listed for sign-off):
+    bytes that are not standard base64 with padding and zero unused bits (the mapping lets parsers take URL-safe
+    and unpadded forms, and a parser built on a lenient base64 decoder may take more), and an integer, enum numbers
+    included, that is not plain decimal: an optional `-`, no leading zero, no fraction or exponent (the mapping lets
+    parsers take exponent notation). Before this rule the two reference readers disagreed on whether such a record
+    is acceptable: URL-safe and unpadded `idB` values and a `"01"` count were refused by C# and taken by Python.
+
+  The leniencies that remain, `null` for a default and a number given as a string (or a string as a number), cannot
+  change what is hashed, because the reader hashes the canonical protobuf encoding of what it parsed. Neither could
+  the refused forms; they are refused so that every reader takes the same lines (both reference readers do).
 - **JavaScript uses protobuf-es for JSON.** protobufjs writes canonical binary, but it does not implement the proto3
   JSON mapping. Its `toObject` renders a `Timestamp` as `{seconds, nanos}`, and its `fromObject` throws on an RFC 3339
   string. protobuf-es's `toJsonString` matched Python's compact output byte for byte, astral characters included.
@@ -1308,9 +1357,20 @@ Follow-up #18: "Alongside, not signed".
   proofs, transcribed from transparency-dev/merkle). The first two are generated by the C# tests from synthetic byte
   patterns (`EGRF_WRITE_VECTORS=1` rewrites them); the feasibility run's draft-schema vectors were not reused.
   The layout, framing, torn-tail, zip and JSON negatives below are C# tests since S10b-C
-  (`RecordDirectoryCarrierTests`, `RecordZipCarrierTests`, `RecordResumeTests`, `RecordJsonProjectionTests`). They
-  are whole records rather than items, so their files come with the golden records in S10b-12, where the Python
-  reader must reproduce them too.
+  (`RecordDirectoryCarrierTests`, `RecordZipCarrierTests`, `RecordResumeTests`, `RecordJsonProjectionTests`).
+- **In place since S10b-E (S10b-12):** `test/egrf/records/`: the three golden records below, each in all four
+  representations (protobuf and JSON, directory and `.zip`); positive edge cases (a JSON-lines file without its last
+  line feed, CRLF line endings, a zip local header with bit 3 and all three values zero, a record of a newer minor
+  with an unknown field); and negative records, each one mutation of a golden record, at least one per R-code
+  (`R.container` ×13: an unlisted file, uppercase hex, a segment gap, a segment header that disagrees with its path,
+  a torn tail, a zero-length frame, a frame over 64 MiB, a manifest copy that differs, mixed encodings, a duplicate
+  zip entry, a `:` under `derived/` in a zip, a local header that disagrees, bit 3 with only the CRC zero;
+  `R.encoding` ×3; `R.version` ×2; `R.root` ×2; `R.structure`, `R.order`, `R.summary`, `R.attestation`,
+  `R.signature`). `index.json` lists every record with the R-codes, phase roots and completeness the C# reader and
+  verifier report; the signed records are signed by `trust/signer.pem`. Nonces are not seedable, so
+  `EGRF_WRITE_RECORDS=1` rewrites every file (`EgrfGoldenRecords`); the tests compare both readers on the committed
+  files, never a root pinned in code. A line over 128 MiB and a > 4 GiB zip entry are not committed (C# tests and a
+  manual run cover them).
 - **Golden vectors** (`test/egrf/vectors/`):
   - every item type: canonical bytes (hex), proto3 JSON and leaf hash. The JSON is compared by structure: parse
     both sides and compare members and values. The feasibility run's comparison matched C# against Python for 31 of
@@ -1343,14 +1403,22 @@ Follow-up #18: "Alongside, not signed".
   inside an unknown field; and for a reader at the record's minor, any unknown field. A compact uncast item whose
   release lacks ξ_B, and a full one whose release carries it. JSON negatives: a duplicate member, a JSON-name and
   proto-name alias pair, two members of one oneof, and an unknown member. Plus one per `R.*` code and join rule.
-- **The Python reference reader** (`test/egrf/egrf_ref.py`) is Python 3, standard library only, in the spirit of the
-  KAT oracle (`test/kat/eg_kat.py`). It transcribes the schema by hand from the `.proto` into a table (field numbers,
-  types, widths, reserved numbers), implements Method A (§4.4, unknown fields included), the length-delimited segment
-  reader, the Merkle tree and the phase roots, and reproduces the golden roots and every negative vector's verdict.
-  A C# test (`EgrfSchemaLintTests`, S10b-2) already writes `test/egrf/schema.json` from the compiled descriptor
-  (custom width options included); CI will fail if the Python table and that file disagree. This is the acceptance
-  test for the formal spec: anything the Python reader needs that the spec does not say is a gap in the spec. It also
-  demonstrates G-7: no protobuf runtime is required.
+- **The Python reference reader** (`test/egrf/egrf_ref.py`; in place since S10b-E) is Python 3, standard library
+  only, in the spirit of the KAT oracle (`test/kat/eg_kat.py`), written from this document and the `.proto` alone. It
+  transcribes the schema by hand from the `.proto` into a table (field numbers, types, widths, reserved numbers),
+  implements Method A (§4.4, unknown fields included) with D1-D6 and the signed-statement check, the
+  length-delimited segment reader with the frame ceiling, the directory and `.zip` carriers (the §5.4 checks on the
+  raw bytes, `zipfile` reading the entries), the proto3 JSON lines (§5.5), the Merkle tree, the TOC and the phase
+  roots, and the record-level checks that need no cryptography: the claimed TOC (`R.root`), presence (`R.structure`),
+  join and attestation order (`R.order`), the tally header (`R.summary`), and attestation and record-signature
+  contents (`R.attestation`, `R.signature`; signature validity is not checked: the standard library has no ECDSA).
+  `python test/egrf/egrf_ref.py --check` diffs its table against `test/egrf/schema.json` and reproduces every item,
+  newer-minor, negative and Merkle vector and every record of `test/egrf/records/index.json`;
+  `egrf_ref.py read <record> --json` reports one record. The C# tests `EgrfGoldenRecordTests` run both (skipped, with
+  the reason, when no Python 3 is found; `EGRF_PYTHON` names one) and require the R-codes, the phase roots and, on a
+  record that passes, completeness to equal the C# reader's, record by record. This is the acceptance test for the
+  formal spec: anything the Python reader needs that the spec does not say is a gap in the spec (§8.3 "As built
+  (S10b-E)" lists the ones found). It also demonstrates G-7: no protobuf runtime is required.
 
 ---
 
@@ -1518,7 +1586,10 @@ A **VerifierCheckpoint** is local, trusted state, written atomically (a temp fil
 - per device section: next position and byte offset, section frontier, codes frontier and chain-walker state;
 - the V9 partials in standard (A, B) form, never raw `ModPProduct`;
 - the 5.A run files, with the current buffer flushed as a run;
-- the 11.D bitset, the cursor positions, the counters and the findings so far.
+- the 11.D bitset, the cursor positions, the counters and the findings so far;
+- the sections that could not be read whole, each with the ordinal of its last item read whole, so that a resumed run
+  reports each failure once and decides the strays of a broken device section as the first run did (S10b-E review
+  rounds 1 and 2).
 
 On resume, each section continues from its saved offset and frontier. The final section root must equal the TOC's.
 Because the frontier commits to the verified prefix, a match proves that the record being finished extends exactly
@@ -1545,14 +1616,13 @@ prefix-checkpoint statements as they appear, and at seal runs only the remaining
 - **R-codes:** `R.container`, `R.encoding`, `R.order`, `R.structure`, `R.version`, `R.root`,
   `R.summary`, `R.attestation`, `R.signature`.
 - **`Complete`** is false whenever the reader skipped content it does not understand: an unknown field, oneof
-  member or enum value of a newer minor (§7). A vendor section does not make it false: vendor sections are part of
-  the format (digested, never verified) and are counted in the statistics. (There is no unknown standard section
-  kind to skip: NQ-7 puts any new section kind in a new major.) That is informational, not a failure (NQ-1: a verifier that
+  member or enum value of a newer minor (§7); as built (R-2), a record of a newer minor is reported incomplete
+  whatever it holds. (There is no unknown section kind to skip: NQ-7 puts any new section kind in a new major, and
+  there are no vendor sections.) That is informational, not a failure (NQ-1: a verifier that
   sees a newer `format_minor` "reports that the record is newer but still verifies everything it understands"), so
   **`Passed` means no failures**, and `Complete` is reported beside it with the record's and the reader's format
   versions and the content not understood (`SkippedUnknownContent`). Content a reader must understand to verify is
-  never informational: a critical vendor section (its writer says it must be understood), or an unknown item type in
-  a section that must verify, is a `R.version` failure. `egrecord verify` exits 0 when passed and complete, 2 when passed but incomplete, 1 on any
+  never informational: an unknown item type in a section that must verify is a `R.version` failure. `egrecord verify` exits 0 when passed and complete, 2 when passed but incomplete, 1 on any
   failure, so a script cannot mistake one for the other.
 - **Findings** carry `SubSection` (the existing `VerificationFailedException` convention: "6.D", "13.structure",
   "R.order"), the verification number, the section, the locator, id_B in hex, the contest and field index, and a
@@ -1576,11 +1646,11 @@ prefix-checkpoint statements as they appear, and at seal runs only the remaining
 | Spec version | `Parameters.version` (the exact eq. 4 bytes), checked by 1.A | V1.A fails |
 | Format major | `RecordHeader.format_major`, repeated in `SegmentHeader` and `RecordStatement`; the `.proto` package is `electionguard.egrf.v<major>` | refuses the record (`R.version`, stop). The reader reads the header section's segment header at v2's path first, before the layout and D6 refuse anything a later major may hold (new paths, segment headers at its own major): magic "EGRF" with another `format_major` is `R.version` (review round 2); then the `record_header` item's major is checked again |
 | Format minor | `RecordHeader.format_minor` | reads in compatible mode (below) |
-| Section type | a new section kind needs a **new major** (user decision NQ-7, "Bump the major version"); later tallies arrive this way (§4.5). Vendor types (0x8000-0xFFFD) are the one open range | a v2 reader refuses the record at its header section's segment header, read first (`R.version`, the row above); a claimed TOC entry naming an undefined non-vendor type is `R.version` too, and there is no path for one (§5.3.1). A vendor section: the bit comes from the claimed TOC (§4.5); critical: `R.version` failure; non-critical: digested |
+| Section type | a new section kind needs a **new major** (user decision NQ-7, "Bump the major version"); later tallies arrive this way (§4.5). No range is open: vendor sections were removed (2026-10-10) | a v2 reader refuses the record at its header section's segment header, read first (`R.version`, the row above); a claimed TOC entry naming an undefined type is `R.version` too, and there is no path for one (§5.3.1) |
 | Item type | a new `RecordItem` oneof member (a field of `RecordItem`) | in a section it must verify: that item's checks are `NotEvaluable`, with `R.version`; `Complete = false` |
 | Field | a new field number, append-only (S6), after every older field on the wire (W6) | verifies what it knows, keeps and digests the rest, reports it, `Complete = false` (informational; "Older readers" below) |
-| Enum value | a new value of an existing enum, except `SectionType` (NQ-7) | the checks that depend on it are `NotEvaluable` with `R.version`; the item is digested (D2). As built: a ballot status (review round 1); a device kind in a join item's ballot locator (the item joins nothing; review round 2). A device of a new kind would also need a new section path, which v2's layout does not have (§5.3.1; NQ-7: no generic path), so a v2 reader refuses such a record whole at open (`R.container`, the unlisted path); a device header of an undeclared kind inside a declared kind's section is a header that does not name its section's key, the device's structure code (review round 3; NQ-9) |
-| Vendor data | none in the record items (NQ-1: "Vendors should never add fields to most of the types"); vendor properties in the manifest (ignored by the parser, bound by H_B) or vendor sections | n/a |
+| Enum value | a new value of an existing enum, except the closed `SectionType` (NQ-7) and `DeviceKind` (NQ-9, 2026-10-10) | the checks that depend on it are `NotEvaluable` with `R.version`; the item is digested (D2). As built: a ballot status (review round 1). An undeclared `SectionType` or `DeviceKind` is D2 at any reader age (S10b-E; until then a device kind in a join item's locator was `R.version` and a device header of an undeclared kind the device's structure code) |
+| Vendor data | none in the record items (NQ-1: "Vendors should never add fields to most of the types"); vendor properties in the manifest only (ignored by the parser, bound by H_B; vendor sections were removed, user decision "Remove them", 2026-10-10) | n/a |
 | Files | `SegmentHeader.magic` and `format_major` | `R.container` |
 
 Rules:
@@ -1604,8 +1674,6 @@ Rules:
   canonical bytes without its field number, so a JSON reader stops with `R.version`; the protobuf representation is
   the one to verify a newer record with. Neither path reports `Complete` with unread content (G-6), and the roots
   computed from the protobuf representation are exact.
-- **Vendor sections** (0x8000-0xFFFD) are final-phase, digested and never verified. The library's writer marks them
-  non-critical unless told otherwise, and readers take the bit from the claimed TOC (§4.5).
 - **Election options** (chaining mode, Ω, supplemental fields, b_Λ) come from the manifest. The format has no
   feature flags.
 
@@ -1886,7 +1954,7 @@ ballot is an `EncryptedBallot` with `PreEncryptedContests`, S9.)
   computes B̄_C and H̄ itself; `CloseAsync(DeviceChainRecord, closedAt)` checks `DeviceChain.Close`'s record against
   the section (codes root included). A device that appended nothing has its section removed, and `CloseAsync`
   returns null (Q25).
-- Not built here: `AddDevicePartAsync` and vendor sections in the writer (the reader reads them). `AddAttestationAsync`,
+- Not built here: `AddDevicePartAsync`. `AddAttestationAsync`,
   `AddRecordSignatureAsync`, the prefix checkpoint statement and the `DeviceSeal` statement builders came with S10b-D
   (below).
 
@@ -1998,9 +2066,8 @@ public static class ElectionRecordVerifier
   never changes its outcome);
   `BallotCorrectness` reads only the chosen ballots' device sections and the join sections, compares only those
   sections' roots, and gives each chosen ballot RFC 9162 inclusion proofs to the claimed root (`BallotInclusion`).
-- **Vendor sections** are digested and counted (`RecordStatistics.VendorSections`); they do not make `Complete` false
-  (a known mechanism, never verified; question NQ-8, §12). A vendor section whose claimed TOC entry is critical is
-  `R.version`.
+- **Vendor sections** were digested and counted; they are removed in S10b-E (user decision "Remove them"), with
+  `RecordStatistics.VendorSections`.
 - **Statements and signatures.** `RecordStatements.ChainClose/SectionSeal/PrefixCheckpoint/Record` build the canonical
   statement bytes; `DeviceSeal` (now also carrying S_device, the mode, H̄ and the close time) gives a device's chain
   close and section seal, `DeviceSectionWriter.PrefixCheckpointStatement` a prefix checkpoint. `SignedStatement`,
@@ -2026,6 +2093,96 @@ public static class ElectionRecordVerifier
 - **Merge.** `BallotAggregationVerifier.ExportStandardForm()` gives a `BallotAggregationPartial` (counts, faulted, per
   contest the cast weight and per field b(A, 512), b(B, 512)); `ImportStandardForm` and `Merge(partial | verifier)`
   multiply it in (a faulted operand faults the result; a partial over another manifest is refused).
+
+**As built (S10b-E: the two decision changes, S10b-12, S10b-14).**
+
+- **Vendor sections removed.** `VendorItem` is gone from the schema (`RecordItem` reserves 100; `test/egrf/schema.json`
+  was regenerated as a new baseline, since S6's append-only check refuses a removed message and v2 is unpublished);
+  `RecordSections.FirstVendorType`/`LastVendorType`/`IsVendor`, the `vendor/` layout path, the verifier's vendor
+  counting (`RecordStatistics.VendorSections`; checkpoint version 2) and `RecordDifferenceKind.Critical` (critical
+  bits are fixed per type, so two computed TOCs never differ in one alone) are removed. `TocEntry` refuses any type
+  v2 does not define; a claimed TOC entry naming one (0x8001 included) is `R.version` at open.
+- **`DeviceKind` closed** (`EnumShape.MayGrowInAMinor` is false for it): kind 3 in a header or a locator is D2 at any
+  reader age, so the item is `R.encoding` (not canonical, digested as read) and joins nothing; the verifier's and
+  `JoinCursor`'s undeclared-kind branches stay as unreachable guards. In JSON an undeclared name of `SectionType` or
+  `DeviceKind` is `R.encoding` at any record minor (other enums: `R.version` for a newer minor, as before).
+- **Golden records and the cross-check** (§5.7). The Python reader was written before any C# record code was read; the
+  first cross-check disagreed on four records, settled as follows (a reader change on the Python side only where this
+  document already implied it):
+  - *C# defect, fixed:* a device section that could not be read whole (a torn tail, a zero-length frame) left the
+    recount without its unread ballots, and the last item read before the failure was dropped too, yet the tally
+    header was still compared with that recount: `R.summary` was reported over a recount known to be short. Now a
+    section that breaks counts like a cast ballot with a finding: V9 and `R.summary` are not evaluable.
+    *Review round 1* completed this under §6.9's rule that a verification is never `Passed` over an item it did not
+    see: every verification the section's items feed is not evaluable (5, 6, 7, 9, 11 and the chain verification, 8
+    or 16; 13-14 for a regular device in a final record, where an unread challenged ballot's missing decryption
+    cannot be seen; 15, 17, 18 and 19 for a pre-encrypting one; 10 reads only the tally sections; 12 only through
+    the join items below); the last item read whole before the
+    failure is verified like any other unless it is the close (a close cannot be told from a truncated chain's end);
+    a join item naming a ballot of such a section is not a stray, its verification is not evaluable instead; and the
+    section's failure is reported once (step F does not digest it again; the set is in the checkpoint, version 3).
+    *Review round 2* made the stray rule independent of batching: a join item is not a stray only when it names a
+    position after the section's last item read whole (position 0, the header's, is always a stray). Every position
+    at or before it was read, and one after it becomes a stray only once the cursor has moved past the device, by
+    which time the break is known; so one item per batch, the default batches and any parallelism give one report.
+    The checkpoint keeps each unreadable section's last whole ordinal (version 4).
+  - *Not stated before, now read this way by both:* a record at no phase (a required section missing, or a later
+    phase's section without every earlier required one) is `R.structure` and the read stops, since the record root is
+    R_phase of the record's phase; an attestation over a device section that cannot be read whole is not evaluable
+    (no `R.attestation`); a signature file's `<phase>` is the phase's name (§5.3.1). A `setup/manifest.json` that is
+    not the stored manifest is `R.container` found after open: a finding, and the read goes on (the copy is outside
+    every root); the Python reader stopped there until review round 1. Completeness is false for content of a newer
+    minor and for a read that stopped (refused at open, or at no phase), and is compared on every record, as are the
+    phase roots whenever either reader computes them (both must).
+  - *Python defect, fixed:* it read a claimed TOC entry's section type through the decode rules, so 0x8001 came out
+    D2 (`R.encoding`) rather than §4.5's `R.version`, which is checked before the entry's D2.
+  - *Review round 2, Python defects, fixed:* a claimed TOC that is not well formed was a finding with every root still
+    computed (C# refuses the record at open; the rule is now stated in §5.3.1, and five negative records pin it:
+    a non-canonical item, an undeclared `SectionType` name in JSON, an item that is not a `toc_entry`, entries out
+    of order, a torn TOC); and an enum varint at or above 2^64 - 2^31, a negative int32 sign-extended, was D2 at
+    any reader age, where it is an undeclared value (D2 for a closed enum or at the reader's minor, content not
+    understood for an open enum of a newer minor), as `CanonicalProtobuf` decides; vectors pin both sides.
+  - *Review round 3.* §6.9's rule now holds for every section, not only device sections: a setup, tally or
+    decrypted-tally section that cannot be read to its end (`DigestAsync` reports whether it was read whole) leaves
+    the verifications that read it not evaluable (V1-V4 and all cryptography for a setup section; V9 and V10 for the
+    encrypted tally; V10 and V11 for the decrypted tally), and no count or presence is inferred from the part read
+    (no `R.structure` "holds 0 items"); the manifest's carrier failure is reported once (step A no longer reports
+    what step B digests). Attestation contents are compared only over what was read: a section seal whenever its
+    section was read whole; a chain close only when the header was taken, every ballot link walked and the close
+    read; a prefix checkpoint of a nonzero count only when the header was taken and the walk is complete. Otherwise
+    those parts are not evaluable, not `R.attestation` (the result says it could not be compared in full; under
+    `RequireValid` such a chain close, validly signed, is not reported as missing, nor is any device's after a torn
+    attestations section). The stray rule's `Position > lastWhole` half decides for one position only, the close
+    of a section broken after it: positions 1 to the last whole ordinal are ballots, which take their own joins.
+    The JSON one-form rule (§5.5) and the reader rules of §5.3.1 (the header section and a `.jsonl` header line) are
+    stated. A header line whose `magic` is not well-formed UTF-8 threw `InvalidOperationException` out of the major
+    peek; it is now `R.container` at open. The Python reader streams frames and lines, reads the header section at
+    open, follows D6 for header lines, the attestation and one-form rules, reports §4.5's setup and tally contents
+    (`R.structure`), an attestations item that is not a `device_attestation` (`R.attestation`) and a manifest media
+    type it does not read (`R.version`), compares the manifest copy only with a stored manifest it read, leaves
+    `R.summary` not evaluable for a cast ballot of weight below 1, a status it does not know or an item that is no
+    ballot, and compares attestation contents and the tally header only when the setup was read (the C# device pass
+    does not run otherwise). A seeded single-byte mutation test runs both readers over every golden directory
+    record (8 mutations per record by default; 4,800 across three seeds, 1,500 to 1,800 each, agreed on the final code). It compares
+    `R.summary` only when this library reports no verification finding at a ballot, and `R.summary` and
+    `R.attestation` only when no setup verification (1-4) failed: the Python reader runs no cryptography, so it
+    cannot see why those were not evaluable.
+  - Everything else agreed at the first run: every item, newer-minor, negative and Merkle vector, every other layout,
+    framing, zip and JSON-lines verdict, and the roots of all twelve golden representations.
+- **`egrecord`** (`src/ElectionGuard.Verifier`, Spectre.Console.Cli with strict parsing, like `egperf`): `verify
+  <path> [--profile full|guardian|ballot] [--locator <device>/<position>]... [--parallelism N] [--checkpoint path]
+  [--signature-policy report|require] [--trust key.pem]... [--max-findings N] [--json]`, `digest`, `convert <source>
+  <destination> --encoding protobuf|json` (a destination ending `.zip` is a zip), `diff`, `prove <path> <confirmation
+  code>` and `show`. Exit codes: 0 passed (or done) and complete, 2 passed but incomplete (R-2), 1 failed (a finding,
+  a record the reader refuses at open, records that differ, a ballot not found or not proven), 3 a usage or I/O error.
+  A locator is written as the device's directory name and the 1-based position (`regular-<H_DI hex>/3`). `--trust`
+  takes PEM `PUBLIC KEY` files (`ecdsa-p256-sha256`). `prove` finds the ballot with the new public
+  `ElectionRecord.FindBallotsAsync(reader, ConfirmationCode)` (a scan of the device sections; `derived/` indexes are
+  not built yet) and runs the `BallotCorrectness` profile on it, checking both inclusion proofs. Output is UTF-8
+  without a BOM whether or not it is redirected (review round 1: a redirected `--json` on Windows went out in the
+  OEM code page, where § is the control byte 0x15). A record value or manifest that does not decode is exit 1 in
+  every command, like a record refused at open; `show` prints the rest of the summary beside a manifest that does
+  not parse.
 
 ### 8.4 What is reused and what is new
 
@@ -2089,9 +2246,9 @@ updates the tracker.
 | **S10b-9** `VerifyAllAsync`. **Done (S10b-D).** | Steps A-F, profiles, report, attestation-content checks, resumable checkpoint, `VerifiedAggregate` and the `TallyAdmin.Decrypt` overload (S10a carry-over) | One test per R-code and per join rule (a missing challenged decryption, a decryption naming a cast or spoiled ballot, a missing or stray uncast release, an unmatched contest-data request); spoiled ballots excluded from V9 and included in 5.A and 11.D; a never-returned uncast ballot (compact) passes V16 and V18 with its released ξ_B, is counted as an item whose 17.A and 19.A-D hold by construction (§3.2), and fails 16/18 when ξ_B regenerates a different χ or H_C; a spoiled ballot sharing id_B with a cast one fails 5.A (the record verifier collects every submitted ballot's id_B, whatever its status); a newer-minor record passes with `Complete = false` and its unknown content reported; V9 `NotEvaluable` after a faulted aggregator; kill-and-resume gives the same report as one run; GuardianPreliminary on an aggregated record; a run over a `.zip` given as a stream whose `Seek` throws (spooled, same report) |
 | **S10b-10** JSON projection, converter, diff. **Done (S10b-C),** except identical `VerificationReport`s (S10b-9; the four representations have identical roots and no difference). | `JsonFormatter`/`JsonParser` plus duplicate-member refusal; `ConvertAsync`; `DiffAsync` | protobuf → JSON → protobuf is byte-identical; JSON → protobuf → JSON parses to the same structure (byte-identical only within one runtime, §5.5); the four representations of each golden record give identical roots and identical `VerificationReport`s, findings included; content with an unknown field is refused for conversion to JSON and copied unchanged protobuf to protobuf; JSON negatives: a duplicate member, a JSON-name/proto-name alias pair, two members of one oneof, an unknown member, a wrong decoded width, a `uint64` ≥ 2^63, negative `Timestamp` nanos, an undeclared enum name |
 | **S10b-11** Attestations and signatures. **Done (S10b-D),** `ecdsa-p256-sha256` only. | Statements, `IStatementSigner`, `ISignatureVerifier` (`ecdsa-p256-sha256` first; others pluggable), policies | Statements signed and verified; a tampered count, codes root or status caught (`R.attestation`); dropping trailing ballots caught under both chaining modes when a chain close exists; a missing or invalid signature under each policy |
-| **S10b-12** Python reference reader and golden records | `test/egrf/egrf_ref.py` (standard library; Method A with W6's unknown-field rule, D1-D6, delimited segments with the frame ceiling, the §5.3.1 layout rules, Merkle, phase roots, `.zip` via `zipfile` with the local-header check), the three complete golden records in all representations, the schema-table diff against `test/egrf/schema.json` | CI runs `python test/egrf/egrf_ref.py --check`: every golden root reproduced and every negative vector's verdict matched |
+| **S10b-12** Python reference reader and golden records. **Done (S10b-E).** | `test/egrf/egrf_ref.py` (standard library; Method A with W6's unknown-field rule, D1-D6, delimited segments with the frame ceiling, the §5.3.1 layout rules, Merkle, phase roots, `.zip` via `zipfile` with the local-header check), the three complete golden records in all representations, the schema-table diff against `test/egrf/schema.json` | CI runs `python test/egrf/egrf_ref.py --check`: every golden root reproduced and every negative vector's verdict matched |
 | **S10b-13** TypeScript reader. **Deferred (NQ-3: "Defer").** | `test/egrf/js/`: protobuf-es generated code (binary and the proto3 JSON mapping; not protobufjs, §5.5), Method B (with `readUnknownFields: false` for records of its own minor), D1-D6, `sizeDelimitedDecodeStream` with `readMaxBytes` set, Merkle roots | Reproduces the golden roots and negative verdicts in CI |
-| **S10b-14** `ElectionGuard.Verifier` | New project; `egrecord verify | digest | convert | diff | prove | show` over the Core API | CLI tests on the golden records: exit codes, report output, `digest` equal across representations |
+| **S10b-14** `ElectionGuard.Verifier`. **Done (S10b-E).** | New project; `egrecord verify | digest | convert | diff | prove | show` over the Core API | CLI tests on the golden records: exit codes, report output, `digest` equal across representations |
 | **S10b-15** Migration of the consumers | `Program.cs` as in §8.5; egperf `writeRecord`/`verifyRecord` and the serialization phase on the item codec; `ElectionGuard.Testing.Cli` emits records; `test/data/*` regenerated | Console pipeline passes; perf smoke run and `compare --repeat 5` against a HEAD worktree baseline (allocation of the Google.Protobuf parse path checked here) |
 | **S10b-16** Retire superseded code | Remove `ProtobufEncryptedBallotSerializer` and its `Protobuf*` DTO tree, the protobuf-net package, `IEncryptedBallotSerializer`, the JSON ballot serializer, `JsonElectionRecordSerializer` (**replaced** by the proto3 JSON projection; its per-object API has no use once records are read and written as a whole, and `egrecord show` prints any item as JSON), `JsonPreEncryptedBallotSerializer`, `JsonDeviceChainRecordSerializer`, `StrictBase64` and `EncryptedBallotShape` (folded into the mappers). `ManifestSerializer` stays as the manifest parser; its writer stays only as an authoring helper whose output has no canonical status. | No remaining reference; the full suite green; CLAUDE.md's Serialization bullet rewritten |
 | **S10b-17** Live tailing (may be deferred) | `FollowLiveRecord`, prefix-checkpoint checking | Tail a record while a writer appends; a checkpoint mismatch is caught |
@@ -2222,6 +2379,9 @@ question numbers are kept so the tracker's references still resolve.
 | NQ-6 Pipe input | "Drop it" | A non-seekable input is spooled to a temporary file (§5.4, §6.3; S10b-7) |
 | NQ-7 Where a later version's section kinds live | "Bump the major version" (2026-10-10) | A new section kind needs a new major; a v2 reader refuses an unknown one (`R.version`); no generic path; minors add only fields (§4.3 D2, §4.5, §5.3.1, §6.9, §7; S10b-D) |
 | JSONL final line feed (S10b-C question) | "Optional" (2026-10-10) | jsonlines.org: the last line's line feed may be absent; a last line cut short fails its parse (`R.encoding`) (§5.5; S10b-D) |
+| Vendor sections (S10b-D question) | "Remove them" (2026-10-10) | Vendors extend only the manifest (NQ-1): no vendor range, no `VendorItem` (member 100 reserved), no `vendor/` path; an unknown section kind is `R.version` (NQ-7); NQ-8 moot (§4.3, §4.5, §5.3, §6.9, §7; S10b-E) |
+| NQ-9 Enum values in a minor | "DeviceKind closed, others open" (2026-10-10) | `DeviceKind` is closed like `SectionType`: an undeclared kind is D2 anywhere at any reader age; `BallotStatus` and `RecordPhase` may grow in a minor (§4.3 D2, §7; S10b-E) |
+| NQ-10, NQ-11 | "Keep as built"; "Keep it out" (2026-10-10) | §6.9, §12 |
 
 Decided while applying review round 1 of S10b-A (no user decision needed; listed so it can be overruled): **oneof
 members are messages (S8).** A set scalar member would be written as an explicit VARINT 0 (W2), which W6 tells an
@@ -2285,13 +2445,15 @@ that the answers did not spell out. The user answered them on 2026-10-09 (tracke
   - (b) The same rule with the phase directory in front (`aggregated/0203/...`, `final/0305-<key>/...`), so the tree
     stays grouped by phase; the sealed phase has no directory today, so it would need one.
   - (c) Qualify §4.5 and §7: a new standard section type needs a new major, and later tallies arrive with v3.
-- **NQ-8 Does a vendor section make `Complete` false? (S10b-D; open, not blocking.)** After NQ-7 a vendor section
+- **NQ-8 Does a vendor section make `Complete` false? (S10b-D.)** *Moot: vendor sections were removed (user decision
+  "Remove them", 2026-10-10; S10b-E).* As asked: After NQ-7 a vendor section
   (0x8000-0xFFFD) is the only section a v2 verifier does not understand. As built it is digested, counted
   (`RecordStatistics.VendorSections`) and does not make `Complete` false (a critical one is `R.version`): vendor
   sections are part of the format and are never verified, so a record that carries one is as complete as the format
   can make it. The alternative is `Complete = false` with the section listed in `SkippedUnknownContent`, so that
   `egrecord verify` exits 2 for any record with vendor data. Recommendation: keep as built.
-- **NQ-10 What a guardian run checks on an uncast ballot before its release (S10b-D; open, not blocking).** §3.6.1 has
+- **NQ-10 What a guardian run checks on an uncast ballot before its release (S10b-D).** *Answered 2026-10-10, "Keep
+  as built".* As asked: §3.6.1 has
   the guardians run Verifications 4-9 before they decrypt, which on pre-encrypted ballots spec p.64 maps to 15 and 16
   as well (review round 1 put both in the guardian profile). On the aggregated prefix an uncast pre-encrypted ballot
   has no release yet. As built since review round 2 it gets 5.B and its device's walk (16.D-16.H, once per device)
@@ -2308,12 +2470,15 @@ that the answers did not spell out. The user answered them on 2026-10-09 (tracke
   deferred compact items as a note (like `SkippedUnknownContent`) with V6 and V16 `Passed` over what ran.
   Recommendation: keep as now built (spec p.64: V6 "for all selection encryptions on all ballots, including ...
   pre-encrypted ballots"; `NotEvaluable` says exactly what happened).
-- **NQ-11 Verification 17 in the guardian profile (S10b-D review round 1; open, not blocking).** Spec p.65 asks for
+- **NQ-11 Verification 17 in the guardian profile (S10b-D review round 1).** *Answered 2026-10-10, "Keep it out".*
+  As asked: Spec p.65 asks for
   V17 "additionally, for all pre-encrypted ballots", outside the 4-9 mapping of §3.6.1 and p.64. It checks that the
   short codes shown to voters derive from the selection hashes; it does not bear on which ciphertexts the guardians
   decrypt or whether they are well formed. As built the guardian profile leaves it out (it runs in `Full` and
   `BallotCorrectness`). The alternative is to add it (cheap: one hash per short code). Recommendation: keep it out.
-- **NQ-9 Enum values in a minor (S10b-D; open, not blocking).** The NQ-7 answer says minor versions "add only fields".
+- **NQ-9 Enum values in a minor (S10b-D).** *Answered 2026-10-10, "DeviceKind closed, others open" (the
+  recommendation): `DeviceKind` is closed like `SectionType`, and an undeclared kind is D2 anywhere at any reader age;
+  the other enums may grow in a minor (applied in S10b-E: §4.3 D2, §7).* As asked: The NQ-7 answer says minor versions "add only fields".
   As built, a minor may still add a value to an existing enum other than `SectionType` (a reader older than the record
   treats it as content not understood, D2), since that is protobuf's own forward compatibility, which the same answer
   invokes. The alternative is to close every enum like `SectionType` (D2 at any reader age, so a new status or device

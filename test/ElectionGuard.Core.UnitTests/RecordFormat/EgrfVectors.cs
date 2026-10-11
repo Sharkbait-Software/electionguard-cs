@@ -77,7 +77,6 @@ internal static class EgrfVectors
             ("record_signature", new() { RecordSignature = new() { Statement = RecordStatement().ToByteString(), Algorithm = "ecdsa-p256-sha256", KeyId = B(8, 62), SignerKey = B(91, 63), Signature = B(71, 64), TimestampToken = B(40, 65) } }),
             ("toc_entry", new() { TocEntry = new() { SectionType = Pb.SectionType.Device, Key = ByteString.CopyFrom([1, .. Fill(32, 9)]), Critical = true, ItemCount = 414, Root = B(32, 66) } }),
             ("confirmation_code_leaf", new() { ConfirmationCodeLeaf = new() { Code = B(32, 18) } }),
-            ("vendor_item", new() { VendorItem = new() { TypeUrl = "example.com/vendor.Note", Value = ByteString.CopyFromUtf8("opaque") } }),
         ];
     }
 
@@ -157,6 +156,9 @@ internal static class EgrfVectors
         new("EncryptedField with unknown field 4 inside a contest", null, 1, "item", Ballot(IdB, HI, Style, Status, Weight, L(7, V(1, 1), L(2, L(1, Fill(512, 1)), L(2, Fill(512, 2)), L(3, Fill(128, 3)), V(4, 9)), L(3, Fill(128, 4)), L(7, Fill(32, 5))), Code, Chaining, Nonce)),
         new("RecordItem member 60, an item type this reader does not know", null, 1, "item", Item(60, V(1, 5))),
         new("EncryptedBallot with status 4, an enum value a later minor declares", null, 1, "item", Ballot(IdB, HI, Style, V(4, 4), Weight, ContestOne, Code, Chaining, Nonce)),
+        // A negative int32 is sign-extended to a 10-byte varint: an int32 encoding, so of an open enum
+        // in a newer-minor record it is content not understood, not D2 (S10b-E review round 2).
+        new("EncryptedBallot with status -1 (a negative int32, sign-extended), an open enum's undeclared value", null, 1, "item", Ballot(IdB, HI, Style, V(4, unchecked((ulong)-1L)), Weight, ContestOne, Code, Chaining, Nonce)),
     ];
 
     /// <summary>Negative vectors: one or more per profile rule, each breaking exactly that rule.</summary>
@@ -207,6 +209,7 @@ internal static class EgrfVectors
             new("unknown number inside the declared range (a reserved number)", "W6", 1, "item", HeaderItem(V(1, 2), V(3, 7))),
             new("unknown number inside a reserved range of PreEncryptedCastBallot", "W6", 1, "item", Item(12, L(1, Fill(32, 16)), L(2, Fill(32, 17)), S(3, "s"), V(5, 1), L(8, Fill(32, 18)), L(9, Fill(36, 19)), Nonce, V(4, 1))),
             new("unknown item type at the reserved number 2047", "W6", 1, "item", Item(2047, V(1, 1))),
+            new("unknown item type at the reserved number 100 (the removed vendor_item)", "W6", 1, "item", Item(100, S(1, "example.org/note"))),
             new("unknown VARINT field repeated", "W6", 1, "item", HeaderItem(V(1, 2), V(4, 7), V(4, 8))),
             // W8 strings
             new("ill-formed UTF-8 in a string (overlong C0 AF)", "W8", 0, "item", Item(10, Kind, L(2, [0x64, 0xC0, 0xAF]), HDi)),
@@ -220,6 +223,14 @@ internal static class EgrfVectors
             new("enum absent, so UNSPECIFIED (status)", "D2", 0, "item", Ballot(IdB, HI, Style, Weight, ContestOne, Code, Chaining, Nonce)),
             new("enum value that is no int32 (status 2^31), even for a reader older than the record", "D2", 1, "item", Ballot(IdB, HI, Style, V(4, 1UL << 31), Weight, ContestOne, Code, Chaining, Nonce)),
             new("enum absent, so UNSPECIFIED (device kind)", "D2", 0, "item", Item(10, DeviceId, HDi)),
+            new("negative int32 enum value (status -1) in a record of the reader's minor", "D2", 0, "item", Ballot(IdB, HI, Style, V(4, unchecked((ulong)-1L)), Weight, ContestOne, Code, Chaining, Nonce)),
+            new("negative int32 enum value at the int32 bound (status -2^31) in a record of the reader's minor", "D2", 0, "item", Ballot(IdB, HI, Style, V(4, unchecked((ulong)(long)int.MinValue)), Weight, ContestOne, Code, Chaining, Nonce)),
+            new("enum value just below the sign-extended range (status 2^64 - 2^31 - 1), even for a reader older than the record", "D2", 1, "item", Ballot(IdB, HI, Style, V(4, 0xFFFF_FFFF_7FFF_FFFFUL), Weight, ContestOne, Code, Chaining, Nonce)),
+            new("negative int32 value of the closed DeviceKind (-1) in a newer-minor record", "D2", 1, "item", Item(10, V(1, unchecked((ulong)-1L)), DeviceId, HDi)),
+            // DeviceKind is closed like SectionType (user decision NQ-9, 2026-10-10): an undeclared
+            // kind is D2 even for a reader older than the record, in a header and in a locator.
+            new("device header of undeclared kind 3 in a newer-minor record", "D2", 1, "item", Item(10, V(1, 3), DeviceId, HDi)),
+            new("ballot locator of undeclared device kind 3 in a newer-minor record", "D2", 1, "item", Item(31, L(1, V(1, 3), L(2, Fill(32, 9)), V(3, 1)), L(2, Fill(32, 17)))),
             // D3 timestamps
             new("timestamp with sub-millisecond nanos", "D3", 0, "item", Timestamped(Cat(V(1, 1_791_000_000), V(2, 1_500_000)))),
             new("timestamp with negative seconds", "D3", 0, "item", Timestamped(V(1, unchecked((ulong)-1L)))),
@@ -238,9 +249,11 @@ internal static class EgrfVectors
             new("non-canonical segment header (fields out of order)", "D6", 0, "segmentHeader", Cat(V(2, 2), S(1, "EGRF"), V(3, 257))),
             new("segment header without a section type", "D6", 0, "segmentHeader", Cat(S(1, "EGRF"), V(2, 2))),
             // A new section kind comes only with a new format major (user decision NQ-7), so an
-            // undeclared non-vendor SectionType is D2 even for a reader older than the record.
+            // undeclared SectionType is D2 even for a reader older than the record. 0x8001 was a vendor
+            // section type until vendor sections were removed (2026-10-10): it is undeclared too.
             new("segment header naming section type 0x0203 in a newer-minor record", "D6", 1, "segmentHeader", Cat(S(1, "EGRF"), V(2, 2), V(3, 0x0203))),
             new("toc_entry naming section type 0x0203 in a newer-minor record", "D2", 1, "item", Item(50, V(1, 0x0203), V(4, 1), L(5, Fill(32, 9)))),
+            new("toc_entry naming section type 0x8001 (once the vendor range)", "D2", 0, "item", Item(50, V(1, 0x8001), V(4, 1), L(5, Fill(32, 9)))),
             // §4.9 signed statements
             new("device attestation over a non-canonical statement", "R.attestation", 0, "signedStatement", Item(15, L(1, [.. statement, .. V(9, 0)]), S(2, "ecdsa-p256-sha256"))),
             new("device attestation over a non-statement member (record_header)", "R.attestation", 0, "signedStatement", Item(15, L(1, HeaderItem(V(1, 2))), S(2, "ecdsa-p256-sha256"))),

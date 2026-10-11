@@ -42,6 +42,7 @@
     {
       "name": "RecordItem",
       "reserved": [
+        100,
         2047
       ],
       "fields": [
@@ -252,32 +253,6 @@
           "label": "optional",
           "typeName": ".electionguard.egrf.v2.ConfirmationCodeLeaf",
           "oneof": "item"
-        },
-        {
-          "number": 100,
-          "name": "vendor_item",
-          "type": "message",
-          "label": "optional",
-          "typeName": ".electionguard.egrf.v2.VendorItem",
-          "oneof": "item"
-        }
-      ]
-    },
-    {
-      "name": "VendorItem",
-      "reserved": [],
-      "fields": [
-        {
-          "number": 1,
-          "name": "type_url",
-          "type": "string",
-          "label": "optional"
-        },
-        {
-          "number": 2,
-          "name": "value",
-          "type": "bytes",
-          "label": "optional"
         }
       ]
     },

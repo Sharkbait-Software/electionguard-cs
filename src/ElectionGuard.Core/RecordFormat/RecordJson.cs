@@ -134,6 +134,8 @@ internal static class RecordJson
                 throw RecordCodes.Failure(RecordCodes.Encoding, $"{descriptor.Name} sets two members of oneof {oneof.Name}, \"{oneofs[oneof.Name]}\" and \"{member.Name}\" (design §5.5).");
             }
 
+            RequirePlainForm(member.Value, field, descriptor);
+
             if (field.FieldType == FieldType.Enum)
             {
                 var values = field.IsRepeated && member.Value.ValueKind == JsonValueKind.Array ? member.Value.EnumerateArray().ToList() : [member.Value];
@@ -141,9 +143,12 @@ internal static class RecordJson
                 {
                     // A name this library does not declare is a value added by a newer minor (§7), or
                     // damage; a number is the parser's, and the canonicality check judges it (D2).
+                    // SectionType and DeviceKind are closed (NQ-7, NQ-9): no minor adds to them, so an
+                    // undeclared name of either is damage at any record minor.
                     if (value.ValueKind == JsonValueKind.String && field.EnumType.FindValueByName(value.GetString()!) is null)
                     {
-                        bool newer = recordFormatMinor > RecordFormatVersion.Library.Minor;
+                        bool newer = recordFormatMinor > RecordFormatVersion.Library.Minor
+                            && EgrfSchema.Instance.Enum(field.EnumType.FullName).MayGrowInAMinor;
                         throw RecordCodes.Failure(newer ? RecordCodes.Version : RecordCodes.Encoding,
                             $"\"{value.GetString()}\" is not a value of {field.EnumType.Name} ({descriptor.Name}.{field.Name}){(newer ? "; the record is of a newer format minor, whose enum values only the protobuf representation can carry to this reader (design §7)" : "")}.");
                     }
@@ -169,6 +174,76 @@ internal static class RecordJson
                 RejectAliasesAndOneofs(member.Value, field.MessageType, recordFormatMinor);
             }
         }
+    }
+
+    /// <summary>
+    /// Design §5.5: a value has one written form where the mapping's parser would accept several
+    /// (S10b-E review round 3). Bytes are standard base64 with padding and zero unused bits, nothing
+    /// else (the mapping lets a parser take URL-safe and unpadded forms); an integer, enum numbers
+    /// included, is a JSON number or a string in plain decimal: an optional '-', no leading zero, no
+    /// fraction or exponent (the mapping lets a parser take exponent notation). Either is
+    /// <c>R.encoding</c>. A null (a default) and the choice between number and string stay open, as
+    /// the mapping makes them. None of these leniencies could change a hash (the canonical bytes are
+    /// re-encoded), so refusing them only keeps the two reference readers, and any other, to one
+    /// reading of a line.
+    /// </summary>
+    private static void RequirePlainForm(JsonElement value, FieldDescriptor field, MessageDescriptor descriptor)
+    {
+        if (value.ValueKind == JsonValueKind.Null || field.IsRepeated)
+        {
+            // There are no repeated scalars (schema rule S4); repeated messages are walked entry by entry.
+            return;
+        }
+
+        switch (field.FieldType)
+        {
+            case FieldType.Bytes when value.ValueKind == JsonValueKind.String && !IsCanonicalBase64(value.GetString()!):
+                throw RecordCodes.Failure(RecordCodes.Encoding, $"{descriptor.Name}.{field.Name} is not standard base64 with padding (design §5.5).");
+            case FieldType.Int32 or FieldType.Int64 or FieldType.UInt32 or FieldType.UInt64 or FieldType.SInt32 or FieldType.SInt64
+                or FieldType.Fixed32 or FieldType.Fixed64 or FieldType.SFixed32 or FieldType.SFixed64 or FieldType.Enum:
+                string? form = value.ValueKind switch
+                {
+                    JsonValueKind.Number => value.GetRawText(),
+                    JsonValueKind.String when field.FieldType != FieldType.Enum => value.GetString(),
+                    _ => null,
+                };
+                if (form is not null && !IsPlainDecimal(form))
+                {
+                    throw RecordCodes.Failure(RecordCodes.Encoding, $"{descriptor.Name}.{field.Name} is \"{form}\", not an integer in plain decimal (design §5.5).");
+                }
+
+                break;
+        }
+    }
+
+    private static bool IsCanonicalBase64(string text)
+    {
+        if (text.Length % 4 != 0)
+        {
+            return false;
+        }
+
+        byte[] buffer = new byte[text.Length / 4 * 3];
+        return Convert.TryFromBase64String(text, buffer, out int written) && Convert.ToBase64String(buffer, 0, written) == text;
+    }
+
+    private static bool IsPlainDecimal(string text)
+    {
+        int start = text.StartsWith('-') ? 1 : 0;
+        if (text.Length == start || (text[start] == '0' && (text.Length > start + 1 || start == 1)))
+        {
+            return false;
+        }
+
+        for (int i = start; i < text.Length; i++)
+        {
+            if (text[i] is < '0' or > '9')
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static byte[] Compact(string json)

@@ -191,8 +191,6 @@ public sealed record RecordStatistics
 
     public long Devices { get; init; }
 
-    public long VendorSections { get; init; }
-
     public long ItemsDigested { get; init; }
 
     public long BytesDigested { get; init; }

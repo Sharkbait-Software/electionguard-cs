@@ -218,8 +218,11 @@ internal sealed class ElectionRecordReader : IElectionRecordReader
                 };
                 return (magic.GetString(), value);
             }
-            catch (System.Text.Json.JsonException)
+            catch (Exception ex) when (ex is System.Text.Json.JsonException or InvalidOperationException)
             {
+                // InvalidOperationException: a string that is not well-formed UTF-8 (GetString cannot
+                // transcode it; found by the seeded mutation test, S10b-E review round 3). The line is
+                // then not a header this peek reads, and the segment's own D6 check refuses it.
                 return (null, null);
             }
         }
@@ -345,7 +348,8 @@ internal sealed class ElectionRecordReader : IElectionRecordReader
             // A section kind this reader does not know comes only with a new format major (user
             // decision NQ-7, "Bump the major version"; design §7): an entry naming one is refused as
             // R.version, at any minor and before the item's own checks, which would report the
-            // undeclared SectionType value as D2. Vendor types are the one open range (§4.5).
+            // undeclared SectionType value as D2. There are no vendor sections (decision "Remove
+            // them", 2026-10-10), so no range of types is open.
             if (UnknownSectionKind(item.Bytes.Span) is { } unknown)
             {
                 throw RecordCodes.Failure(RecordCodes.Version, $"TOC item {item.Ordinal} names section type 0x{unknown:x4}, a section kind EGRF {RecordFormatVersion.Library.Major}.{RecordFormatVersion.Library.Minor} does not define; a new section kind comes with a new format major (design §7, NQ-7).");
@@ -363,7 +367,7 @@ internal sealed class ElectionRecordReader : IElectionRecordReader
             }
 
             var entry = parsed.TocEntry;
-            if ((ushort)entry.SectionType is 0 or > RecordSections.LastVendorType || entry.ItemCount > long.MaxValue)
+            if (!RecordSections.IsStandard((RecordSectionType)(ushort)entry.SectionType) || entry.ItemCount > long.MaxValue)
             {
                 throw RecordCodes.Failure(RecordCodes.Root, $"TOC item {item.Ordinal} names section type {(int)entry.SectionType}, which no TOC holds.");
             }
@@ -382,11 +386,12 @@ internal sealed class ElectionRecordReader : IElectionRecordReader
     }
 
     /// <summary>
-    /// The section type a <c>toc_entry</c> item names when it is neither a type of this library's
-    /// format nor a vendor type (a section kind of a later major, NQ-7); null otherwise, and for
-    /// bytes that do not parse (the item's own checks report those).
+    /// The section type a <c>toc_entry</c> item names when it is not a type of this library's format
+    /// (a section kind of a later major, NQ-7): any value but 0 and the declared ones, the
+    /// pseudo-sections included (a TOC never names those, which is <c>R.root</c>); null otherwise, and
+    /// for bytes that do not parse (the item's own checks report those).
     /// </summary>
-    internal static ushort? UnknownSectionKind(ReadOnlySpan<byte> item)
+    internal static uint? UnknownSectionKind(ReadOnlySpan<byte> item)
     {
         Pb.RecordItem parsed;
         try
@@ -403,8 +408,8 @@ internal sealed class ElectionRecordReader : IElectionRecordReader
             return null;
         }
 
-        int type = (int)parsed.TocEntry.SectionType;
-        return type is > 0 and < RecordSections.FirstVendorType && !RecordSections.IsStandard((RecordSectionType)type) ? (ushort)type : null;
+        var type = parsed.TocEntry.SectionType;
+        return type != Pb.SectionType.Unspecified && !Enum.IsDefined(type) ? (uint)(int)type : null;
     }
 
     public async ValueTask<RecordSetup> ReadSetupAsync(CancellationToken ct = default)
@@ -771,9 +776,9 @@ internal sealed class ElectionRecordReader : IElectionRecordReader
                     throw new VerificationFailedException(StructureCode, $"Device section {Section}'s first item is member {(int)parsed.ItemCase}, not device_header (§4.5).");
                 }
 
-                // Compared on the wire values first: v2's layout has a section only for a declared
-                // kind, so a header of another kind (a later minor's, design §7) is a header that does
-                // not match its section, and never reaches FromItem.
+                // Compared on the wire values first: a header of another kind or H_DI does not match its
+                // section, and never reaches FromItem. (An undeclared kind is D2, NQ-9: the canonical
+                // read refuses it.)
                 if (!DeviceMapper.NamesKey(parsed.DeviceHeader, Key))
                 {
                     throw new VerificationFailedException(StructureCode, DeviceMapper.KeyMismatch(Section, parsed.DeviceHeader));

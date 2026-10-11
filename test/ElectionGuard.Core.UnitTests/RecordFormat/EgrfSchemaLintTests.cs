@@ -169,9 +169,9 @@ public class EgrfSchemaLintTests
                 // Not in RecordItem, whose own rule would fire too: a oneof in another message, with
                 // message members 5 and 7 (S8's member rule holds) and a regular field 6 between.
                 Message("DeviceClose").OneofDecl.Add(new OneofDescriptorProto { Name = "choice" });
-                var low = Field("vendor", 5, FieldType.Message, typeName: ".electionguard.egrf.v2.VendorItem");
+                var low = Field("low_member", 5, FieldType.Message, typeName: ".electionguard.egrf.v2.ConfirmationCodeLeaf");
                 low.OneofIndex = 0;
-                var high = Field("other_vendor", 7, FieldType.Message, typeName: ".electionguard.egrf.v2.VendorItem");
+                var high = Field("high_member", 7, FieldType.Message, typeName: ".electionguard.egrf.v2.ConfirmationCodeLeaf");
                 high.OneofIndex = 0;
                 Message("DeviceClose").Field.Add(low);
                 Message("DeviceClose").Field.Add(Field("flags", 6, FieldType.Uint32));
@@ -181,7 +181,7 @@ public class EgrfSchemaLintTests
                 Message("DeviceClose").OneofDecl.Add(new OneofDescriptorProto { Name = "choice" });
                 var scalar = Field("count", 5, FieldType.Uint32);
                 scalar.OneofIndex = 0;
-                var member = Field("vendor", 6, FieldType.Message, typeName: ".electionguard.egrf.v2.VendorItem");
+                var member = Field("member", 6, FieldType.Message, typeName: ".electionguard.egrf.v2.ConfirmationCodeLeaf");
                 member.OneofIndex = 0;
                 Message("DeviceClose").Field.Add(scalar);
                 Message("DeviceClose").Field.Add(member);
@@ -291,10 +291,10 @@ public class EgrfSchemaLintTests
                 // published table here is one minor later, with DeviceClose field 6 appended; this
                 // minor then adds field 5 in the gap, below 6, with no reservation touched.
                 var earlier = EgrfSchemaLint.Compiled();
-                earlier.MessageType.Single(m => m.Name == "DeviceClose").Field.Add(Field("vendor_note", 6, FieldType.String));
+                earlier.MessageType.Single(m => m.Name == "DeviceClose").Field.Add(Field("note", 6, FieldType.String));
                 published = EgrfSchemaLint.Table(earlier);
                 Message("DeviceClose").Field.Add(Field("note", 5, FieldType.String));
-                Message("DeviceClose").Field.Add(Field("vendor_note", 6, FieldType.String));
+                Message("DeviceClose").Field.Add(Field("note", 6, FieldType.String));
                 break;
             case "a field added at a reserved number":
                 // The reservation stays, so only the numbering check can catch it.
@@ -303,12 +303,13 @@ public class EgrfSchemaLintTests
             case "an item type added at a reserved number":
                 // RecordItem's exemption admits a new item type at an unused number, never at a
                 // reserved one; the reservation stays.
-                var extensions = Field("extensions", 2047, FieldType.Message, typeName: ".electionguard.egrf.v2.VendorItem");
+                var extensions = Field("extensions", 2047, FieldType.Message, typeName: ".electionguard.egrf.v2.ConfirmationCodeLeaf");
                 extensions.OneofIndex = 0;
                 Message("RecordItem").Field.Add(extensions);
                 break;
             case "a reservation dropped":
-                Message("RecordItem").ReservedRange.Clear();
+                var recordItemReserved = Message("RecordItem").ReservedRange;
+                recordItemReserved.Remove(recordItemReserved.Single(r => r.Start == 2047));
                 break;
             case "an enum value removed":
                 file.EnumType.Single(e => e.Name == "BallotStatus").Value.RemoveAt(3);
@@ -333,7 +334,7 @@ public class EgrfSchemaLintTests
         var file = EgrfSchemaLint.Compiled();
         file.MessageType.Single(m => m.Name == "DeviceClose").Field.Add(Field("note", 5, FieldType.String));
         var recordItem = file.MessageType.Single(m => m.Name == "RecordItem");
-        var newItem = Field("tally_definition", 23, FieldType.Message, typeName: ".electionguard.egrf.v2.VendorItem");
+        var newItem = Field("tally_definition", 23, FieldType.Message, typeName: ".electionguard.egrf.v2.ConfirmationCodeLeaf");
         newItem.OneofIndex = 0;
         recordItem.Field.Insert(recordItem.Field.IndexOf(recordItem.Field.Single(f => f.Number == 30)), newItem);
 

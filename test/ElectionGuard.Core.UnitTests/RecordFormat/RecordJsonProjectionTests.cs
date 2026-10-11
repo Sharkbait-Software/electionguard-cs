@@ -140,7 +140,7 @@ public class RecordJsonProjectionTests
     /// </summary>
     [Theory]
     [InlineData("an unknown member", "{\"recordHeader\":{\"formatMajor\":2,\"formatPatch\":1}}")]
-    [InlineData("an undeclared enum name", "{\"deviceHeader\":{\"kind\":\"DEVICE_KIND_TABLET\",\"deviceId\":\"d\",\"hDi\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}}")]
+    [InlineData("an undeclared enum name", "{\"recordStatement\":{\"phase\":\"RECORD_PHASE_AUDITED\"}}")]
     [InlineData("an undeclared enum name in a nested message", "{\"encryptedBallot\":{\"status\":\"BALLOT_STATUS_PROVISIONAL\"}}")]
     public void UnknownJsonContent_InANewerMinorRecord_IsRVersion(string row, string line)
     {
@@ -148,6 +148,24 @@ public class RecordJsonProjectionTests
         Assert.True(RecordCodes.Version == failure.SubSection, $"{row}: {failure.SubSection} {failure.Message}");
         var current = Assert.Throws<VerificationFailedException>(() => RecordJson.ParseItem(Encoding.UTF8.GetBytes(line), 0));
         Assert.True(RecordCodes.Encoding == current.SubSection, $"{row} at this minor: {current.SubSection} {current.Message}");
+    }
+
+    /// <summary>
+    /// <c>DeviceKind</c> and <c>SectionType</c> are closed (user decisions NQ-9 and NQ-7): no minor
+    /// adds a value, so an undeclared name of either is R.encoding in a record of any minor, never
+    /// R.version (a newer record cannot have it).
+    /// </summary>
+    [Theory]
+    [InlineData("a device kind in a header", "{\"deviceHeader\":{\"kind\":\"DEVICE_KIND_TABLET\",\"deviceId\":\"d\",\"hDi\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}}")]
+    [InlineData("a device kind in a ballot locator", "{\"challengedBallotDecryption\":{\"ballot\":{\"kind\":\"DEVICE_KIND_TABLET\"}}}")]
+    [InlineData("a section type in a TOC entry", "{\"tocEntry\":{\"sectionType\":\"SECTION_TYPE_VENDOR\"}}")]
+    public void UndeclaredNameOfAClosedEnum_IsREncoding_AtAnyMinor(string row, string line)
+    {
+        foreach (ushort minor in new ushort[] { 0, 1 })
+        {
+            var failure = Assert.Throws<VerificationFailedException>(() => RecordJson.ParseItem(Encoding.UTF8.GetBytes(line), minor));
+            Assert.True(RecordCodes.Encoding == failure.SubSection, $"{row} at minor {minor}: {failure.SubSection} {failure.Message}");
+        }
     }
 
     public static TheoryData<string, string, string> DecodeRuleNegatives() => new()

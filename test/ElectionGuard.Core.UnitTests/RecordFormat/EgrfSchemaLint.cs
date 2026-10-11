@@ -28,7 +28,7 @@ internal static class EgrfSchemaLint
     /// </summary>
     public static readonly IReadOnlySet<string> VariableLengthBytes = new HashSet<string>(StringComparer.Ordinal)
     {
-        "SegmentHeader.key", "VendorItem.value", "ManifestFile.content", "TocEntry.key",
+        "SegmentHeader.key", "ManifestFile.content", "TocEntry.key",
         "SignedStatement.statement", "SignedStatement.key_id", "SignedStatement.signer_key",
         "SignedStatement.signature", "SignedStatement.timestamp_token",
     };

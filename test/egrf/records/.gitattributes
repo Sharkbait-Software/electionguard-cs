@@ -1,0 +1,3 @@
+# Golden records are compared byte for byte (setup/manifest.json must equal ManifestFile.content,
+# the JSON-lines positives and negatives depend on their exact line endings): never convert them.
+* -text

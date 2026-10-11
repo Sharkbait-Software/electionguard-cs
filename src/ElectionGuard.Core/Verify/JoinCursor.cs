@@ -136,7 +136,7 @@ internal sealed class JoinCursor : IAsyncDisposable
     }
 
     private void Stray(JoinItem item) =>
-        _report(new JoinCursorFinding(StructureCode, Section, item.Ordinal, item.Locator, $"Item {item.Ordinal} of section {Section} names the ballot at position {item.Locator.Position} of device {Convert.ToHexStringLower(item.Locator.Device.ToBytes())}, which is not a ballot it can join: the record holds no such ballot, or the ballot is not of the kind or status the item opens (design §6.2 join rules)."));
+        _report(new JoinCursorFinding(StructureCode, Section, item.Ordinal, item.Locator, $"Item {item.Ordinal} of section {Section} names the ballot at position {item.Locator.Position} of device {Convert.ToHexStringLower(item.Locator.Device.ToBytes())}, which is not a ballot it can join: the record holds no such ballot, or the ballot is not of the kind or status the item opens (design §6.2 join rules).", Stray: true));
 
     /// <summary>The next joinable item, reporting and consuming every unjoinable one before it.</summary>
     private async ValueTask<JoinItem?> PeekAsync()
@@ -214,9 +214,9 @@ internal sealed class JoinCursor : IAsyncDisposable
 
         if (!DeviceMapper.IsDeclared(locator.Kind))
         {
-            // A device kind of a newer minor in a canonical item (design §7 "Enum value"): this reader
-            // cannot say which ballot it names, so it is not joined.
-            return new JoinCursorFinding(RecordCodes.Version, Section, raw.Ordinal, null, $"Item {raw.Ordinal} of section {Section} names a ballot of device kind {(int)locator.Kind}, a value of a newer format minor this reader cannot verify (design §7).");
+            // DeviceKind is closed (NQ-9): the canonicality check already reports an undeclared kind as
+            // D2, so a canonical item never gets here. Kept so a publisher-controlled value never throws.
+            return new JoinCursorFinding(RecordCodes.Encoding, Section, raw.Ordinal, null, $"Item {raw.Ordinal} of section {Section} names a ballot of device kind {(int)locator.Kind}, which EGRF v2 does not declare (D2; DeviceKind is closed, design §4.3).");
         }
 
         var key = (DeviceMapper.FromItem(locator), _keyedByContest ? contest : 0u);
@@ -244,5 +244,9 @@ internal sealed class JoinCursor : IAsyncDisposable
 /// <summary>One joinable item of a join section: its ordinal, bytes, parse, locator and (for contest data) contest index.</summary>
 internal sealed record JoinItem(long Ordinal, ReadOnlyMemory<byte> Bytes, Pb.RecordItem Item, BallotLocator Locator, uint ContestIndex);
 
-/// <summary>A join-section finding: its code, where, and the message; <paramref name="BreaksSection"/> when the section could not be read on.</summary>
-internal sealed record JoinCursorFinding(string SubSection, SectionKey Section, long? Ordinal, BallotLocator? Locator, string Message, bool BreaksSection = false);
+/// <summary>
+/// A join-section finding: its code, where, and the message; <paramref name="BreaksSection"/> when the
+/// section could not be read on; <paramref name="Stray"/> when the item names a ballot the pass never
+/// joined it to.
+/// </summary>
+internal sealed record JoinCursorFinding(string SubSection, SectionKey Section, long? Ordinal, BallotLocator? Locator, string Message, bool BreaksSection = false, bool Stray = false);

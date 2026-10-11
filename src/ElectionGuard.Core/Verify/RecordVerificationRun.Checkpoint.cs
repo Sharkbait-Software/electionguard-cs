@@ -13,9 +13,9 @@ namespace ElectionGuard.Core.Verify;
 /// (the device and the next ordinal), that device's section frontier and chain-walker state, the join
 /// cursors' positions and frontiers, the TOC entries of the devices done, the Verification 9 partial in
 /// standard form (never a raw <c>ModPProduct</c>, whose Montgomery drift is engine-specific), 5.A's key
-/// and runs (the buffer spilled as a run), the 11.D contests, the counters, the outcomes and the
-/// findings so far. Steps A to C are cheap and deterministic, so a resumed run does them again and
-/// then continues the device pass from the checkpoint; the final section roots must equal the claimed
+/// and runs (the buffer spilled as a run), the 11.D contests, the counters, the outcomes, the
+/// sections that could not be read whole (each reported once) and the findings so far. Steps A to C
+/// are cheap and deterministic, so a resumed run does them again and then continues the device pass from the checkpoint; the final section roots must equal the claimed
 /// TOC's, which shows that what was finished extends what was verified. The encoding is this
 /// library's (JSON), not part of the format. A checkpoint for another record or other options, or whose
 /// 5.A runs are gone, is deleted and the run starts over. A record without a claimed TOC is never
@@ -23,7 +23,7 @@ namespace ElectionGuard.Core.Verify;
 /// </summary>
 internal sealed partial class RecordVerificationRun
 {
-    private const int CheckpointVersion = 1;
+    private const int CheckpointVersion = 4;  // 2: the counters lost the vendor-section count; 3: the unreadable sections (S10b-E); 4: with their last whole ordinal (review round 2)
 
     private static readonly JsonSerializerOptions CheckpointJson = new() { IncludeFields = false, WriteIndented = false };
 
@@ -79,10 +79,14 @@ internal sealed partial class RecordVerificationRun
 
         public int UndecodableCast { get; set; }
 
+        public List<SectionDto> Unreadable { get; set; } = [];
+
         public long ElapsedTicks { get; set; }
     }
 
     internal sealed record EntryDto(ushort Type, byte[] Key, bool Critical, long ItemCount, byte[] Root);
+
+    internal sealed record SectionDto(ushort Type, byte[] Key, long LastWholeOrdinal);
 
     internal sealed record LocatorDto(byte[] Device, long Position)
     {
@@ -190,6 +194,11 @@ internal sealed partial class RecordVerificationRun
         _ballotsToOpen.AddRange(state.BallotsToOpen.Select(x => x.ToLocator()));
         _uncastToRelease.AddRange(state.UncastToRelease.Select(x => x.ToLocator()));
         _undecodableCast = state.UndecodableCast;
+        foreach (var section in state.Unreadable)
+        {
+            SectionUnreadable(new SectionKey((RecordSectionType)section.Type, section.Key), section.LastWholeOrdinal);
+        }
+
         _elapsedBefore = TimeSpan.FromTicks(state.ElapsedTicks);
 
         if (state.Walker is null || state.DeviceIndex >= _reader.Devices.Count)
@@ -247,6 +256,7 @@ internal sealed partial class RecordVerificationRun
             BallotsToOpen = _ballotsToOpen.Select(LocatorDto.Of).ToList(),
             UncastToRelease = _uncastToRelease.Select(LocatorDto.Of).ToList(),
             UndecodableCast = _undecodableCast,
+            Unreadable = UnreadableSections().Select(x => new SectionDto((ushort)x.Section.Type, x.Section.Key.ToArray(), x.LastWholeOrdinal)).ToList(),
             ElapsedTicks = (_elapsedBefore + _clock.Elapsed).Ticks,
         };
 

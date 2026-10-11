@@ -44,7 +44,6 @@ public class TableOfContentsTests
         Entry(RecordSectionType.ChallengedBallotDecryptions, 31, count: 1),
         Entry(RecordSectionType.ContestDataDecryptions, 32, count: 0),
         Entry(RecordSectionType.UncastNonceReleases, 33, count: 0),
-        Entry((RecordSectionType)0x8001, 40, [0xAB], critical: false),
     ];
 
     [Fact]
@@ -68,11 +67,11 @@ public class TableOfContentsTests
         Assert.Equal(RecordPhase.Sealed, RecordSections.PhaseOf(RecordSectionType.DeviceAttestations));
         Assert.Equal(RecordPhase.Aggregated, RecordSections.PhaseOf(RecordSectionType.ContestDataRequests));
         Assert.Equal(RecordPhase.Final, RecordSections.PhaseOf(RecordSectionType.UncastNonceReleases));
-        Assert.Equal(RecordPhase.Final, RecordSections.PhaseOf((RecordSectionType)0x8000));
-        Assert.True(RecordSections.IsVendor((RecordSectionType)0xFFFD));
-        Assert.False(RecordSections.IsVendor((RecordSectionType)0xFFFE));
         Assert.True(RecordSections.FixedCritical(RecordSectionType.Device));
+        // No vendor range (user decision "Remove them", 2026-10-10): 0x8000 is undeclared like 0x0203.
         Assert.Null(RecordSections.FixedCritical((RecordSectionType)0x8000));
+        Assert.False(RecordSections.IsStandard((RecordSectionType)0x8000));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new TocEntry((RecordSectionType)0x8001, [], false, 1, MerkleTree.EmptyRoot));
         Assert.Null(RecordSections.FixedCritical((RecordSectionType)0x0203));
     }
 
@@ -85,7 +84,7 @@ public class TableOfContentsTests
         Assert.Equal(toc.Root, toc.PhaseRoot(RecordPhase.Final));
 
         var phases = new[] { RecordPhase.Setup, RecordPhase.Sealed, RecordPhase.Aggregated, RecordPhase.Final };
-        var sizes = new[] { 5, 9, 11, 16 };
+        var sizes = new[] { 5, 9, 11, 15 };
         for (int i = 0; i < phases.Length; i++)
         {
             Assert.Equal(sizes[i], toc.PrefixLength(phases[i]));
@@ -169,10 +168,11 @@ public class TableOfContentsTests
 
         Assert.Throws<ArgumentOutOfRangeException>(() => Entry((RecordSectionType)0xFFFE, 1));
         Assert.Throws<ArgumentOutOfRangeException>(() => Entry((RecordSectionType)0xFFFF, 1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => Entry((RecordSectionType)0x8000, 1));
         Assert.Throws<ArgumentOutOfRangeException>(() => Entry(RecordSectionType.Header, 1, count: -1));
 
         // A key that is a prefix of another sorts first.
-        Assert.True(TocEntry.CompareSections(Entry((RecordSectionType)0x8000, 1, [1]), Entry((RecordSectionType)0x8000, 1, [1, 0])) < 0);
+        Assert.True(TocEntry.CompareSections(Entry(RecordSectionType.Device, 1, [1]), Entry(RecordSectionType.Device, 1, [1, 0])) < 0);
     }
 
     [Fact]

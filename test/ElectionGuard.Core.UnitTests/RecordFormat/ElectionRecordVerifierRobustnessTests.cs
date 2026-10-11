@@ -122,7 +122,8 @@ public class ElectionRecordVerifierRobustnessTests
         var report = await VerifyAsync(directory, -1);
         Assert.Equal(Canonical(report), Canonical(await VerifyAsync(directory, 1)));
         Assert.False(report.Passed);
-        Assert.Contains(report.Findings, x => x.SubSection == code && x.Section == section);
+        // Reported once: the drain notes the section unreadable, so step F does not digest it again.
+        Assert.Single(report.Findings, x => x.SubSection == code && x.Section == section);
         Assert.Contains(report.Findings, x => x.SubSection == RecordCodes.Root && x.Section == section);
         Assert.Equal(VerificationOutcome.Passed, report.Verifications[1]);
         Assert.DoesNotContain(report.Findings, x => x.Message.Contains("has no decryption") || x.Message.Contains("has no nonce release") || x.Message.Contains("has no request"));
@@ -177,20 +178,20 @@ public class ElectionRecordVerifierRobustnessTests
     }
 
     /// <summary>
-    /// R-2 and design §7 "Enum value": <c>DeviceKind</c> may grow in a minor, so in a record of a newer
-    /// minor a join item's ballot locator may carry kind 3, and the item is canonical. The run reports
-    /// R.version at that item, the record is incomplete, and nothing throws. A join item of an unknown
-    /// kind names a ballot of a device this reader cannot see, so it joins nothing, and the ballot
-    /// whose item it was has none (its structure code). A device header of kind 3 can only sit in a
-    /// section of a declared kind (v2's layout has no path for another, §5.3.1; review round 3), so it
-    /// is a header that does not name its section's key: 8.structure, from the verifier and from
-    /// <see cref="IDeviceSectionReader.ReadHeaderAsync"/> alike.
+    /// User decision NQ-9 ("DeviceKind closed, others open", 2026-10-10): <c>DeviceKind</c> is closed
+    /// like <c>SectionType</c>, so kind 3 is D2 wherever it occurs, in a record of any minor (here a
+    /// newer one, where an open enum's value would be content not understood). The item is not
+    /// canonical: R.encoding at that item, its leaf still digested (the TOC rewritten over it agrees),
+    /// the record incomplete (minor 1), and nothing throws. A join item that is not canonical joins
+    /// nothing, so the ballot whose item it was has none (its structure code); a device header that is
+    /// not canonical leaves the chain unwalked. (Until S10b-E, kind 3 in a join item was R.version and
+    /// a header of kind 3 was the device's 8.structure.)
     /// </summary>
     [Theory]
     [InlineData("device-1's header")]
     [InlineData("the challenged ballot's decryption")]
     [InlineData("the full uncast ballot's release")]
-    public async Task ADeviceKindOfANewerMinor_IsRVersion_AndNeverThrows(string where)
+    public async Task AnUndeclaredDeviceKind_IsD2_InARecordOfANewerMinor_AndNeverThrows(string where)
     {
         string directory = TempDirectory("verify-device-kind");
         SectionKey section;
@@ -225,27 +226,25 @@ public class ElectionRecordVerifierRobustnessTests
         Assert.False(report.Passed);
         // A record of minor 1 is incomplete for this minor-0 reader whatever it holds.
         Assert.False(report.Complete);
-        if (where == "device-1's header")
-        {
-            // v2's layout has no path for a device of kind 3 (§5.3.1: regular-, pre-encrypting-), so
-            // such a header can only sit in a section of a declared kind: it does not name its
-            // section's key, the device's structure code, and its chain is not walked.
-            Assert.Contains(report.Findings, x => x.SubSection == "8.structure" && x.Section == section && x.Ordinal == 0 && x.Message.Contains("names kind 3"));
-            Assert.DoesNotContain(report.Findings, x => x.SubSection == RecordCodes.Version);
-            Assert.Equal(VerificationOutcome.Failed, report.Verifications[8]);
-            Assert.DoesNotContain(report.Findings, x => x.SubSection.StartsWith("8.", StringComparison.Ordinal) && x.SubSection != "8.structure");
-
-            // The public reader says the same, and never throws anything else.
-            await using var reader = await ElectionRecord.OpenAsync(directory);
-            var failure = await Assert.ThrowsAsync<VerificationFailedException>(() => reader.OpenDevice(deviceKey!.Value).ReadHeaderAsync().AsTask());
-            Assert.Equal("8.structure", failure.SubSection);
-            Assert.Contains("names kind 3", failure.Message);
-            return;
-        }
-
-        Assert.Contains(report.Findings, x => x.SubSection == RecordCodes.Version && x.Section == section && x.Ordinal == 0 && x.Message.Contains("device kind 3"));
+        Assert.True(report.RootsMatchClaimedToc);
+        Assert.Contains(report.Findings, x => x.SubSection == RecordCodes.Encoding && x.Section == section && x.Ordinal == 0 && x.Message.Contains("D2"));
+        Assert.DoesNotContain(report.Findings, x => x.SubSection == RecordCodes.Version);
         switch (where)
         {
+            case "device-1's header":
+                // The header is opaque, so the chain is not walked: no lettered 8.x is reported, and
+                // Verification 8 is not evaluable (its close finds no header taken), never Passed.
+                Assert.DoesNotContain(report.Findings, x => x.SubSection.StartsWith("8.", StringComparison.Ordinal) && x.SubSection != "8.structure");
+                Assert.Equal(VerificationOutcome.NotEvaluable, report.Verifications[8]);
+
+                // The public reader refuses the header the same way, and never throws anything else.
+                await using (var reader = await ElectionRecord.OpenAsync(directory))
+                {
+                    var failure = await Assert.ThrowsAsync<VerificationFailedException>(() => reader.OpenDevice(deviceKey!.Value).ReadHeaderAsync().AsTask());
+                    Assert.Equal(RecordCodes.Encoding, failure.SubSection);
+                }
+
+                break;
             case "the challenged ballot's decryption":
                 Assert.Contains(report.Findings, x => x.SubSection == "13.structure");
                 break;
@@ -367,41 +366,22 @@ public class ElectionRecordVerifierRobustnessTests
         }
     }
 
-    // ---- vendor sections and signature files ------------------------------------------------------
+    // ---- removed vendor sections and signature files ---------------------------------------------
 
     /// <summary>
-    /// Design §7: a vendor section is digested and counted; a critical one (its writer says it must be
-    /// understood) is R.version naming the section, a non-critical one leaves the record passed and
-    /// complete (NQ-8 as built).
+    /// Vendor sections are removed (user decision "Remove them", 2026-10-10; vendors extend only the
+    /// manifest, NQ-1): a claimed TOC entry naming a former vendor type is R.version like any section
+    /// kind v2 does not define (NQ-7), refused when the record is opened, before any section is read.
     /// </summary>
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task AVendorSection_IsCounted_AndFailsOnlyWhenCritical(bool critical)
+    [Fact]
+    public async Task AFormerVendorSectionType_InTheClaimedToc_IsRVersion()
     {
         string directory = TempDirectory("verify-vendor");
         await WriteAsync(RegularElection.Value, directory, RecordEncoding.Protobuf);
-        byte[] item = new Pb.RecordItem { VendorItem = new Pb.VendorItem { TypeUrl = "example.org/note", Value = ByteString.CopyFromUtf8("x") } }.ToByteArray();
-        string vendor = Path.Combine(directory, "vendor", "8001");
-        Directory.CreateDirectory(vendor);
-        var header = new Pb.SegmentHeader { Magic = "EGRF", FormatMajor = 2, SectionType = (Pb.SectionType)0x8001 };
-        File.WriteAllBytes(Path.Combine(vendor, "00000000.binpb"), [.. RecordDirectoryCarrierTests.Frame(header.ToByteArray()), .. RecordDirectoryCarrierTests.Frame(item)]);
-        RecordDirectoryCarrierTests.RewriteToc(directory, entries => entries.Add(new Pb.TocEntry { SectionType = (Pb.SectionType)0x8001, Critical = critical, ItemCount = 1, Root = ByteString.CopyFrom(MerkleTree.LeafHash(item).ToArray()) }));
+        RecordDirectoryCarrierTests.RewriteToc(directory, entries => entries.Add(new Pb.TocEntry { SectionType = (Pb.SectionType)0x8001, Critical = false, ItemCount = 1, Root = ByteString.CopyFrom(new byte[32]) }));
 
-        var report = await VerifyAsync(directory, new VerifyAllOptions());
-        Assert.Equal(1, report.Statistics.VendorSections);
-        Assert.True(report.RootsMatchClaimedToc);
-        Assert.True(report.Complete);
-        if (critical)
-        {
-            var finding = Assert.Single(report.Findings);
-            Assert.Equal((RecordCodes.Version, (RecordSectionType)0x8001), (finding.SubSection, finding.Section!.Value.Type));
-            Assert.False(report.Passed);
-        }
-        else
-        {
-            Assert.True(report.Passed, Describe(report));
-        }
+        var failure = await Assert.ThrowsAsync<VerificationFailedException>(async () => await VerifyAsync(directory, new VerifyAllOptions()));
+        Assert.Equal(RecordCodes.Version, failure.SubSection);
     }
 
     /// <summary>

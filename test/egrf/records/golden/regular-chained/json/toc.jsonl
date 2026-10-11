@@ -1,0 +1,15 @@
+{"magic":"EGRF","formatMajor":2,"sectionType":"SECTION_TYPE_TOC"}
+{"tocEntry":{"sectionType":"SECTION_TYPE_HEADER","critical":true,"itemCount":"1","root":"mRnyNsj7rj9n/q2qn3e3FfKkWS4c+okaxKJBhsWff8U="}}
+{"tocEntry":{"sectionType":"SECTION_TYPE_PARAMETERS","critical":true,"itemCount":"1","root":"7b3Qz3UjJ/YUwqjLzlLT/4Lax9/3s2gyLph00Gz+1iM="}}
+{"tocEntry":{"sectionType":"SECTION_TYPE_MANIFEST","critical":true,"itemCount":"1","root":"jnpnLV9mskSnrRILEt748GKqI7UX0QzB8Jl9t0HbEZM="}}
+{"tocEntry":{"sectionType":"SECTION_TYPE_GUARDIANS","critical":true,"itemCount":"3","root":"FX4lwnUNTOaKIXXn0rTw0e7zW9yiuK0rdyxtUjff/8s="}}
+{"tocEntry":{"sectionType":"SECTION_TYPE_ELECTION_KEYS","critical":true,"itemCount":"1","root":"3AdSD0m/I6EP8J3+ELbI1q15yQ7dy6iDECMUge+w3ug="}}
+{"tocEntry":{"sectionType":"SECTION_TYPE_DEVICE","key":"ASTptjEB5N2YsD1Fdj69JeN8RWxrz4jnbFFT4auXIhRq","critical":true,"itemCount":"3","root":"yxyc92v9J7f71oQrdClmqCRHDwPXUh+79ijwxeNu2L8="}}
+{"tocEntry":{"sectionType":"SECTION_TYPE_DEVICE","key":"AUtB+Gwof/Y1tlXNdp95sabWKhx5A2dM5Dt+67eB57Db","critical":true,"itemCount":"6","root":"0+NImK666UtY8lgjk3ODtf0jZN4y9P6pfeCI/wHudrY="}}
+{"tocEntry":{"sectionType":"SECTION_TYPE_DEVICE_ATTESTATIONS","critical":true,"itemCount":"4","root":"o67zfmqzPQSRKpVi7dasXOHLTrOgs9kF6QlYUesDxMw="}}
+{"tocEntry":{"sectionType":"SECTION_TYPE_ENCRYPTED_TALLY","critical":true,"itemCount":"2","root":"rlAiHJTCKP/4RGp4rP2whfU6sSWE+WRs4nlRQxFW1+0="}}
+{"tocEntry":{"sectionType":"SECTION_TYPE_CONTEST_DATA_REQUESTS","critical":true,"itemCount":"2","root":"1imPUZqFSxjPHypdzImhwgUgFKVyiIMjCENNPdq4m4s="}}
+{"tocEntry":{"sectionType":"SECTION_TYPE_DECRYPTED_TALLY","critical":true,"itemCount":"1","root":"jVBVmudBppFgI3C0Ug2y9kfhQUABS6iRJ31xRwk7cPI="}}
+{"tocEntry":{"sectionType":"SECTION_TYPE_CHALLENGED_BALLOT_DECRYPTIONS","critical":true,"itemCount":"1","root":"q2t870vXHojaivG5/8nEjsZ+U02AYX+hGcnTGOY3fow="}}
+{"tocEntry":{"sectionType":"SECTION_TYPE_CONTEST_DATA_DECRYPTIONS","critical":true,"itemCount":"2","root":"L4I+hoApPIMWRx9h1qxJ/9PNMD6wfhqB3qyi5gTP8y0="}}
+{"tocEntry":{"sectionType":"SECTION_TYPE_UNCAST_NONCE_RELEASES","critical":true,"root":"47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="}}

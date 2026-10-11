@@ -1,0 +1,15 @@
+{"magic":"EGRF","formatMajor":2,"sectionType":"SECTION_TYPE_TOC"}
+{"tocEntry":{"sectionType":"SECTION_TYPE_HEADER","critical":true,"itemCount":"1","root":"mRnyNsj7rj9n/q2qn3e3FfKkWS4c+okaxKJBhsWff8U="}}
+{"tocEntry":{"sectionType":"SECTION_TYPE_PARAMETERS","critical":true,"itemCount":"1","root":"7b3Qz3UjJ/YUwqjLzlLT/4Lax9/3s2gyLph00Gz+1iM="}}
+{"tocEntry":{"sectionType":"SECTION_TYPE_MANIFEST","critical":true,"itemCount":"1","root":"CLx+EVLCdQyAZGEQVb3Hs0BNQrXBQfOG3vQozYqiPrM="}}
+{"tocEntry":{"sectionType":"SECTION_TYPE_GUARDIANS","critical":true,"itemCount":"3","root":"iI8k1/spaJCqBJndxeRBwgEsW+yXqjwanZKJxm/Uh6Y="}}
+{"tocEntry":{"sectionType":"SECTION_TYPE_ELECTION_KEYS","critical":true,"itemCount":"1","root":"xh16ZaLo0AUV8tpx6DfVFOQ5xT5lRCg4eVkHOiNm4s0="}}
+{"tocEntry":{"sectionType":"SECTION_TYPE_DEVICE","key":"AW0z/1GJ34ODV95FCk4Cxk2zQraKdMgkEAbY9mdGo942","critical":true,"itemCount":"5","root":"2SygMr/KiNoEQAeHqNMDpLZS3KaYEQEQQ//iI1ez9rw="}}
+{"tocEntry":{"sectionType":"SECTION_TYPE_DEVICE_ATTESTATIONS","critical":true,"itemCount":"2","root":"KB6sLx/f24LOmoNRaiHimh4KpPnqajfv3/GFSuFxR/M="}}
+{"tocEntry":{"sectionType":"SECTION_TYPE_ENCRYPTED_TALLY","critical":true,"itemCount":"2","root":"nIwurudbd0R8ia7Gs4khmFqpHBvVtxOlF+TdlzugTj8="}}
+{"tocEntry":{"sectionType":"SECTION_TYPE_CONTEST_DATA_REQUESTS","critical":true,"root":"47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="}}
+{"tocEntry":{"sectionType":"SECTION_TYPE_DECRYPTED_TALLY","critical":true,"itemCount":"1","root":"dMZG3yWcgEOKaPC/6RHJEh/YGrqH4q2nDz2AwyhOpKg="}}
+{"tocEntry":{"sectionType":"SECTION_TYPE_CHALLENGED_BALLOT_DECRYPTIONS","critical":true,"root":"47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="}}
+{"tocEntry":{"sectionType":"SECTION_TYPE_CONTEST_DATA_DECRYPTIONS","critical":true,"root":"47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="}}
+{"tocEntry":{"sectionType":"SECTION_TYPE_UNCAST_NONCE_RELEASES","critical":true,"root":"47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="}}
+{"tocEntry":{"sectionType":32769,"critical":true,"itemCount":"1","root":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}}
