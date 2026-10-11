@@ -4,6 +4,7 @@ using ElectionGuard.Core.Models;
 using ElectionGuard.Core.Serialization;
 using ElectionGuard.Testing.Common;
 using ProtoBuf;
+using System.Reflection;
 
 namespace ElectionGuard.Core.UnitTests.Serialization;
 
@@ -51,6 +52,11 @@ public class ProtobufEncryptedBallotSerializerTests
         }
     }
 
+    private static ProtobufEncryptedBallotSerializer.ProtobufEncryptedSupplementalField DtoField(
+        ProtobufEncryptedBallotSerializer.ProtobufEncryptedContest contest,
+        SupplementalFieldKind kind) =>
+        contest.SupplementalFields!.Single(field => field.FieldId == ElectionFixtureBuilder.SupplementalFieldId(kind));
+
     private static void AssertDtoValueWithProofsMatchesDomain(
         EncryptedValueWithProofs domainValue,
         ProtobufEncryptedBallotSerializer.ProtobufEncryptedValueWithProofs dtoValue)
@@ -63,9 +69,8 @@ public class ProtobufEncryptedBallotSerializerTests
             Assert.Equal((byte[])domainValue.Proofs[i].Challenge, dtoValue.Proofs[i].Challenge);
             Assert.Equal((byte[])domainValue.Proofs[i].Response, dtoValue.Proofs[i].Response);
         }
-        // EncryptionNonce has no [ProtoMember] on ProtobufEncryptedValueWithProofs -- it never
-        // reaches the wire at all (see RoundTrip_DoesNotAttemptToSerializeEncryptionNonce).
-        Assert.Null(dtoValue.EncryptionNonce);
+        // The DTO has no nonce member at all (S10b-0; see
+        // SerializationDtos_HaveNoNonceMember_AndNoNonceReachesTheWire).
     }
 
     [Fact]
@@ -117,7 +122,10 @@ public class ProtobufEncryptedBallotSerializerTests
             BallotStyleId = realBallot.BallotStyleId,
             DeviceId = realBallot.DeviceId,
             ConfirmationCode = realBallot.ConfirmationCode,
+            EncryptedBallotNonce = realBallot.EncryptedBallotNonce,
+            ChainingField = realBallot.ChainingField,
             Weight = realBallot.Weight,
+            Status = realBallot.Status,
             Contests = new List<EncryptedContest> { contestWithNoChoices },
         };
 
@@ -166,12 +174,16 @@ public class ProtobufEncryptedBallotSerializerTests
         // byte[] ProtoMember, so it survives correctly here.
         Assert.Equal((byte[])original.SelectionEncryptionIdentifier, dto.SelectionEncryptionIdentifier);
         Assert.Equal((byte[])original.SelectionEncryptionIdentifierHash, dto.SelectionEncryptionIdentifierHash);
-        // ConfirmationCode is the field that folds the (currently no-op, see
-        // BallotEncryptorTests.Encrypt_SecondBallotOnDevice_ChainingHasNoEffect...) ChainingField
-        // into the ballot -- asserting it here is how this phase covers "ChainingField" per the
-        // plan, since ChainingField itself is a transient input to BallotEncryptor.Encrypt and is
-        // not a stored property of EncryptedBallot.
+        // The confirmation code and, since S8 (G19/G37), the chaining field B_C it was hashed with
+        // (protobuf ballot field 11), which Verification 8.B recomputes it from.
         Assert.Equal((byte[])original.ConfirmationCode, dto.ConfirmationCode);
+        Assert.Equal((byte[])original.ChainingField, dto.ChainingField);
+        // The encrypted ballot nonce C_ξB (§3.3.4, protobuf ballot field 10).
+        Assert.NotNull(dto.EncryptedBallotNonce);
+        Assert.Equal(original.EncryptedBallotNonce.C0.ToByteArray(), dto.EncryptedBallotNonce!.C0);
+        Assert.Equal(original.EncryptedBallotNonce.C1, dto.EncryptedBallotNonce.C1);
+        Assert.Equal((byte[])original.EncryptedBallotNonce.Challenge, dto.EncryptedBallotNonce.Challenge);
+        Assert.Equal((byte[])original.EncryptedBallotNonce.Response, dto.EncryptedBallotNonce.Response);
 
         var originalContest = original.Contests.Single();
         var dtoContest = dto.Contests.Single();
@@ -190,10 +202,10 @@ public class ProtobufEncryptedBallotSerializerTests
 
         // The four optional counters are all typed as the BASE ProtobufEncryptedValueWithProofs
         // directly (no derived-type indirection), so -- unlike Choices -- they round-trip correctly.
-        AssertDtoValueWithProofsMatchesDomain(originalContest.OvervoteCount, dtoContest.OvervoteCount);
-        AssertDtoValueWithProofsMatchesDomain(originalContest.NullvoteCount, dtoContest.NullvoteCount);
-        AssertDtoValueWithProofsMatchesDomain(originalContest.UndervoteCount, dtoContest.UndervoteCount);
-        AssertDtoValueWithProofsMatchesDomain(originalContest.WriteInVoteCount, dtoContest.WriteInVoteCount);
+        AssertDtoValueWithProofsMatchesDomain(originalContest.Field(SupplementalFieldKind.OvervoteIndicator), DtoField(dtoContest, SupplementalFieldKind.OvervoteIndicator));
+        AssertDtoValueWithProofsMatchesDomain(originalContest.Field(SupplementalFieldKind.NullVoteIndicator), DtoField(dtoContest, SupplementalFieldKind.NullVoteIndicator));
+        AssertDtoValueWithProofsMatchesDomain(originalContest.Field(SupplementalFieldKind.UndervoteDifferenceCount), DtoField(dtoContest, SupplementalFieldKind.UndervoteDifferenceCount));
+        AssertDtoValueWithProofsMatchesDomain(originalContest.Field(SupplementalFieldKind.WriteInCount), DtoField(dtoContest, SupplementalFieldKind.WriteInCount));
 
         Assert.NotNull(originalContest.ContestData);
         Assert.NotNull(dtoContest.ContestData);
@@ -221,33 +233,48 @@ public class ProtobufEncryptedBallotSerializerTests
         }
     }
 
+    /// <summary>
+    /// S10b-0: secrets are never copied into serialization DTOs. The domain values carry each
+    /// selection's encryption nonce in memory (the encryptor needs it for the limit proofs), and the
+    /// DTO tree used to have nonce members that stayed off the wire only because they lacked a
+    /// [ProtoMember] attribute, while the mapping filled them anyway. They are gone. This replaces
+    /// the old test, which asserted that those members read back null: it pins that no DTO type
+    /// declares a member that could hold a nonce (a name containing "Nonce", except
+    /// <c>EncryptedBallotNonce</c>, the published ciphertext C_ξB of §3.3.4), and that no option or
+    /// field nonce of a real ballot appears anywhere in its serialized bytes.
+    /// </summary>
     [Fact]
-    public void RoundTrip_DoesNotAttemptToSerializeEncryptionNonce()
+    public void SerializationDtos_HaveNoNonceMember_AndNoNonceReachesTheWire()
     {
-        // EncryptedValueWithProofs.EncryptionNonce has no [ProtoMember] attribute on either
-        // ProtobufEncryptedValueWithProofs or ProtobufEncryptedValue (see
-        // Serialization/IEncryptedBallotSerializer.cs) -- by design, for the same reason the JSON
-        // serializer marks it [JsonIgnore]: the whole point of shipping an EncryptedBallot
-        // off-device is that nobody downstream can recover the plaintext selection from it. Uses
-        // the same direct-DTO-inspection technique as SerializedDto_NonListFields_
-        // RoundTripCorrectly_WhenInspectedDirectly to avoid the unrelated pinned bugs above -- the
-        // four counters checked here are unaffected by those bugs.
+        const BindingFlags all = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
+        static IEnumerable<Type> Nested(Type type) =>
+            type.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic).SelectMany(t => Nested(t).Prepend(t));
+
+        var dtoTypes = Nested(typeof(ProtobufEncryptedBallotSerializer)).ToList();
+        Assert.Contains(typeof(ProtobufEncryptedBallotSerializer.ProtobufEncryptedValueWithProofs), dtoTypes);
+        var nonceMembers = dtoTypes
+            .SelectMany(type => type.GetMembers(all)
+                .Where(member => member is PropertyInfo || member is FieldInfo field && !field.Name.Contains("k__BackingField", StringComparison.Ordinal))
+                .Where(member => member.Name.Contains("Nonce", StringComparison.OrdinalIgnoreCase) && member.Name != "EncryptedBallotNonce")
+                .Select(member => $"{type.Name}.{member.Name}"))
+            .ToList();
+        Assert.Empty(nonceMembers);
+
         var original = BuildRichEncryptedBallot();
-        var originalContest = original.Contests.Single();
-        Assert.NotNull(originalContest.OvervoteCount.EncryptionNonce);
-        Assert.NotNull(originalContest.WriteInVoteCount.EncryptionNonce);
+        var nonces = original.Contests
+            .SelectMany(c => c.Choices.Select(x => x.EncryptionNonce).Concat(c.SupplementalFields.Select(x => x.EncryptionNonce)))
+            .ToList();
+        Assert.True(nonces.Count >= 4);
+        Assert.All(nonces, nonce => Assert.NotNull(nonce));
 
-        var serializer = new ProtobufEncryptedBallotSerializer();
         using var stream = new MemoryStream();
-        serializer.Serialize(stream, original);
-        stream.Position = 0;
-        var dto = Serializer.Deserialize<ProtobufEncryptedBallotSerializer.ProtobufEncryptedBallot>(stream);
-        var dtoContest = dto.Contests.Single();
+        new ProtobufEncryptedBallotSerializer().Serialize(stream, original);
+        byte[] wire = stream.ToArray();
 
-        Assert.Null(dtoContest.OvervoteCount.EncryptionNonce);
-        Assert.Null(dtoContest.NullvoteCount.EncryptionNonce);
-        Assert.Null(dtoContest.UndervoteCount.EncryptionNonce);
-        Assert.Null(dtoContest.WriteInVoteCount.EncryptionNonce);
+        foreach (var nonce in nonces)
+        {
+            Assert.Equal(-1, wire.AsSpan().IndexOf(nonce!.Value.ToByteArray()));
+        }
     }
 
     [Fact]

@@ -11,10 +11,28 @@ public struct VotingDeviceInformationHash : IEquatable<VotingDeviceInformationHa
         _value = bytes;
     }
 
+    /// <summary>
+    /// Strict decoding for a value read from a record: exactly 32 bytes. Throws
+    /// <see cref="Serialization.NonCanonicalEncodingException"/> otherwise; a field missing from a
+    /// document arrives here as null.
+    /// </summary>
+    public static VotingDeviceInformationHash FromCanonicalBytes(byte[]? bytes)
+    {
+        if (bytes is not { Length: EGHash.HashBytes })
+        {
+            throw new Serialization.NonCanonicalEncodingException($"A device information hash H_DI is {EGHash.HashBytes} bytes; got {bytes?.Length ?? 0}.");
+        }
+
+        return new VotingDeviceInformationHash(bytes.ToArray());
+    }
+
     public VotingDeviceInformationHash(ExtendedBaseHash extendedBaseHash, string deviceIdentifier)
     {
+        // §3.4.3 eq. (72): HDI = H(HE; 0x2A, S_device), with S_device length-prefixed per §5.1.4,
+        // 5 + len(S_device) bytes (§5.5.3).
         var deviceIdentifierBytes = Encoding.UTF8.GetBytes(deviceIdentifier);
         _value = EGHash.Hash(extendedBaseHash,
+            [0x2A],
             deviceIdentifierBytes.Length.ToByteArray(),
             deviceIdentifierBytes);
     }

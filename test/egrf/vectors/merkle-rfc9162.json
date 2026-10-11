@@ -1,0 +1,138 @@
+{
+  "description": "RFC 6962/9162 SHA-256 Merkle tree vectors, transcribed (hex) from github.com/transparency-dev/merkle (Apache-2.0): testonly/constants.go (leaf inputs, roots by tree size) and testdata/{inclusion,consistency}/N/happy-path.json (base64 there). Fetched 2026-10-09. RFC 9162 carries no test vectors itself; these are the Certificate Transparency reference vectors, whose hashing (leaf 0x00, node 0x01, empty = SHA-256 of nothing) RFC 9162 section 2.1 keeps from RFC 6962.",
+  "leafInputs": [
+    "",
+    "00",
+    "10",
+    "2021",
+    "3031",
+    "40414243",
+    "5051525354555657",
+    "606162636465666768696a6b6c6d6e6f"
+  ],
+  "emptyRoot": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "rootsBySize": [
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+    "fac54203e7cc696cf0dfcb42c92a1d9dbaf70ad9e621f4bd8d98662f00e3c125",
+    "aeb6bcfe274b70a14fb067a5e5578264db0fa9b51af5e0ba159158f329e06e77",
+    "d37ee418976dd95753c1c73862b9398fa2a2cf9b4ff0fdfe8b30cd95209614b7",
+    "4e3bbb1f7b478dcfe71fb631631519a3bca12c9aefca1612bfce4c13a86264d4",
+    "76e67dadbcdf1e10e1b74ddc608abd2f98dfb16fbce75277b5232a127f2087ef",
+    "ddb89be403809e325750d3d263cd78929c2942b7942a34b77e122c9594a74c8c",
+    "5dc9da79a70659a9ad559cb701ded9a2ab9d823aad2f4960cfe370eff4604328"
+  ],
+  "inclusion": [
+    {
+      "source": "testdata/inclusion/0/happy-path.json",
+      "leafIdx": 0,
+      "treeSize": 1,
+      "root": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+      "leafHash": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+      "proof": []
+    },
+    {
+      "source": "testdata/inclusion/1/happy-path.json",
+      "leafIdx": 0,
+      "treeSize": 8,
+      "root": "5dc9da79a70659a9ad559cb701ded9a2ab9d823aad2f4960cfe370eff4604328",
+      "leafHash": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+      "proof": [
+        "96a296d224f285c67bee93c30f8a309157f0daa35dc5b87e410b78630a09cfc7",
+        "5f083f0a1a33ca076a95279832580db3e0ef4584bdff1f54c8a360f50de3031e",
+        "6b47aaf29ee3c2af9af889bc1fb9254dabd31177f16232dd6aab035ca39bf6e4"
+      ]
+    },
+    {
+      "source": "testdata/inclusion/2/happy-path.json",
+      "leafIdx": 5,
+      "treeSize": 8,
+      "root": "5dc9da79a70659a9ad559cb701ded9a2ab9d823aad2f4960cfe370eff4604328",
+      "leafHash": "4271a26be0d8a84f0bd54c8c302e7cb3a3b5d1fa6780a40bcce2873477dab658",
+      "proof": [
+        "bc1a0643b12e4d2d7c77918f44e0f4f79a838b6cf9ec5b5c283e1f4d88599e6b",
+        "ca854ea128ed050b41b35ffc1b87b8eb2bde461e9e3b5596ece6b9d5975a0ae0",
+        "d37ee418976dd95753c1c73862b9398fa2a2cf9b4ff0fdfe8b30cd95209614b7"
+      ]
+    },
+    {
+      "source": "testdata/inclusion/3/happy-path.json",
+      "leafIdx": 2,
+      "treeSize": 3,
+      "root": "aeb6bcfe274b70a14fb067a5e5578264db0fa9b51af5e0ba159158f329e06e77",
+      "leafHash": "0298d122906dcfc10892cb53a73992fc5b9f493ea4c9badb27b791b4127a7fe7",
+      "proof": [
+        "fac54203e7cc696cf0dfcb42c92a1d9dbaf70ad9e621f4bd8d98662f00e3c125"
+      ]
+    },
+    {
+      "source": "testdata/inclusion/4/happy-path.json",
+      "leafIdx": 1,
+      "treeSize": 5,
+      "root": "4e3bbb1f7b478dcfe71fb631631519a3bca12c9aefca1612bfce4c13a86264d4",
+      "leafHash": "96a296d224f285c67bee93c30f8a309157f0daa35dc5b87e410b78630a09cfc7",
+      "proof": [
+        "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+        "5f083f0a1a33ca076a95279832580db3e0ef4584bdff1f54c8a360f50de3031e",
+        "bc1a0643b12e4d2d7c77918f44e0f4f79a838b6cf9ec5b5c283e1f4d88599e6b"
+      ]
+    }
+  ],
+  "consistency": [
+    {
+      "source": "testdata/consistency/0/happy-path.json",
+      "size1": 1,
+      "size2": 1,
+      "root1": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+      "root2": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+      "proof": []
+    },
+    {
+      "source": "testdata/consistency/1/happy-path.json",
+      "size1": 1,
+      "size2": 8,
+      "root1": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+      "root2": "5dc9da79a70659a9ad559cb701ded9a2ab9d823aad2f4960cfe370eff4604328",
+      "proof": [
+        "96a296d224f285c67bee93c30f8a309157f0daa35dc5b87e410b78630a09cfc7",
+        "5f083f0a1a33ca076a95279832580db3e0ef4584bdff1f54c8a360f50de3031e",
+        "6b47aaf29ee3c2af9af889bc1fb9254dabd31177f16232dd6aab035ca39bf6e4"
+      ]
+    },
+    {
+      "source": "testdata/consistency/2/happy-path.json",
+      "size1": 6,
+      "size2": 8,
+      "root1": "76e67dadbcdf1e10e1b74ddc608abd2f98dfb16fbce75277b5232a127f2087ef",
+      "root2": "5dc9da79a70659a9ad559cb701ded9a2ab9d823aad2f4960cfe370eff4604328",
+      "proof": [
+        "0ebc5d3437fbe2db158b9f126a1d118e308181031d0a949f8dededebc558ef6a",
+        "ca854ea128ed050b41b35ffc1b87b8eb2bde461e9e3b5596ece6b9d5975a0ae0",
+        "d37ee418976dd95753c1c73862b9398fa2a2cf9b4ff0fdfe8b30cd95209614b7"
+      ]
+    },
+    {
+      "source": "testdata/consistency/3/happy-path.json",
+      "size1": 2,
+      "size2": 5,
+      "root1": "fac54203e7cc696cf0dfcb42c92a1d9dbaf70ad9e621f4bd8d98662f00e3c125",
+      "root2": "4e3bbb1f7b478dcfe71fb631631519a3bca12c9aefca1612bfce4c13a86264d4",
+      "proof": [
+        "5f083f0a1a33ca076a95279832580db3e0ef4584bdff1f54c8a360f50de3031e",
+        "bc1a0643b12e4d2d7c77918f44e0f4f79a838b6cf9ec5b5c283e1f4d88599e6b"
+      ]
+    },
+    {
+      "source": "testdata/consistency/4/happy-path.json",
+      "size1": 6,
+      "size2": 7,
+      "root1": "76e67dadbcdf1e10e1b74ddc608abd2f98dfb16fbce75277b5232a127f2087ef",
+      "root2": "ddb89be403809e325750d3d263cd78929c2942b7942a34b77e122c9594a74c8c",
+      "proof": [
+        "0ebc5d3437fbe2db158b9f126a1d118e308181031d0a949f8dededebc558ef6a",
+        "b08693ec2e721597130641e8211e7eedccb4c26413963eee6c1e2ed16ffb1a5f",
+        "d37ee418976dd95753c1c73862b9398fa2a2cf9b4ff0fdfe8b30cd95209614b7"
+      ]
+    }
+  ]
+}

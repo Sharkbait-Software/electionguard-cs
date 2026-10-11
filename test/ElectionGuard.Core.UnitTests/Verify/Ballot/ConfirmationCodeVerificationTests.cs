@@ -37,7 +37,10 @@ public class ConfirmationCodeVerificationTests
             BallotStyleId = ballot.BallotStyleId,
             Contests = contests ?? ballot.Contests,
             ConfirmationCode = confirmationCode ?? ballot.ConfirmationCode,
+            EncryptedBallotNonce = ballot.EncryptedBallotNonce,
+            ChainingField = ballot.ChainingField,
             Weight = ballot.Weight,
+            Status = ballot.Status,
             DeviceId = ballot.DeviceId,
         };
     }
@@ -164,20 +167,14 @@ public class ConfirmationCodeVerificationTests
     }
 
     [Fact]
-    public void Verify_ChainingModeSimple_MismatchedPreviousConfirmationCode_Throws_SubSection8B()
+    public void Verify_ChainingModeSimple_MismatchedPreviousConfirmationCode_Throws_SubSection8E()
     {
-        // Was PINNED, NOW PARTIALLY FIXED: now that ConfirmationCode folds its ChainingField into
-        // the hash (§3.4.2 formula (71) -- see Models/ConfirmationCodeTests.cs), a
-        // previousConfirmationCode unrelated to the ballot actually being verified changes the
-        // recomputed ChainingField/ConfirmationCode, so 8.B (not 8.E) now correctly rejects it.
-        //
-        // NOTE: for ChainingMode.Simple specifically, ConfirmationCodeVerification.Verify still
-        // computes both `chainingField` (line 35) and `expectedChainingField` (the 8.E check) from
-        // the exact same inputs -- ChainingMode.Simple, deviceInformationHash,
-        // encryptionRecord.ExtendedBaseHash, and the single previousConfirmationCode parameter --
-        // so 8.E specifically remains dead/tautological code (a separate, narrower issue from the
-        // ConfirmationCode hashing bug fixed here); it just no longer matters for detecting a
-        // mismatched previous code, because 8.B now catches it first.
+        // RE-PINNED in S8 (G37), 8.B -> 8.E. The ballot now carries the chaining field B_C it was
+        // hashed with, and 8.B recomputes H_C from that field, so 8.B passes: the ballot is
+        // internally consistent. What is wrong is the chain position the caller claims (an unrelated
+        // previous confirmation code), which is exactly 8.E: "the chaining field byte array used to
+        // compute H_j is equal to B_C,j = 0x00000001 || H_{j-1}". Before S8, 8.E compared two fields
+        // built from the same inputs and could not fail, so the mismatch surfaced as 8.B.
         var (ballot, encryptionRecord, deviceHash) = BuildValidBallot(ChainingMode.Simple, previousConfirmationCode: null);
 
         // A previousConfirmationCode that has nothing to do with this ballot or device.
@@ -188,6 +185,121 @@ public class ConfirmationCodeVerificationTests
         var exception = Assert.Throws<VerificationFailedException>(
             () => verification.Verify(ballot, deviceHash, encryptionRecord, previousConfirmationCode: unrelatedPreviousCode));
 
+        Assert.Equal("8.E", exception.SubSection);
+    }
+
+    /// <summary>
+    /// The ballot with chaining field <paramref name="field"/> and a confirmation code recomputed over
+    /// it, so that 8.A and 8.B pass and only 8.D/8.E can catch the field.
+    /// </summary>
+    internal static EncryptedBallot Rechained(EncryptedBallot ballot, ChainingField field, string? deviceId = null)
+    {
+        return WithChainingField(
+            ballot,
+            field,
+            new ConfirmationCode(ballot.SelectionEncryptionIdentifierHash, ballot.Contests.Select(x => x.ContestHash).ToList(), field),
+            deviceId);
+    }
+
+    internal static EncryptedBallot WithChainingField(EncryptedBallot ballot, ChainingField field, ConfirmationCode confirmationCode, string? deviceId = null)
+    {
+        return new EncryptedBallot
+        {
+            Id = ballot.Id,
+            SelectionEncryptionIdentifier = ballot.SelectionEncryptionIdentifier,
+            SelectionEncryptionIdentifierHash = ballot.SelectionEncryptionIdentifierHash,
+            BallotStyleId = ballot.BallotStyleId,
+            Contests = ballot.Contests,
+            ConfirmationCode = confirmationCode,
+            ChainingField = field,
+            EncryptedBallotNonce = ballot.EncryptedBallotNonce,
+            Weight = ballot.Weight,
+            Status = ballot.Status,
+            DeviceId = deviceId ?? ballot.DeviceId,
+        };
+    }
+
+    [Fact]
+    public void Verify_ValidBallot_CarriesTheChainingFieldItWasHashedWith()
+    {
+        var (ballot, encryptionRecord, deviceHash) = BuildValidBallot(ChainingMode.None);
+
+        Assert.Equal(new ChainingField(ChainingMode.None, deviceHash, encryptionRecord.ExtendedBaseHash, null), ballot.ChainingField);
+        Assert.Null(Record.Exception(() => new ConfirmationCodeVerification().Verify(ballot, encryptionRecord)));
+    }
+
+    [Fact]
+    public void Verify_NoChaining_TamperedChainingFieldWithoutRehashing_Throws_SubSection8B()
+    {
+        var (ballot, encryptionRecord, _) = BuildValidBallot(ChainingMode.None);
+        byte[] bytes = ((byte[])ballot.ChainingField).ToArray();
+        bytes[^1] ^= 0x01;
+        var tampered = WithChainingField(ballot, ChainingField.FromCanonicalBytes(bytes), ballot.ConfirmationCode);
+
+        var exception = Assert.Throws<VerificationFailedException>(() => new ConfirmationCodeVerification().Verify(tampered, encryptionRecord));
+
         Assert.Equal("8.B", exception.SubSection);
+    }
+
+    [Theory]
+    [InlineData("other device hash")]
+    [InlineData("simple-chaining identifier")]
+    [InlineData("zero hash")]
+    public void Verify_NoChainingBallotWithWrongChainingField_Throws_SubSection8D(string variant)
+    {
+        var (ballot, encryptionRecord, deviceHash) = BuildValidBallot(ChainingMode.None);
+        var otherDevice = new VotingDeviceInformationHash(encryptionRecord.ExtendedBaseHash, "device-2");
+        var field = variant switch
+        {
+            "other device hash" => new ChainingField(ChainingMode.None, otherDevice, encryptionRecord.ExtendedBaseHash, null),
+            "simple-chaining identifier" => ChainingField.FromCanonicalBytes([0, 0, 0, 1, .. ((byte[])ballot.ChainingField)[4..]]),
+            _ => ElectionFixtureBuilder.PlaceholderChainingField,
+        };
+        var tampered = Rechained(ballot, field);
+        var verification = new ConfirmationCodeVerification();
+
+        Assert.Equal("8.D", Assert.Throws<VerificationFailedException>(() => verification.Verify(tampered, encryptionRecord)).SubSection);
+        Assert.Equal("8.D", Assert.Throws<VerificationFailedException>(() => verification.Verify(tampered, deviceHash, encryptionRecord, null)).SubSection);
+    }
+
+    [Fact]
+    public void Verify_SimpleChaining_PerBallot_ChecksOnlyTheModeIdentifier()
+    {
+        var (ballot, encryptionRecord, deviceHash) = BuildValidBallot(ChainingMode.Simple);
+        var verification = new ConfirmationCodeVerification();
+
+        // Any H_{j-1} is accepted per ballot (the device walk decides which is right) ...
+        var otherPosition = Rechained(ballot, new ChainingField(ChainingMode.Simple, deviceHash, encryptionRecord.ExtendedBaseHash, new ConfirmationCode(new byte[32])));
+        Assert.Null(Record.Exception(() => verification.Verify(otherPosition, encryptionRecord)));
+
+        // ... but not the no-chaining identifier.
+        var noChaining = Rechained(ballot, new ChainingField(ChainingMode.None, deviceHash, encryptionRecord.ExtendedBaseHash, null));
+        Assert.Equal("8.E", Assert.Throws<VerificationFailedException>(() => verification.Verify(noChaining, encryptionRecord)).SubSection);
+    }
+
+    [Fact]
+    public void Verify_SimpleChaining_ExplicitPreviousCode_FirstBallotMustChainFromItsDevicesH0()
+    {
+        var (ballot, encryptionRecord, deviceHash) = BuildValidBallot(ChainingMode.Simple);
+        var verification = new ConfirmationCodeVerification();
+        var initialHash = ChainingField.InitialHash(deviceHash, encryptionRecord.ExtendedBaseHash);
+        Assert.Equal(new ChainingField(ChainingMode.Simple, deviceHash, encryptionRecord.ExtendedBaseHash, initialHash), ballot.ChainingField);
+
+        // Given H_0 explicitly as the previous code: the same field.
+        Assert.Null(Record.Exception(() => verification.Verify(ballot, deviceHash, encryptionRecord, initialHash)));
+
+        // A ballot hashed with another device's H_0, claimed to be this device's first ballot.
+        var otherDevice = new VotingDeviceInformationHash(encryptionRecord.ExtendedBaseHash, "device-2");
+        var foreign = Rechained(ballot, new ChainingField(ChainingMode.Simple, otherDevice, encryptionRecord.ExtendedBaseHash, null));
+        Assert.Equal("8.E", Assert.Throws<VerificationFailedException>(() => verification.Verify(foreign, deviceHash, encryptionRecord, null)).SubSection);
+    }
+
+    [Fact]
+    public void Verify_DefaultChainingField_Throws_SubSection8Structure()
+    {
+        var (ballot, encryptionRecord, _) = BuildValidBallot(ChainingMode.None);
+        var malformed = WithChainingField(ballot, default, ballot.ConfirmationCode);
+
+        Assert.Equal("8.structure", Assert.Throws<VerificationFailedException>(() => new ConfirmationCodeVerification().Verify(malformed, encryptionRecord)).SubSection);
     }
 }

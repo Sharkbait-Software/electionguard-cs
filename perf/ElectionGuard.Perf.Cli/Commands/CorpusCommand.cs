@@ -88,9 +88,11 @@ public sealed class CorpusCommand : Command<CorpusCommand.Settings>
             Console.WriteLine($"Removed {staleFiles.Count} stale ballot files.");
         }
 
+        // The manifest file in Core's written form: the bytes H_B is computed over, so an encryptor
+        // reading this corpus hashes what the harness hashes.
         File.WriteAllBytes(
             Path.Combine(outputDirectory, "manifest.json"),
-            JsonSerializer.SerializeToUtf8Bytes(manifest, PerfJson.Options));
+            ElectionGuard.Core.Serialization.ManifestSerializer.Serialize(manifest));
 
         var generator = new BallotGenerator(manifest, scenario.Seed);
         var accumulator = new ExpectedTallyAccumulator(manifest);

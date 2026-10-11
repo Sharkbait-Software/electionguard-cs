@@ -154,6 +154,7 @@ public class HtmlReportTests
                 [PhaseNames.Tally] = Phase(474),
                 [PhaseNames.VerifyTally] = Phase(477),
                 [PhaseNames.DecryptTally] = Phase(1609) with { Aborted = true, BallotsProcessed = 10 },
+                [PhaseNames.VerifyDecryption] = Phase(55),
             },
             Memory = new MemoryMetrics
             {

@@ -6,6 +6,7 @@ using ElectionGuard.Core.Crypto;
 using ElectionGuard.Core.Models;
 using ElectionGuard.Core.Tally;
 using ElectionGuard.Core.Verify.Ballot;
+using ElectionGuard.Core.Verify.KeyGeneration;
 using ElectionGuard.Core.Verify.Tally;
 using ElectionGuard.Perf.Cli.Configuration;
 using ElectionGuard.Perf.Cli.Measurement;
@@ -60,6 +61,27 @@ public sealed class ScenarioRunner
         }
     }
 
+    /// <summary>
+    /// Test seam: called with each ballot's run-wide index and its encryption, after the encrypt
+    /// phase's timing and before the ballot is verified or tallied; the ballot it returns is used in
+    /// its place. Lets a test plant a fault that only shows across chunks, such as a later chunk
+    /// repeating an earlier chunk's id_B (Verification 5.A). Null, and never set, outside tests.
+    ///
+    /// Under simple chaining the device chain has already appended the original ballot when the hook
+    /// runs, so the closed device record lists what the device encrypted while the replaced ballot
+    /// is what gets verified: the hook models a published ballot tampered with after the device
+    /// recorded it, which is what the record exists to expose.
+    /// </summary>
+    internal Func<int, EncryptedBallot, EncryptedBallot>? EncryptedBallotHookForTesting { get; init; }
+
+    /// <summary>
+    /// Test seam: under simple chaining, called with the closed device record before the
+    /// once-per-device Verification 8 walk checks it; the record it returns is checked in its place.
+    /// Lets a test tamper with what only that walk checks (8.F, 8.G). Null, and never set, outside
+    /// tests.
+    /// </summary>
+    internal Func<DeviceChainRecord, DeviceChainRecord>? DeviceChainRecordHookForTesting { get; init; }
+
     public RunOutcome Run()
     {
         var notes = new Dictionary<string, string>();
@@ -85,10 +107,20 @@ public sealed class ScenarioRunner
 
         try
         {
-            guardianSet = ElectionFixtureBuilder.CreateGuardianSet(_scenario.Guardians.N, _scenario.Guardians.K);
+            // The guardians check H_B and key their comparison hash with it (§3.2.2 step 1), so the
+            // manifest file goes into the ceremony as well as into the encryption record.
             var manifestFile = new ManifestFile { Bytes = ManifestHasher.Serialize(_manifest) };
+            guardianSet = ElectionFixtureBuilder.CreateGuardianSet(_scenario.Guardians.N, _scenario.Guardians.K, manifestFile);
             records = ElectionFixtureBuilder.CreateEncryptionRecord(guardianSet, _manifest, manifestFile);
             dkgStopwatch.Stop();
+
+            // Verifications 1-4 on the record the ballots are encrypted against. Each runs once per
+            // election, not per ballot, so they sit in this untimed setup block, after the DKG
+            // stopwatch so that DkgMs stays comparable with earlier runs.
+            new ParameterVerification().Verify(records.EncryptionRecord);
+            new GuardianPublicKeyVerification().Verify(records.EncryptionRecord.Guardians);
+            new ElectionPublicKeyVerification().Verify(records.EncryptionRecord.Guardians, records.EncryptionRecord.ElectionPublicKeys);
+            new ExtendedBaseHashVerification().Verify(records.EncryptionRecord.ExtendedBaseHash, records.EncryptionRecord.ElectionBaseHash, records.EncryptionRecord.ElectionPublicKeys);
 
             deviceHash = new VotingDeviceInformationHash(records.ExtendedBaseHash, DeviceId);
             generator = new BallotGenerator(_manifest, _scenario.Seed);
@@ -200,8 +232,26 @@ public sealed class ScenarioRunner
             ? new[] { encrypt, ballotVerify, aggregate }
             : new[] { encrypt, ballotVerify, aggregate, tallyVerify };
 
+        // Verification 5.A across the whole run, not per chunk: every identifier seen so far. An
+        // identifier is 32 bytes and no ballot is retained, so this grows by one small entry per
+        // ballot whatever the chunk size.
+        var selectionEncryptionIdentifiers = new SelectionEncryptionIdentifierSet();
+
+        // Verification 11.D: every contest label that occurs on a submitted ballot. At most one
+        // entry per manifest contest, however many ballots.
+        var submittedContestIds = new HashSet<string>(StringComparer.Ordinal);
+
         EncryptedBallot? representative = null;
         ConfirmationCode? previousConfirmationCode = null;
+
+        // Under simple chaining, the device's confirmation code chain (§3.4.4): every encrypted ballot
+        // is appended, the chain is closed after the last chunk (eqs. 77/78), and the published
+        // ballots are walked against its record (Verification 8.C-8.G). That keeps a confirmation
+        // code per ballot, and a link (id, device, H_C, B_C) per ballot while ballot verification
+        // runs. Under no chaining it is skipped: each ballot's B_C is fully checked per ballot (8.D),
+        // and the list the harness would publish is just the order it encrypted in.
+        var deviceChain = isChained ? new DeviceChain(records.EncryptionRecord, DeviceId) : null;
+        var chainLinks = isChained && _scenario.Phases.BallotVerification ? new List<DeviceChainLink>() : null;
         int generated = 0;
         bool aborted = false;
 
@@ -254,13 +304,44 @@ public sealed class ScenarioRunner
                 }
 
                 encrypt.RecordBallots(chunkSize);
+
+                // Every generated ballot is cast. The decision comes after encryption (the voter
+                // sees the confirmation code first), so it is recorded outside the encrypt timing.
+                // Verification 11.D needs the contests that appear on submitted ballots; they are
+                // collected here rather than by retaining the ballots.
+                foreach (var encryptedBallot in encryptedChunk)
+                {
+                    deviceChain?.Append(encryptedBallot);
+                    encryptedBallot.RecordStatus(BallotStatus.Cast);
+                    foreach (var contest in encryptedBallot.Contests)
+                    {
+                        submittedContestIds.Add(contest.Id);
+                    }
+                }
+
+                if (EncryptedBallotHookForTesting is { } hook)
+                {
+                    for (int i = 0; i < chunkSize; i++)
+                    {
+                        encryptedChunk[i] = hook(generated + i, encryptedChunk[i]);
+                    }
+                }
+
                 representative ??= encryptedChunk[0];
+
+                if (chainLinks is not null)
+                {
+                    foreach (var encryptedBallot in encryptedChunk)
+                    {
+                        chainLinks.Add(DeviceChainLink.From(encryptedBallot));
+                    }
+                }
 
                 if (_scenario.Phases.BallotVerification)
                 {
                     using (ballotVerify.Enter())
                     {
-                        VerifyChunk(encryptedChunk, records.EncryptionRecord, deviceHash, parallelism, isChained, chunkStartConfirmationCode);
+                        VerifyChunk(encryptedChunk, records.EncryptionRecord, deviceHash, parallelism, isChained, chunkStartConfirmationCode, selectionEncryptionIdentifiers);
                     }
 
                     ballotVerify.RecordBallots(chunkSize);
@@ -301,6 +382,24 @@ public sealed class ScenarioRunner
                 }
 
                 _log($"  {generated:N0}/{_scenario.BallotCount:N0} ballots");
+            }
+
+            // --- Verification 8, once per device (simple chaining) --------------------------
+            // The chain is closed when the device stops (eqs. 77/78) and its record checked against
+            // the published ballots: 8.C, 8.F, 8.E in list order and 8.G. Billed to ballot
+            // verification without adding to its ballot count.
+            if (deviceChain is not null && chainLinks is not null && !aborted)
+            {
+                var deviceChainRecord = deviceChain.Close();
+                if (DeviceChainRecordHookForTesting is { } recordHook)
+                {
+                    deviceChainRecord = recordHook(deviceChainRecord);
+                }
+
+                using (ballotVerify.Enter())
+                {
+                    new ConfirmationCodeVerification().VerifyDevices([deviceChainRecord], chainLinks, records.EncryptionRecord);
+                }
             }
 
             // --- Verification 9 -----------------------------------------------------------
@@ -416,17 +515,11 @@ public sealed class ScenarioRunner
             var decrypt = new PhaseAccumulator(PhaseNames.DecryptTally, decryptBudget);
 
             // K guardians is the threshold; using exactly K is the realistic case and the
-            // cheapest correct one.
+            // cheapest correct one. The phase covers the whole verifiable decryption (§3.6.5): the
+            // guardians' three rounds (M_i and d_i; (a_i, b_i); v_i), the administrator's combination
+            // and its check of the proof, and the discrete-log search.
             DecryptedTally RunDecryption() =>
-                new TallyAdmin().Decrypt(
-                    guardianSet.Guardians
-                        .Take(_scenario.Guardians.K)
-                        .Select(guardian => new TallyGuardian(guardian.Index, guardianSet.SecretShares[guardian.Index])
-                            .Decrypt(encryptedTally, parallelism))
-                        .ToList(),
-                    encryptedTally,
-                    guardianSet.ElectionPublicKeys,
-                    parallelism);
+                ElectionFixtureBuilder.DecryptTally(guardianSet, encryptedTally, records.EncryptionRecord, _scenario.Guardians.K, parallelism);
 
             DecryptedTally? decryptedTally = null;
             bool decryptTimedOut = false;
@@ -497,6 +590,36 @@ public sealed class ScenarioRunner
                 correctness = new CorrectnessResult { Status = CorrectnessStatus.Error };
                 _log($"  decryption failed: {failure}");
             }
+
+            // --- Verifications 10 and 11 -----------------------------------------------------
+            // TallyComparer checks the counts against the oracle, but it cannot see the proof: a
+            // decrypted tally whose (c, v) does not verify is a failed run even when its counts are
+            // right. Gated with Verification 9 on tallyVerification, and billed to a phase of its
+            // own so DecryptTally stays comparable with runs from before the proof existed.
+            if (failure is null && decryptedTally is not null && _scenario.Phases.TallyVerification)
+            {
+                var decryptionVerify = new PhaseAccumulator(PhaseNames.VerifyDecryption, BudgetFor(PhaseNames.VerifyDecryption));
+                try
+                {
+                    using (decryptionVerify.Enter())
+                    {
+                        new TallyDecryptionVerification().Verify(records.EncryptionRecord, encryptedTally, decryptedTally, parallelism);
+                        new TallyContentsVerification().Verify(_manifest, decryptedTally, submittedContestIds);
+                    }
+
+                    decryptionVerify.RecordBallots(generated);
+                    notes["decryptionVerification"] = "ran";
+                }
+                catch (Exception ex)
+                {
+                    failure = Describe(ex);
+                    notes["error"] = failure;
+                    decryptionVerify.MarkAborted();
+                    _log($"  decryption verification failed: {failure}");
+                }
+
+                phases[PhaseNames.VerifyDecryption] = decryptionVerify.ToMetrics();
+            }
         }
 
         // Error outranks Incomplete: a run that threw is not merely partial.
@@ -544,7 +667,9 @@ public sealed class ScenarioRunner
         for (int i = 0; i < _scenario.WarmupBallots; i++)
         {
             // Negative indexes so warmup ballots can never collide with measured ones.
-            throwaway.AddBallot(encryptor.Encrypt(generator.Generate(-(i + 1)), null));
+            var warmupBallot = encryptor.Encrypt(generator.Generate(-(i + 1)), null);
+            warmupBallot.RecordStatus(BallotStatus.Cast);
+            throwaway.AddBallot(warmupBallot);
         }
 
         GC.Collect();
@@ -558,13 +683,16 @@ public sealed class ScenarioRunner
         VotingDeviceInformationHash deviceHash,
         int parallelism,
         bool isChained,
-        ConfirmationCode? chunkStartConfirmationCode)
+        ConfirmationCode? chunkStartConfirmationCode,
+        SelectionEncryptionIdentifierSet selectionEncryptionIdentifiers)
     {
-        // Verification 5 checks that selection encryption identifiers are distinct. Under streaming
-        // the whole set is never in memory at once, so this checks distinctness within the chunk --
-        // recorded here rather than silently passing a one-element list, which checks nothing.
-        new SelectionEncryptionIdentifierVerification()
-            .Verify(chunk.Select(x => x.SelectionEncryptionIdentifier).ToList());
+        // Verification 5.A checks that selection encryption identifiers are distinct across every
+        // submitted ballot. Under streaming the ballots are never all in memory at once, but their
+        // identifiers are: the set carries every earlier chunk's.
+        foreach (var ballot in chunk)
+        {
+            selectionEncryptionIdentifiers.Add(ballot.SelectionEncryptionIdentifier);
+        }
 
         if (isChained)
         {
@@ -618,7 +746,7 @@ public sealed class ScenarioRunner
                     else
                     {
                         new AdherenceToVoteLimitsVerification().Verify(item.Ballot, encryptionRecord);
-                        new ConfirmationCodeVerification().Verify(item.Ballot, deviceHash, encryptionRecord, null);
+                        new ConfirmationCodeVerification().Verify(item.Ballot, encryptionRecord);
                     }
                 });
         }

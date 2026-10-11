@@ -1,4 +1,4 @@
-using ElectionGuard.Core.BallotEncryption;
+﻿using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.Models;
 
 namespace ElectionGuard.Core.PreEncryption;
@@ -15,7 +15,7 @@ public record PreEncryptedBallot
     public required SelectionEncryptionIdentifierHash SelectionEncryptionIdentifierHash { get; init; }
 
     /// <summary>§3.3.4 the ballot nonce encrypted to the other-ballot-data encryption key K-hat.</summary>
-    public required EncryptedData EncryptedBallotNonce { get; init; }
+    public required EncryptedBallotNonce EncryptedBallotNonce { get; init; }
 
     /// <summary>The contests of the ballot style in increasing contest index order.</summary>
     public required List<PreEncryptedContest> Contests { get; init; }
@@ -40,6 +40,7 @@ public record PreEncryptedContest
     public required ContestHash ContestHash { get; init; }
 
     /// <summary>§4.4: the selection hashes as published, sorted numerically.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
     public IReadOnlyList<SelectionHash> SortedSelectionHashes => Selections.Select(s => s.SelectionHash).Order().ToList();
 }
 
@@ -59,6 +60,7 @@ public record PreEncryptedSelection
     /// <summary>The option this vector selects, or null for a null vector.</summary>
     public required string? ChoiceId { get; init; }
 
+    [System.Text.Json.Serialization.JsonIgnore]
     public bool IsNullVote => ChoiceId is null;
 
     public required IReadOnlyList<EncryptedValue> Vector { get; init; }

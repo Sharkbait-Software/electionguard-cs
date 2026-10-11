@@ -16,17 +16,21 @@ public class EncryptionNonceTests
         return new SelectionEncryptionIdentifierHash(new byte[32]);
     }
 
+    // G3: the j-less form H_q(H_I; 0x21, i, xi_B), which the four supplemental counters shared, is
+    // gone; eq. (33) always hashes an option index. Its hand-computed test went with it, replaced by
+    // this check that no constructor without j remains.
     [Fact]
-    public void Constructor_WithoutChoiceIndex_HandComputed_MatchesDirectHashModQCall()
+    public void Constructor_AlwaysTakesAnOptionIndex()
     {
-        var selIdHash = CreateSelIdHash();
-        var ballotNonce = new BallotNonce(new byte[] { 0x01, 0x02, 0x03 });
-        int contestIndex = 4;
+        var constructors = typeof(EncryptionNonce).GetConstructors();
 
-        var nonce = new EncryptionNonce(selIdHash, ballotNonce, contestIndex);
-        var expected = EGHash.HashModQ(selIdHash, new byte[] { 0x21 }, contestIndex.ToByteArray(), ballotNonce);
-
-        Assert.Equal(expected, (IntegerModQ)nonce);
+        Assert.All(constructors, constructor =>
+        {
+            var parameters = constructor.GetParameters();
+            Assert.Equal(4, parameters.Length);
+            Assert.Equal(typeof(int), parameters[3].ParameterType);
+            Assert.False(parameters[3].IsOptional);
+        });
     }
 
     [Fact]
@@ -54,8 +58,8 @@ public class EncryptionNonceTests
         var selIdHash = CreateSelIdHash();
         var ballotNonce = new BallotNonce(new byte[] { 0x01, 0x02, 0x03 });
 
-        var nonce1 = new EncryptionNonce(selIdHash, ballotNonce, 1);
-        var nonce2 = new EncryptionNonce(selIdHash, ballotNonce, 2);
+        var nonce1 = new EncryptionNonce(selIdHash, ballotNonce, 1, 1);
+        var nonce2 = new EncryptionNonce(selIdHash, ballotNonce, 2, 1);
 
         Assert.NotEqual((IntegerModQ)nonce1, (IntegerModQ)nonce2);
     }

@@ -8,16 +8,44 @@ namespace ElectionGuard.Core.BallotEncryption;
 
 public class BallotEncryptor
 {
-    public BallotEncryptor(EncryptionRecord encryptionRecord, string deviceId, VotingDeviceInformationHash deviceHash)
+    /// <param name="encryptionRecord">The election's encryption record.</param>
+    /// <param name="deviceId">S_device, the device the ballots are encrypted on (§3.4.3).</param>
+    /// <param name="deviceHash">H_DI of that device (eq. 72).</param>
+    /// <param name="clock">
+    /// The clock each ballot's <see cref="EncryptedBallot.EncryptionTimestamp"/> is read from (§3.7
+    /// "the date and time of the ballot encryption"); <see cref="TimeProvider.System"/> when null.
+    /// </param>
+    public BallotEncryptor(EncryptionRecord encryptionRecord, string deviceId, VotingDeviceInformationHash deviceHash, TimeProvider? clock = null)
     {
+        ArgumentNullException.ThrowIfNull(encryptionRecord);
+
+        // §3.1.3: every nonce and challenge below hashes the manifest's contest and option indices.
+        encryptionRecord.Manifest.Validate();
+
         _encryptionRecord = encryptionRecord;
         _deviceId = deviceId;
         _deviceHash = deviceHash;
+        _clock = clock ?? TimeProvider.System;
     }
 
     private readonly EncryptionRecord _encryptionRecord;
     private readonly string _deviceId;
     private readonly VotingDeviceInformationHash _deviceHash;
+    private readonly TimeProvider _clock;
+
+    /// <summary>
+    /// Test seam: supplies the Schnorr proof nonce u of a contest's data encryption (eq. 69), given
+    /// its contest index, in place of a fresh random value. Lets the known-answer tests reproduce the
+    /// oracle's C_2. Null outside tests.
+    /// </summary>
+    internal Func<int, IntegerModQ>? ContestDataProofNonceForTesting { get; set; }
+
+    /// <summary>
+    /// Test seam: supplies ξ-hat_B and u_B of the ballot nonce encryption (eqs. 34, 38) in place of
+    /// fresh random values. Lets the known-answer tests reproduce the oracle's C_ξB. Null outside
+    /// tests.
+    /// </summary>
+    internal Func<(IntegerModQ EncryptionNonce, IntegerModQ ProofNonce)>? BallotNonceEncryptionNoncesForTesting { get; set; }
 
     /// <summary>
     /// Opt in to the precomputed power tables of Note 3.5.
@@ -52,21 +80,77 @@ public class BallotEncryptor
             encryptionRecord.ElectionPublicKeys.OtherBallotDataEncryptionKey.ToBigInteger());
     }
 
+    /// <summary>
+    /// Encrypts <paramref name="ballot"/> as the next ballot of the device's <paramref name="chain"/>
+    /// (§3.4.4): it chains from <see cref="DeviceChain.PreviousConfirmationCode"/> and is appended to
+    /// the chain before it is returned. The chain must be this encryptor's device. Under simple
+    /// chaining, calls on one chain must not overlap: each ballot depends on the one before it.
+    /// </summary>
+    public EncryptedBallot EncryptNext(Ballot ballot, DeviceChain chain)
+    {
+        ArgumentNullException.ThrowIfNull(chain);
+        if (!string.Equals(chain.DeviceId, _deviceId, StringComparison.Ordinal) || chain.DeviceInformationHash != _deviceHash)
+        {
+            throw new ArgumentException($"The chain is device {chain.DeviceId}'s; this encryptor encrypts for device {_deviceId} with its own device information hash.", nameof(chain));
+        }
+
+        var encrypted = Encrypt(ballot, chain.PreviousConfirmationCode);
+        chain.Append(encrypted);
+        return encrypted;
+    }
+
+    /// <summary>
+    /// Encrypts <paramref name="ballot"/>. Under simple chaining, <paramref name="previousConfirmationCode"/>
+    /// is the confirmation code of the device's previous ballot, or null for its first ballot (which
+    /// then chains from H_0, eq. 74); under no chaining it is ignored. A <see cref="DeviceChain"/>
+    /// keeps track of it and produces the device's record when the election ends.
+    /// </summary>
     public EncryptedBallot Encrypt(Ballot ballot, ConfirmationCode? previousConfirmationCode)
+    {
+        return Encrypt(
+            ballot,
+            previousConfirmationCode,
+            new SelectionEncryptionIdentifier(ElectionGuardRandom.GetBytes(32)),
+            new BallotNonce(ElectionGuardRandom.GetBytes(32)));
+    }
+
+    /// <summary>
+    /// <see cref="Encrypt(Ballot, ConfirmationCode?)"/> with the selection encryption identifier
+    /// id_B and ballot nonce xi_B given rather than drawn. They determine every ciphertext, contest
+    /// hash and the confirmation code; only the proofs' commitments are still random.
+    /// </summary>
+    internal EncryptedBallot Encrypt(Ballot ballot, ConfirmationCode? previousConfirmationCode, SelectionEncryptionIdentifier selectionEncryptionIdentifier, BallotNonce ballotNonce)
     {
         Validate(ballot);
 
-        var selectionEncryptionIdentifier = new SelectionEncryptionIdentifier(ElectionGuardRandom.GetBytes(32));
         var selectionEncryptionIdentifierHash = new SelectionEncryptionIdentifierHash(_encryptionRecord.ExtendedBaseHash, selectionEncryptionIdentifier);
 
-        var ballotNonce = new BallotNonce(ElectionGuardRandom.GetBytes(32));
-        var encryptedBallotNonce = BallotNonceEncryption.Encrypt(ballotNonce, selectionEncryptionIdentifierHash, _encryptionRecord.ElectionPublicKeys.OtherBallotDataEncryptionKey);
+        // §3.3.4: "every ElectionGuard ballot contains an encryption of the ballot nonce" to K-hat,
+        // which is how a challenged ballot is opened (§3.6.7). It is not hashed into any contest
+        // hash or the confirmation code (eqs. 70, 71).
+        var testNonces = BallotNonceEncryptionNoncesForTesting?.Invoke();
+        var encryptedBallotNonce = BallotNonceEncryption.Encrypt(
+            ballotNonce,
+            selectionEncryptionIdentifierHash,
+            _encryptionRecord.ElectionPublicKeys.OtherBallotDataEncryptionKey,
+            testNonces?.EncryptionNonce,
+            testNonces?.ProofNonce);
 
-        var encryptedContests = new List<EncryptedContest>();
-        List<ContestHash> contestHashes = new List<ContestHash>();
-        foreach(var contest in ballot.Contests)
+        // §3.4.2 eq. (71): the contest hashes enter the confirmation code in the order of the
+        // contests in the manifest, whatever order the plaintext ballot lists them in. The encrypted
+        // ballot lists its contests in that same order. Validate has already checked that the
+        // ballot's contests are distinct and all in the manifest.
+        var encryptedContests = new List<EncryptedContest>(ballot.Contests.Count);
+        List<ContestHash> contestHashes = new List<ContestHash>(ballot.Contests.Count);
+        foreach (var manifestContest in _encryptionRecord.Manifest.Contests)
         {
-            var encryptedContest = EncryptContest(contest, selectionEncryptionIdentifierHash, ballotNonce);
+            var contest = ballot.Contests.SingleOrDefault(x => x.Id == manifestContest.Id);
+            if (contest == null)
+            {
+                continue;
+            }
+
+            var encryptedContest = EncryptContest(contest, manifestContest, selectionEncryptionIdentifierHash, ballotNonce);
             encryptedContests.Add(encryptedContest);
             contestHashes.Add(encryptedContest.ContestHash);
         }
@@ -74,8 +158,13 @@ public class BallotEncryptor
         var chainingField = new ChainingField(_encryptionRecord.Manifest.ChainingMode, _deviceHash, _encryptionRecord.ExtendedBaseHash, previousConfirmationCode);
         var confirmationCode = new ConfirmationCode(selectionEncryptionIdentifierHash, contestHashes, chainingField);
 
+        // §3.7: the record holds "the date and time of the ballot encryption". It is not hashed: eq.
+        // (71) takes only the contest hashes and B_C, and §3.4 leaves the date and time to optional
+        // inputs this library does not use (it could enter S_device, eq. 72, which the manifest
+        // would then have to specify).
         return new EncryptedBallot
         {
+            EncryptionTimestamp = EncryptedBallot.TruncateTimestamp(_clock.GetUtcNow()),
             Id = ballot.Id,
             BallotStyleId = ballot.BallotStyleId,
             DeviceId = _deviceId,
@@ -83,19 +172,27 @@ public class BallotEncryptor
             SelectionEncryptionIdentifierHash = selectionEncryptionIdentifierHash,
             Contests = encryptedContests,
             ConfirmationCode = confirmationCode,
+            ChainingField = chainingField,
+            EncryptedBallotNonce = encryptedBallotNonce,
             Weight = 1,
         };
     }
 
     private void Validate(Ballot ballot)
     {
+        // Each contest appears once
+        if (ballot.Contests.Select(x => x.Id).Distinct().Count() != ballot.Contests.Count)
+        {
+            throw new InvalidBallotException($"Ballot {ballot.Id} lists a contest more than once.");
+        }
+
         // All contests exist in the manifest
         foreach(var contest in ballot.Contests)
         {
             var manifestContest = _encryptionRecord.Manifest.Contests.SingleOrDefault(x => x.Id == contest.Id);
             if(manifestContest == null)
             {
-                throw new Exception($"Contest with id {contest.Id} not found in manifest.");
+                throw new InvalidBallotException($"Contest with id {contest.Id} not found in manifest.");
             }
 
             // All choices exist in the manifest
@@ -106,105 +203,286 @@ public class BallotEncryptor
                 || manifestChoices.Except(choices).Any()
                 || choices.Except(manifestChoices).Any())
             {
-                throw new Exception($"Contest with id {contest.Id} did not provide all choice selections from the manifest.");
+                throw new InvalidBallotException($"Contest with id {contest.Id} did not provide all choice selections from the manifest.");
             }
 
-            // All options for each contest have a selectionValue within the expected limits.
+            // §3.1.3: a selection is a value in {0, 1, ..., R}. A value above R is not refused: it
+            // overvotes the contest (§3.3.5, §3.1.3 p.18 "treated analogously to a contest
+            // overvote"), which EncryptContest neutralizes. A negative value is no selection at all.
             foreach(var choice in contest.Choices)
             {
-                var manifestChoice = manifestContest.Choices.Single(x => x.Id == choice.Id);
-                if(choice.SelectionValue < 0 || choice.SelectionValue > manifestContest.OptionSelectionLimit)
+                if(choice.SelectionValue < 0)
                 {
-                    throw new Exception($"Choice for id {choice.Id} exceeds option selection limit.");
+                    throw new InvalidBallotException($"Choice for id {choice.Id} has negative selection value {choice.SelectionValue}.");
                 }
             }
 
-            // This doesn't work with overvotes
-            // Each contest has an allowed number of selections.
-            //var numberOfSelections = contest.Choices.Where(x => x.SelectionValue > 0).Count();
-            //if(numberOfSelections > manifestContest.SelectionLimit)
-            //{
-            //    throw new Exception($"Contest with id {contest.Id} has selections that exceed the contest selection limit.");
-            //}
+            // §3.3.9 p.39: the write-in count lies between zero and the number of write-in fields
+            // the contest offers.
+            if (contest.NumWriteinsSelected < 0 || contest.NumWriteinsSelected > manifestContest.WriteInFieldCount)
+            {
+                throw new InvalidBallotException($"Contest with id {contest.Id} uses {contest.NumWriteinsSelected} write-in fields; it offers {manifestContest.WriteInFieldCount}.");
+            }
+
+            // §3.3.10: D_Λ is exactly 32·b_Λ bytes, b_Λ from the manifest (user decision Q7). The
+            // library takes the bytes as given and never pads or truncates them.
+            if (contest.ContestData is not null)
+            {
+                if (manifestContest.ContestDataBlocks == 0)
+                {
+                    throw new InvalidBallotException($"Contest with id {contest.Id} has contest data, but the manifest declares none for it (b_Λ = 0).");
+                }
+
+                if (contest.ContestData.Length != manifestContest.ContestDataLength())
+                {
+                    throw new InvalidBallotException($"Contest with id {contest.Id} has {contest.ContestData.Length} bytes of contest data; with b_Λ = {manifestContest.ContestDataBlocks} the field is exactly {manifestContest.ContestDataLength()} bytes (§3.3.10).");
+                }
+            }
         }
 
         // All contests for the given ballot style are specified.
         var ballotStyle = _encryptionRecord.Manifest.BallotStyles.SingleOrDefault(x => x.Id == ballot.BallotStyleId);
         if(ballotStyle == null)
         {
-            throw new Exception($"Could not find ballot style with id {ballot.BallotStyleId} in manifest.");
+            throw new InvalidBallotException($"Could not find ballot style with id {ballot.BallotStyleId} in manifest.");
         }
         var contestIds = ballot.Contests.Select(x => x.Id).ToList();
         if(contestIds.Count != ballotStyle.ContestIds.Count
             || contestIds.Except(ballotStyle.ContestIds).Any()
             || ballotStyle.ContestIds.Except(contestIds).Any())
         {
-            throw new Exception($"Ballot with id {ballot.BallotStyleId} did not specify all contestIds for the ballot style.");
+            throw new InvalidBallotException($"Ballot with id {ballot.BallotStyleId} did not specify all contestIds for the ballot style.");
         }
     }
 
-    private EncryptedContest EncryptContest(BallotContest contest, SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, BallotNonce ballotNonce)
+    /// <summary>
+    /// The value of a supplemental field of <paramref name="kind"/> (§3.3.9), from the contest's
+    /// (neutralized) sum of selections s, its number of write-ins w (user decision Q13: write-ins
+    /// always count toward the limit, exactly like selections) and whether it was overvoted:
+    /// <list type="bullet">
+    /// <item>Overvote indicator: 1 when the contest was overvoted (p.38).</item>
+    /// <item>Null-vote indicator: 1 when s + w = 0 and the contest was not overvoted (p.39 "When all
+    /// the selections are set to zero as a consequence of an overvote, the null vote indicator should
+    /// be set to zero"; Q3, Q13: a write-in-only ballot is not a null vote).</item>
+    /// <item>Undervote indicator: 1 when s + w is below L and the contest was not overvoted (p.38;
+    /// Q11: "if a contest is an overvote, it is not an undervote").</item>
+    /// <item>Undervote difference count u: L - (s + w + L * overvote), with the overvote term only
+    /// when the contest declares the overvote indicator (Q15: s + w + L*overvote + u = L is proved
+    /// exactly). So u = 0 on an overvote when the indicator is declared, and L, the difference to
+    /// the zeroed selections, when it is not: p.38's relation without the term (user decision Q18:
+    /// with no tracked overvote indicator nothing publishes an overvote, so the neutralized contest
+    /// is a blank one).</item>
+    /// <item>Write-in count: the number of write-in fields used, 0 on an overvote (p.39; Q12).</item>
+    /// </list>
+    /// On an overvote s and w are already 0 here.
+    /// </summary>
+    private static int SupplementalValue(SupplementalFieldKind kind, int limit, int sum, int writeIns, bool isOvervote, bool overvoteTracked)
     {
-        var encryptedSelections = new List<EncryptedSelection>();
-        var manifestContest = _encryptionRecord.Manifest.Contests.Single(x => x.Id == contest.Id);
-        var actualSelectionTotal = contest.Choices.Sum(x => x.SelectionValue);
-        var actualCountOfSelections = contest.Choices.Where(x => x.SelectionValue > 0).Count();
+        int total = sum + writeIns;
+        return kind switch
+        {
+            SupplementalFieldKind.OvervoteIndicator => isOvervote ? 1 : 0,
+            SupplementalFieldKind.NullVoteIndicator => !isOvervote && total == 0 ? 1 : 0,
+            SupplementalFieldKind.UndervoteIndicator => !isOvervote && total < limit ? 1 : 0,
+            SupplementalFieldKind.UndervoteDifferenceCount => limit - total - (isOvervote && overvoteTracked ? limit : 0),
+            SupplementalFieldKind.WriteInCount => writeIns,
+            _ => throw new InvalidManifestException($"Supplemental field kind {kind} is not a kind of §3.3.9."),
+        };
+    }
 
-        bool isOvervote = actualSelectionTotal > (manifestContest.SelectionLimit * manifestContest.OptionSelectionLimit);
-        bool isNullVote = contest.Choices.All(x => x.SelectionValue == 0);
-        int numUndervotes = Math.Max(0, manifestContest.SelectionLimit - actualCountOfSelections);
-        int numWriteins = contest.NumWriteinsSelected;
+    private EncryptedContest EncryptContest(BallotContest contest, Contest manifestContest, SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, BallotNonce ballotNonce)
+    {
+        int limit = manifestContest.SelectionLimit;
+        int optionLimit = manifestContest.OptionSelectionLimit;
 
+        // §3.4.1 eq. (70): the selections enter the contest hash in the order of the options in the
+        // manifest, whatever order the plaintext contest lists them in, and the encrypted contest
+        // lists them in that same order. Validate has already checked that the two sets are equal.
+        var choicesInManifestOrder = new BallotChoice[manifestContest.Choices.Count];
+        for (int i = 0; i < choicesInManifestOrder.Length; i++)
+        {
+            choicesInManifestOrder[i] = contest.Choices.Single(x => x.Id == manifestContest.Choices[i].Id);
+        }
 
+        // The total every rule below is about: the selections s plus the write-ins used w, which
+        // always count toward the selection limit (user decision Q13; §3.3.9 p.39 "The number of
+        // write-ins should be incorporated into the proof of meeting the selection limit").
+        // Manifest.Validate makes a contest that offers write-ins declare the write-in count, and
+        // Validate(ballot) allows none where it offers none. Summed in long, so that no plaintext can
+        // wrap it below L.
+        int writeIns = contest.NumWriteinsSelected;
+        long sum = 0;
+        bool anyOptionOverLimit = false;
+        foreach (var choice in choicesInManifestOrder)
+        {
+            sum += choice.SelectionValue;
+            anyOptionOverLimit |= choice.SelectionValue > optionLimit;
+        }
+
+        // §3.3.5 p.31, §3.1.3 pp.17-18, §3.3.9 p.38: the contest is overvoted when the selections and
+        // write-ins exceed the contest selection limit L, or when one option's value exceeds the
+        // option selection limit R. Then every selectable option is encrypted as 0 "to not affect the
+        // election tallies", and the write-in count is 0 too (user decision Q12).
+        bool isOvervote = sum + writeIns > limit || anyOptionOverLimit;
         if (isOvervote)
         {
-            // Overvote. Per spec, we encrypt values of 0.
-            foreach(var choice in contest.Choices)
+            foreach (var choice in choicesInManifestOrder)
             {
                 choice.SelectionValue = 0;
             }
-            actualSelectionTotal = 0;
+
+            writeIns = 0;
+            sum = 0;
         }
-        
-        foreach (var choice in contest.Choices)
+
+        int neutralizedSum = (int)sum;
+        bool overvoteTracked = manifestContest.SupplementalFieldOfKind(SupplementalFieldKind.OvervoteIndicator) is not null;
+
+        // One encryption per selectable option, each with its own nonce xi_{i,j} (eq. 33) and range
+        // proof over 0..R (eqs. 57-61).
+        var encryptedSelections = new List<EncryptedSelection>(manifestContest.Choices.Count);
+        var sumAlpha = new ModPProduct(1);
+        var sumBeta = new ModPProduct(1);
+        IntegerModQ sumNonce = 0;
+        for (int i = 0; i < choicesInManifestOrder.Length; i++)
         {
-            var manifestChoice = manifestContest.Choices.Single(x => x.Id == choice.Id);
-            var encryptedSelection = EncryptSelection(manifestContest, manifestChoice, choice.SelectionValue, selectionEncryptionIdentifierHash, ballotNonce);
+            var manifestChoice = manifestContest.Choices[i];
+            var encryptedSelection = EncryptSelection(manifestContest, manifestChoice, choicesInManifestOrder[i].SelectionValue, selectionEncryptionIdentifierHash, ballotNonce);
             encryptedSelections.Add(encryptedSelection);
+            sumAlpha.Multiply(encryptedSelection.Alpha);
+            sumBeta.Multiply(encryptedSelection.Beta);
+            sumNonce += encryptedSelection.EncryptionNonce!.Value;
         }
 
-        var encryptedAggregate = AggregateChoiceValues(encryptedSelections.Select(x => x.ToEncryptedValue()).ToList());
-        var proofs = GenerateProofs(actualSelectionTotal, manifestContest.SelectionLimit, encryptedAggregate, _encryptionRecord.ElectionPublicKeys, selectionEncryptionIdentifierHash, manifestContest.Index);
-
-        var overVoteCount = EncryptOptionalField(isOvervote ? 1 : 0, 1, manifestContest.Index, selectionEncryptionIdentifierHash, ballotNonce);
-        var nullVoteCount = EncryptOptionalField(isNullVote ? 1 : 0, 1, manifestContest.Index, selectionEncryptionIdentifierHash, ballotNonce);
-        var underVoteCount = EncryptOptionalField(numUndervotes, manifestContest.SelectionLimit, manifestContest.Index, selectionEncryptionIdentifierHash, ballotNonce);
-        var writeInVoteCount = EncryptOptionalField(numWriteins, manifestContest.SelectionLimit, manifestContest.Index, selectionEncryptionIdentifierHash, ballotNonce);
-
-        EncryptedData? encryptedContestData = null;
-        if(contest.ContestData != null)
+        // One encryption per declared supplemental field, in manifest order, under its own option
+        // index (§3.1.3 p.19: "treated like and listed with the option selection fields").
+        var encryptedFields = new List<EncryptedSupplementalField>(manifestContest.SupplementalFields.Count);
+        EncryptedSupplementalField? overvoteField = null;
+        EncryptedSupplementalField? undervoteField = null;
+        EncryptedSupplementalField? undervoteDifferenceField = null;
+        EncryptedSupplementalField? nullVoteField = null;
+        int undervoteValue = 0;
+        int nullVoteValue = 0;
+        int undervoteDifferenceIndex = 0;
+        int nullVoteIndex = 0;
+        foreach (var field in manifestContest.SupplementalFields)
         {
-            encryptedContestData = EncryptContestData(contest.ContestData, manifestContest.Index, selectionEncryptionIdentifierHash, ballotNonce);
+            int value = SupplementalValue(field.Kind, limit, neutralizedSum, writeIns, isOvervote, overvoteTracked);
+            var encryptedField = EncryptSupplementalField(manifestContest, field, value, selectionEncryptionIdentifierHash, ballotNonce);
+            encryptedFields.Add(encryptedField);
+
+            switch (field.Kind)
+            {
+                case SupplementalFieldKind.OvervoteIndicator:
+                    overvoteField = encryptedField;
+                    break;
+                case SupplementalFieldKind.UndervoteIndicator:
+                    undervoteField = encryptedField;
+                    undervoteValue = value;
+                    break;
+                case SupplementalFieldKind.UndervoteDifferenceCount:
+                    undervoteDifferenceField = encryptedField;
+                    undervoteDifferenceIndex = field.Index;
+                    break;
+                case SupplementalFieldKind.NullVoteIndicator:
+                    nullVoteField = encryptedField;
+                    nullVoteValue = value;
+                    nullVoteIndex = field.Index;
+                    break;
+                case SupplementalFieldKind.WriteInCount:
+                    // The write-ins are part of the total s + w.
+                    sumAlpha.Multiply(encryptedField.Alpha);
+                    sumBeta.Multiply(encryptedField.Beta);
+                    sumNonce += encryptedField.EncryptionNonce!.Value;
+                    break;
+            }
         }
 
-        var contestHash = new ContestHash(selectionEncryptionIdentifierHash, 
-            manifestContest.Index, 
-            encryptedSelections,
-            overVoteCount,
-            nullVoteCount,
-            underVoteCount,
-            writeInVoteCount,
+        // The encryption of s + w: the product of the options and the write-in count.
+        int total = neutralizedSum + writeIns;
+        var sumCiphertext = new EncryptedValue
+        {
+            Alpha = sumAlpha.Value,
+            Beta = sumBeta.Value,
+            EncryptionNonce = sumNonce,
+        };
+
+        // The relations of user decision Q15. Each is over the encryption of s + w times the terms
+        // of the fields the contest declares, and only those. L times a field is its ciphertext
+        // raised to L (footnote 42); L is a small public number, so it is raised with a window over
+        // its own bits, never MontgomeryModP.PowModP.
+        //
+        // (1) §3.3.8 eq. (62) and §3.3.9 p.39: the selection-limit proof shows that
+        //     s + w + L*overvote + undervote indicator lies in 0..L.
+        var limitCiphertext = Combine(sumCiphertext, overvoteField, limit, undervoteField, 1);
+        int limitValue = total
+            + (overvoteField is not null && isOvervote ? limit : 0)
+            + (undervoteField is not null ? undervoteValue : 0);
+        var proofs = GenerateProofs(limitValue, 0, limit, limitCiphertext, _encryptionRecord.ElectionPublicKeys, selectionEncryptionIdentifierHash, manifestContest.Index, optionIndex: null);
+
+        // (2) §3.3.9 p.38: s + w + L*overvote + u = L exactly, by the range proof of eqs. (57)-(61)
+        //     over the singleton set {L} (Note 3.4): one commitment (a, b) = (g^r, K^r),
+        //     c = H_q(H_I; 0x24, ind_c, ind_o(u), A, B, a, b) with ind_o(u) the undervote difference
+        //     field's option index, c_L = c and v = r - c * (the nonce of (A, B)). NOT spec-defined:
+        //     §3.3.9 says such proofs "are not described in detail", so this challenge is this
+        //     implementation's own and is not interoperable.
+        ChallengeResponsePair[]? undervoteDifferenceProof = null;
+        if (undervoteDifferenceField is not null)
+        {
+            var relationCiphertext = Combine(sumCiphertext, overvoteField, limit, undervoteDifferenceField, 1);
+            undervoteDifferenceProof = GenerateProofs(limit, limit, limit, relationCiphertext, _encryptionRecord.ElectionPublicKeys, selectionEncryptionIdentifierHash, manifestContest.Index, undervoteDifferenceIndex);
+        }
+
+        // (3) §3.3.9 p.39: "The validity of the encrypted null vote indicator can be enforced just as
+        //     the validity of the encrypted overvote indicator": s + w + L*overvote + L*null lies in
+        //     0..L (the overvote term when that indicator is declared, user decision Q17, so that an
+        //     overvote cannot also claim a null vote; p.39, Q3), by a range proof with
+        //     c = H_q(H_I; 0x24, ind_c, ind_o(null), b(L, 4), A, B, a_0, b_0, ..., a_L, b_L). NOT
+        //     spec-defined either; see AdherenceToVoteLimitsVerification.ComputeNullVoteChallenge.
+        ChallengeResponsePair[]? nullVoteProof = null;
+        if (nullVoteField is not null)
+        {
+            var nullCiphertext = Combine(sumCiphertext, overvoteField, limit, nullVoteField, limit);
+            int nullValue = total
+                + (overvoteField is not null && isOvervote ? limit : 0)
+                + limit * nullVoteValue;
+            nullVoteProof = GenerateProofs(nullValue, 0, limit, nullCiphertext, _encryptionRecord.ElectionPublicKeys, selectionEncryptionIdentifierHash, manifestContest.Index, nullVoteIndex, weight: limit);
+        }
+
+        // §3.3.10: a contest that declares contest data (b_Λ >= 1) carries an encrypted field on every
+        // ballot, 32·b_Λ zero bytes (the empty string's encoding) when the voter gave none, so that
+        // the ballot's shape never shows whether write-in text was entered.
+        EncryptedContestData? encryptedContestData = null;
+        if (manifestContest.ContestDataBlocks > 0)
+        {
+            encryptedContestData = ContestDataEncryption.Encrypt(
+                contest.ContestData ?? new byte[manifestContest.ContestDataLength()],
+                manifestContest.Index,
+                manifestContest.ContestDataBlocks,
+                selectionEncryptionIdentifierHash,
+                ballotNonce,
+                _encryptionRecord.ElectionPublicKeys.OtherBallotDataEncryptionKey,
+                ContestDataProofNonceForTesting?.Invoke(manifestContest.Index));
+        }
+
+        // Eq. (70): every verifiable field in manifest order, the options and then the declared
+        // supplemental fields, and nothing else.
+        var verifiableFields = new List<EncryptedValueWithProofs>(encryptedSelections.Count + encryptedFields.Count);
+        verifiableFields.AddRange(encryptedSelections);
+        verifiableFields.AddRange(encryptedFields);
+        var contestHash = new ContestHash(selectionEncryptionIdentifierHash,
+            manifestContest.Index,
+            verifiableFields,
             encryptedContestData);
 
         var encryptedContest = new EncryptedContest
         {
             Id = contest.Id,
             Choices = encryptedSelections,
+            SupplementalFields = encryptedFields,
             Proofs = proofs,
-            OvervoteCount = overVoteCount,
-            NullvoteCount = nullVoteCount,
-            UndervoteCount = underVoteCount,
-            WriteInVoteCount = writeInVoteCount,
+            UndervoteDifferenceProof = undervoteDifferenceProof,
+            NullVoteProof = nullVoteProof,
             ContestData = encryptedContestData,
             ContestHash = contestHash,
         };
@@ -212,10 +490,62 @@ public class BallotEncryptor
         return encryptedContest;
     }
 
+    /// <summary>
+    /// <paramref name="sum"/> times <paramref name="first"/> raised to <paramref name="firstWeight"/>
+    /// and <paramref name="second"/> raised to <paramref name="secondWeight"/>, with the matching
+    /// nonce. A term whose field the contest does not declare (null) is left out.
+    /// </summary>
+    private static EncryptedValue Combine(
+        EncryptedValue sum,
+        EncryptedSupplementalField? first,
+        int firstWeight,
+        EncryptedSupplementalField? second,
+        int secondWeight)
+    {
+        if (first is null && second is null)
+        {
+            return sum;
+        }
+
+        var alpha = new ModPProduct(sum.Alpha);
+        var beta = new ModPProduct(sum.Beta);
+        IntegerModQ nonce = sum.EncryptionNonce!.Value;
+        MultiplyTerm(first, firstWeight);
+        MultiplyTerm(second, secondWeight);
+
+        return new EncryptedValue
+        {
+            Alpha = alpha.Value,
+            Beta = beta.Value,
+            EncryptionNonce = nonce,
+        };
+
+        void MultiplyTerm(EncryptedSupplementalField? field, int weight)
+        {
+            if (field is null)
+            {
+                return;
+            }
+
+            if (weight == 1)
+            {
+                alpha.Multiply(field.Alpha);
+                beta.Multiply(field.Beta);
+            }
+            else
+            {
+                alpha.MultiplyPower(field.Alpha, weight);
+                beta.MultiplyPower(field.Beta, weight);
+            }
+
+            nonce += weight * field.EncryptionNonce!.Value;
+        }
+    }
+
     private EncryptedSelection EncryptSelection(Contest contest, Choice choice, int selectionValue, SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, BallotNonce ballotNonce)
     {
         var encryptedValue = EncryptContestValue(selectionValue, selectionEncryptionIdentifierHash, ballotNonce, contest.Index, choice.Index);
-        var proofs = GenerateProofs(selectionValue, contest.OptionSelectionLimit, encryptedValue, _encryptionRecord.ElectionPublicKeys, selectionEncryptionIdentifierHash, contest.Index, choice.Index);
+        var proofs = GenerateProofs(selectionValue, 0, contest.OptionSelectionLimit, encryptedValue, _encryptionRecord.ElectionPublicKeys, selectionEncryptionIdentifierHash, contest.Index, choice.Index);
 
         var selection = new EncryptedSelection
         {
@@ -228,17 +558,24 @@ public class BallotEncryptor
 
         // In theory we can decrypt this value with the encryption nonce if we have encrypted it properly.
         // See 3.3.1
-        
+
         return selection;
     }
 
-    private EncryptedValueWithProofs EncryptOptionalField(int selectionValue, int maxValue, int contestIndex, SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, BallotNonce ballotNonce)
+    /// <summary>
+    /// A supplemental field is encrypted exactly as an option is: nonce xi_{i,j} with its own option
+    /// index j (eq. 33), and a range proof over 0..its bound (eqs. 57-61) whose challenge hashes j
+    /// (eq. 59). The bound is 1 for an indicator, L for the undervote difference count and the
+    /// number of write-in fields for the write-in count (§3.3.9; user decision Q2).
+    /// </summary>
+    private EncryptedSupplementalField EncryptSupplementalField(Contest contest, SupplementalField field, int value, SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, BallotNonce ballotNonce)
     {
-        var encryptedValue = EncryptContestValue(selectionValue, selectionEncryptionIdentifierHash, ballotNonce, contestIndex);
-        var proofs = GenerateProofs(selectionValue, maxValue, encryptedValue, _encryptionRecord.ElectionPublicKeys, selectionEncryptionIdentifierHash, contestIndex);
+        var encryptedValue = EncryptContestValue(value, selectionEncryptionIdentifierHash, ballotNonce, contest.Index, field.Index);
+        var proofs = GenerateProofs(value, 0, contest.RangeBound(field), encryptedValue, _encryptionRecord.ElectionPublicKeys, selectionEncryptionIdentifierHash, contest.Index, field.Index);
 
-        return new EncryptedValueWithProofs
+        return new EncryptedSupplementalField
         {
+            FieldId = field.Id,
             Alpha = encryptedValue.Alpha,
             Beta = encryptedValue.Beta,
             EncryptionNonce = encryptedValue.EncryptionNonce,
@@ -246,9 +583,9 @@ public class BallotEncryptor
         };
     }
 
-    private EncryptedValue EncryptContestValue(int valueToEncrypt, SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, BallotNonce ballotNonce, int contestIndex, int? choiceIndex = null)
+    private EncryptedValue EncryptContestValue(int valueToEncrypt, SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, BallotNonce ballotNonce, int contestIndex, int optionIndex)
     {
-        IntegerModQ encryptionNonce = new EncryptionNonce(selectionEncryptionIdentifierHash, ballotNonce, contestIndex, choiceIndex);
+        IntegerModQ encryptionNonce = new EncryptionNonce(selectionEncryptionIdentifierHash, ballotNonce, contestIndex, optionIndex);
         var alpha = MontgomeryModP.PowModP(EGParameters.G, encryptionNonce);
         var beta = MontgomeryModP.PowModP(_encryptionRecord.ElectionPublicKeys.VoteEncryptionKey, encryptionNonce + valueToEncrypt);
         return new EncryptedValue
@@ -259,36 +596,54 @@ public class BallotEncryptor
         };
     }
 
-    private EncryptedValue AggregateChoiceValues(List<EncryptedValue> encryptedSelections)
-    {
-        var alpha = encryptedSelections.Select(x => x.Alpha).Product();
-        var beta = encryptedSelections.Select(x => x.Beta).Product();
-        var aggregateEncryptionNonce = encryptedSelections.Select(x => x.EncryptionNonce!.Value).Sum();
-
-        return new EncryptedValue
-        {
-            Alpha = alpha,
-            Beta = beta,
-            EncryptionNonce = aggregateEncryptionNonce,
-        };
-    }
-
-    private ChallengeResponsePair[] GenerateProofs(
-        int valueToEncrypt, 
-        int selectionLimit,
+    /// <summary>
+    /// The disjunctive Chaum-Pedersen range proof of §3.3.7 (eqs. 57-61) that
+    /// <paramref name="encryptedValue"/> encrypts <paramref name="valueToEncrypt"/>, one of the
+    /// values <paramref name="firstValue"/>..<paramref name="lastValue"/>. The challenge is
+    /// c = H_q(H_I; 0x24, ind_c, [ind_o,] alpha, beta, a_first, b_first, ..., a_last, b_last): eq. (59)
+    /// with an option index, eq. (62) without one (the contest selection-limit proof).
+    /// <paramref name="firstValue"/> is 0 except for the one-value proof of the undervote difference
+    /// relation (Note 3.4). <paramref name="weight"/>, when given, is hashed as b(weight, 4) after the
+    /// option index: the null-vote relation's format.
+    ///
+    /// Also the proof code for a pre-encrypted ballot's combined vectors (§4.3: "generates proofs of
+    /// ballot-correctness as in standard ElectionGuard section 3.3.7"), through
+    /// <see cref="PreEncryption.PreEncryptionPrimitives.ProveCombinedContest(ElectionPublicKeys, Contest, SelectionEncryptionIdentifierHash, IReadOnlyList{EncryptedValue}, IReadOnlyList{int}, ContestHash)"/>.
+    /// <paramref name="proofNoncesForTesting"/>, when given, supplies for the commitment to the
+    /// value <c>firstValue + j</c> its u_j and, for every value but the true one, its simulated
+    /// challenge c_j, in place of fresh random values; the known-answer tests use it to reproduce
+    /// the oracle's proofs. Null outside tests.
+    /// </summary>
+    internal static ChallengeResponsePair[] GenerateProofs(
+        int valueToEncrypt,
+        int firstValue,
+        int lastValue,
         EncryptedValue encryptedValue,
         ElectionPublicKeys electionPublicKeys,
-        SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, 
-        int contestIndex, 
-        int? choiceIndex = null)
+        SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash,
+        int contestIndex,
+        int? optionIndex,
+        int? weight = null,
+        Func<int, (IntegerModQ U, IntegerModQ C)>? proofNoncesForTesting = null)
     {
         List<(IntegerModQ u, IntegerModP a, IntegerModP b, IntegerModQ? cj)> commitments = new();
 
-        for (int i = 0; i <= selectionLimit; i++)
+        for (int i = firstValue; i <= lastValue; i++)
         {
-            var keyPair = KeyPair.GenerateRandom();
-            IntegerModQ u = keyPair.SecretKey;
-            IntegerModP a = keyPair.PublicKey;
+            var testNonces = proofNoncesForTesting?.Invoke(i - firstValue);
+            IntegerModQ u;
+            IntegerModP a;
+            if (testNonces is { } fixedNonces)
+            {
+                u = fixedNonces.U;
+                a = MontgomeryModP.PowModP(EGParameters.G, u);
+            }
+            else
+            {
+                var keyPair = KeyPair.GenerateRandom();
+                u = keyPair.SecretKey;
+                a = keyPair.PublicKey;
+            }
 
             IntegerModP b;
             IntegerModQ? cj = null;
@@ -298,7 +653,7 @@ public class BallotEncryptor
             }
             else
             {
-                cj = ElectionGuardRandom.GetIntegerModQ();
+                cj = testNonces?.C ?? ElectionGuardRandom.GetIntegerModQ();
                 var t = u + (valueToEncrypt - i) * cj.Value;
                 b = MontgomeryModP.PowModP(electionPublicKeys.VoteEncryptionKey, t);
             }
@@ -309,9 +664,14 @@ public class BallotEncryptor
             [0x24],
             contestIndex.ToByteArray()];
 
-        if(choiceIndex != null)
+        if(optionIndex != null)
         {
-            bytesToHash.Add(choiceIndex.Value.ToByteArray());
+            bytesToHash.Add(optionIndex.Value.ToByteArray());
+        }
+
+        if (weight != null)
+        {
+            bytesToHash.Add(weight.Value.ToByteArray());
         }
 
         bytesToHash.AddRange([
@@ -344,82 +704,4 @@ public class BallotEncryptor
             Response = x.response,
         }).ToArray();
     }
-
-    private EncryptedData EncryptContestData(string valueToEncrypt, int contestIndex, SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, BallotNonce ballotNonce)
-    {
-        // 3.3.10
-        var bytes = Encoding.UTF8.GetBytes(valueToEncrypt);
-        var encryptionNonce = EGHash.HashModQ(selectionEncryptionIdentifierHash,
-            [0x25],
-            contestIndex.ToByteArray(),
-            ballotNonce);
-
-        var alpha = MontgomeryModP.PowModP(EGParameters.G, encryptionNonce);
-        var beta = MontgomeryModP.PowModP(_encryptionRecord.ElectionPublicKeys.OtherBallotDataEncryptionKey, encryptionNonce);
-        var secretKey = EGHash.Hash(selectionEncryptionIdentifierHash,
-            [0x26],
-            contestIndex.ToByteArray(),
-            alpha,
-            beta);
-
-        List<byte[]> encryptedBlocks = new();
-
-        for (int i = 0; i <= bytes.Length; i += 32)
-        {
-            int endOfSpan = i + 32;
-            if(endOfSpan > bytes.Length)
-            {
-                endOfSpan = bytes.Length;
-            }
-
-            var di = bytes[i..endOfSpan];
-            
-            // Right pad any remaining bytes.
-            if(di.Length < 32)
-            {
-                var ndi = new byte[32];
-                di.CopyTo(ndi, 0);
-                di = ndi;
-            }
-
-            var ki = EGHash.Hash(secretKey,
-                i.ToByteArray(),
-                Encoding.UTF8.GetBytes("data_enc_keys"),
-                [0x00],
-                Encoding.UTF8.GetBytes("contest_data"),
-                contestIndex.ToByteArray(),
-                (i * 256).ToByteArray());
-
-            var encryptedBlock = di.XOR(ki);
-            encryptedBlocks.Add(encryptedBlock);
-        }
-
-        var c0 = alpha;
-        var c1 = ByteArrayExtensions.Concat(encryptedBlocks.ToArray());
-
-        var proofKeyPair = KeyPair.GenerateRandom();
-        var challenge = EGHash.HashModQ(selectionEncryptionIdentifierHash,
-            [0x27],
-            contestIndex.ToByteArray(),
-            proofKeyPair.PublicKey,
-            c0,
-            c1);
-        var response = proofKeyPair.SecretKey - challenge * encryptionNonce;
-
-        return new EncryptedData
-        {
-            C0 = c0,
-            C1 = c1,
-            Challenge = challenge,
-            Response = response,
-        };
-    }
-}
-
-public class EncryptedData
-{
-    public required byte[] C0 { get; init; }
-    public required byte[] C1 { get; init; }
-    public required IntegerModQ Challenge { get; init; }
-    public required IntegerModQ Response { get; init; }
 }

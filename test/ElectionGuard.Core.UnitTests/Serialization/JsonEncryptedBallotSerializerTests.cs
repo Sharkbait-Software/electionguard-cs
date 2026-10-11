@@ -73,12 +73,10 @@ public class JsonEncryptedBallotSerializerTests
         Assert.Equal(original.BallotStyleId, result.BallotStyleId);
         Assert.Equal(original.DeviceId, result.DeviceId);
         Assert.Equal(original.Weight, result.Weight);
-        // ConfirmationCode is the field that folds the (currently no-op, see
-        // BallotEncryptorTests.Encrypt_SecondBallotOnDevice_ChainingHasNoEffect...) ChainingField
-        // into the ballot -- asserting it here is how this phase covers "ChainingField" per the
-        // plan, since ChainingField itself is a transient input to BallotEncryptor.Encrypt and is
-        // not a stored property of EncryptedBallot.
+        // The confirmation code and, since S8 (G19/G37), the chaining field B_C it was hashed with
+        // (JSON chainingField), which Verification 8.B recomputes it from.
         Assert.Equal(original.ConfirmationCode, result.ConfirmationCode);
+        Assert.Equal(original.ChainingField, result.ChainingField);
         // SelectionEncryptionIdentifierHash is a HashValue subclass with no Equals/GetHashCode
         // override (reference equality only), so it must be compared via its byte[] conversion --
         // matching the existing convention in Models/SelectionEncryptionIdentifierHashTests.cs.
@@ -125,10 +123,10 @@ public class JsonEncryptedBallotSerializerTests
         var originalContest = original.Contests.Single();
         var resultContest = result.Contests.Single();
 
-        AssertEncryptedValueWithProofsEqual(originalContest.OvervoteCount, resultContest.OvervoteCount);
-        AssertEncryptedValueWithProofsEqual(originalContest.NullvoteCount, resultContest.NullvoteCount);
-        AssertEncryptedValueWithProofsEqual(originalContest.UndervoteCount, resultContest.UndervoteCount);
-        AssertEncryptedValueWithProofsEqual(originalContest.WriteInVoteCount, resultContest.WriteInVoteCount);
+        AssertEncryptedValueWithProofsEqual(originalContest.Field(SupplementalFieldKind.OvervoteIndicator), resultContest.Field(SupplementalFieldKind.OvervoteIndicator));
+        AssertEncryptedValueWithProofsEqual(originalContest.Field(SupplementalFieldKind.NullVoteIndicator), resultContest.Field(SupplementalFieldKind.NullVoteIndicator));
+        AssertEncryptedValueWithProofsEqual(originalContest.Field(SupplementalFieldKind.UndervoteDifferenceCount), resultContest.Field(SupplementalFieldKind.UndervoteDifferenceCount));
+        AssertEncryptedValueWithProofsEqual(originalContest.Field(SupplementalFieldKind.WriteInCount), resultContest.Field(SupplementalFieldKind.WriteInCount));
     }
 
     [Fact]
@@ -171,16 +169,16 @@ public class JsonEncryptedBallotSerializerTests
         var original = BuildRichEncryptedBallot();
         var originalContest = original.Contests.Single();
         Assert.NotNull(originalContest.Choices.First().EncryptionNonce);
-        Assert.NotNull(originalContest.OvervoteCount.EncryptionNonce);
+        Assert.NotNull(originalContest.Field(SupplementalFieldKind.OvervoteIndicator).EncryptionNonce);
 
         var result = RoundTrip(original);
 
         var resultContest = result.Contests.Single();
         Assert.All(resultContest.Choices, s => Assert.Null(s.EncryptionNonce));
-        Assert.Null(resultContest.OvervoteCount.EncryptionNonce);
-        Assert.Null(resultContest.NullvoteCount.EncryptionNonce);
-        Assert.Null(resultContest.UndervoteCount.EncryptionNonce);
-        Assert.Null(resultContest.WriteInVoteCount.EncryptionNonce);
+        Assert.Null(resultContest.Field(SupplementalFieldKind.OvervoteIndicator).EncryptionNonce);
+        Assert.Null(resultContest.Field(SupplementalFieldKind.NullVoteIndicator).EncryptionNonce);
+        Assert.Null(resultContest.Field(SupplementalFieldKind.UndervoteDifferenceCount).EncryptionNonce);
+        Assert.Null(resultContest.Field(SupplementalFieldKind.WriteInCount).EncryptionNonce);
     }
 
     [Fact]

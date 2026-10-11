@@ -13,20 +13,27 @@ public class TallyComparerTests
 
         foreach (var group in entries.GroupBy(x => x.ContestId))
         {
+            // TallyComparer reads only the counts. The indices and the proof fields are required
+            // members of the published tally; placeholders do here.
             contests[group.Key] = new DecryptedTally.DecryptedContest
             {
+                ContestIndex = 0,
                 Choices = group.ToDictionary(
                     x => x.ChoiceId,
-                    x => new DecryptedTally.DecryptedChoice { VoteCount = x.Votes }),
+                    x => new DecryptedTally.DecryptedChoice { ChoiceIndex = 0, VoteCount = x.Votes, T = 1, Challenge = 0, Response = 0 }),
             };
         }
 
         return new DecryptedTally { Contests = contests };
     }
 
+    /// <summary>
+    /// The expected tally of a contest that declares no supplemental fields, so only the options
+    /// are compared; <see cref="Compare_ChecksEveryDeclaredSupplementalField"/> covers the fields.
+    /// </summary>
     private static ExpectedTally Expected(params (string ChoiceId, int Votes)[] votes)
     {
-        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest();
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest(supplementalFields: []);
         var accumulator = new ExpectedTallyAccumulator(manifest);
 
         foreach (var (choiceId, count) in votes)
@@ -113,6 +120,50 @@ public class TallyComparerTests
 
         Assert.Equal(CorrectnessStatus.Failed, result.Status);
         Assert.Single(result.Mismatches);
+    }
+
+    /// <summary>
+    /// G29: every supplemental field the manifest declares is decrypted under its label, so the
+    /// comparer checks its total too. One overvoted ballot and one null vote, L = 1.
+    /// </summary>
+    [Fact]
+    public void Compare_ChecksEveryDeclaredSupplementalField()
+    {
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest(includeWriteIns: true);
+        var accumulator = new ExpectedTallyAccumulator(manifest);
+        accumulator.Add(ElectionFixtureBuilder.CreateBallot(manifest, ballotId: "over",
+            selectionValuesByChoiceId: new Dictionary<string, int> { ["choice-1"] = 1, ["choice-2"] = 1 }));
+        accumulator.Add(ElectionFixtureBuilder.CreateBallot(manifest, ballotId: "null"));
+        var expected = accumulator.Build();
+
+        (string, string, int)[] honest =
+        [
+            ("contest-1", "choice-1", 0),
+            ("contest-1", "choice-2", 0),
+            ("contest-1", "overvotes", 1),
+            ("contest-1", "null-votes", 1),
+            // Only the null vote is an undervote: on an overvote the undervote indicator and the
+            // difference count are 0 (user decisions Q11, Q15; S5 had 2 and 2).
+            ("contest-1", "undervotes", 1),
+            ("contest-1", "undervote-difference", 1),
+            ("contest-1", "write-ins", 0),
+        ];
+
+        var passed = TallyComparer.Compare(expected, Decrypted(honest));
+        Assert.Equal(CorrectnessStatus.Passed, passed.Status);
+
+        var wrongField = honest.Select(x => x.Item2 == "null-votes" ? (x.Item1, x.Item2, 2) : x).ToArray();
+        var failed = TallyComparer.Compare(expected, Decrypted(wrongField));
+        Assert.Equal(CorrectnessStatus.Failed, failed.Status);
+        var mismatch = Assert.Single(failed.Mismatches);
+        Assert.Equal("null-votes", mismatch.ChoiceId);
+        Assert.Equal(1, mismatch.Expected);
+        Assert.Equal(2, mismatch.Actual);
+
+        var missingField = honest.Where(x => x.Item2 != "write-ins").ToArray();
+        var missing = Assert.Single(TallyComparer.Compare(expected, Decrypted(missingField)).Mismatches);
+        Assert.Equal("write-ins", missing.ChoiceId);
+        Assert.Equal(-1, missing.Actual);
     }
 
     [Fact]

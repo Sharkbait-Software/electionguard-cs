@@ -12,27 +12,47 @@ public struct ContestHash : IEquatable<ContestHash>
         _value = bytes;
     }
 
-    public ContestHash(
-        SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, 
-        int contestIndex,
-        IEnumerable<EncryptedSelection> encryptedChoices,
-        EncryptedValueWithProofs overVoteCount,
-        EncryptedValueWithProofs nullVoteCount,
-        EncryptedValueWithProofs underVoteCount,
-        EncryptedValueWithProofs writeInVoteCount,
-        EncryptedData? encryptedContestData)
+    /// <summary>
+    /// Strict decoding for a value read from a record: exactly 32 bytes. Throws
+    /// <see cref="Serialization.NonCanonicalEncodingException"/> otherwise; a field missing from a
+    /// document arrives here as null.
+    /// </summary>
+    public static ContestHash FromCanonicalBytes(byte[]? bytes)
     {
-        // chi_l = H(H_I; 0x28, l, alpha_1, beta_1, ..., alpha_m, beta_m, [the overvote, nullvote,
-        // undervote and write-in counters], [C_0, C_1, c, v]). Built in one pooled buffer rather than
-        // as a list of freshly allocated 512-byte arrays; the bytes hashed are the same. Both the
-        // encryptor and Verification 8 come through here.
-        IReadOnlyCollection<EncryptedSelection> choices = encryptedChoices as IReadOnlyCollection<EncryptedSelection>
-            ?? encryptedChoices.ToList();
+        if (bytes is not { Length: EGHash.HashBytes })
+        {
+            throw new Serialization.NonCanonicalEncodingException($"A contest hash is {EGHash.HashBytes} bytes; got {bytes?.Length ?? 0}.");
+        }
 
-        int length = 1 + sizeof(int) + ModPBytes * 2 * (choices.Count + 4);
+        return new ContestHash(bytes.ToArray());
+    }
+
+    /// <summary>
+    /// §3.4.1 eq. (70): chi_l = H(H_I; 0x28, l, alpha_1, beta_1, ..., alpha_ml, beta_ml, C_0, C_1, C_2)
+    /// over the encryptions E_1..E_ml of every verifiable field of the contest "in order specified by
+    /// the election manifest": the selectable options, then the supplemental fields the manifest
+    /// declares (§3.3.9), and no others. <paramref name="verifiableFields"/> is that ordered list; the
+    /// caller puts it in manifest order. With contest data (§3.3.10) B1 continues
+    /// b(C_0, 512) ‖ C_1 ‖ b(C_2, 64), len(B1) = 69 + (2m + 1)·512 + 32·b_Λ (§5.5.3 table, p.76),
+    /// b(C_2, 64) being b(c, 32) ‖ b(v, 32) (the spec writes C_2 = (c, v) and does not spell out
+    /// the split; the KAT oracle uses the same order). C_0, C_1, C_2 are omitted when there is no
+    /// contest data.
+    /// </summary>
+    public ContestHash(
+        SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash,
+        int contestIndex,
+        IEnumerable<EncryptedValueWithProofs> verifiableFields,
+        EncryptedContestData? encryptedContestData)
+    {
+        // Built in one pooled buffer rather than as a list of freshly allocated 512-byte arrays; the
+        // bytes hashed are the same. Both the encryptor and Verification 8 come through here.
+        IReadOnlyCollection<EncryptedValueWithProofs> choices = verifiableFields as IReadOnlyCollection<EncryptedValueWithProofs>
+            ?? verifiableFields.ToList();
+
+        int length = 1 + sizeof(int) + ModPBytes * 2 * choices.Count;
         if (encryptedContestData != null)
         {
-            length += encryptedContestData.C0.Length + encryptedContestData.C1.Length + 2 * ModQBytes;
+            length += ModPBytes + encryptedContestData.C1.Length + 2 * ModQBytes;
         }
 
         byte[] buffer = ArrayPool<byte>.Shared.Rent(length);
@@ -43,23 +63,19 @@ public struct ContestHash : IEquatable<ContestHash>
             BinaryPrimitives.WriteInt32BigEndian(message.Slice(1, sizeof(int)), contestIndex);
             int offset = 1 + sizeof(int);
 
-            foreach (var encryptedSelection in choices)
+            foreach (var encryptedField in choices)
             {
-                WriteCiphertext(message, ref offset, encryptedSelection);
+                WriteCiphertext(message, ref offset, encryptedField);
             }
-            WriteCiphertext(message, ref offset, overVoteCount);
-            WriteCiphertext(message, ref offset, nullVoteCount);
-            WriteCiphertext(message, ref offset, underVoteCount);
-            WriteCiphertext(message, ref offset, writeInVoteCount);
 
             if (encryptedContestData != null)
             {
-                encryptedContestData.C0.CopyTo(message[offset..]);
-                offset += encryptedContestData.C0.Length;
+                encryptedContestData.C0.WriteBigEndian(message.Slice(offset, ModPBytes));
+                offset += ModPBytes;
                 encryptedContestData.C1.CopyTo(message[offset..]);
                 offset += encryptedContestData.C1.Length;
 
-                // These 2 values are called for in the spec but really don't seem like they belong.
+                // b(C_2, 64) = b(c, 32) ‖ b(v, 32).
                 encryptedContestData.Challenge.WriteBigEndian(message.Slice(offset, ModQBytes));
                 offset += ModQBytes;
                 encryptedContestData.Response.WriteBigEndian(message.Slice(offset, ModQBytes));

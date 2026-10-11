@@ -40,7 +40,8 @@ public class CryptographicParameterTests
     {
         var cryptographicParameters = new CryptographicParameters();
 
-        var expected = Convert.FromHexString("000000000000000000000000000000000000000000000000000076322E312E30");
+        // §3.1.2 eq. (4): ver = 0x76322E312E30 || b(0, 26), "v2.1.0" followed by 26 zero bytes.
+        var expected = Convert.FromHexString("76322E312E300000000000000000000000000000000000000000000000000000");
         byte[] actual = cryptographicParameters.Version;
 
         Assert.Equal(32, expected.Length);

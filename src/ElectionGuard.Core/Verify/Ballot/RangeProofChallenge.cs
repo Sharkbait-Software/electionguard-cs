@@ -101,9 +101,27 @@ internal sealed class RangeProofChallenge
         IntegerModP beta,
         ReadOnlySpan<ChallengeResponsePair> proofs)
     {
+        return Compute(key, prefix, alpha, beta, proofs, firstValue: 0);
+    }
+
+    /// <summary>
+    /// <see cref="Compute(byte[], ReadOnlySpan{byte}, IntegerModP, IntegerModP, ReadOnlySpan{ChallengeResponsePair})"/>
+    /// for a proof over the consecutive values firstValue, firstValue + 1, ...: proof j stands for
+    /// the value firstValue + j, so w_j = v_j - (firstValue + j) * c_j. Note 3.4 allows a range proof
+    /// over any small set of values; a single proof with <paramref name="firstValue"/> = L proves
+    /// that (alpha, beta) encrypts exactly L.
+    /// </summary>
+    public IntegerModQ Compute(
+        byte[] key,
+        ReadOnlySpan<byte> prefix,
+        IntegerModP alpha,
+        IntegerModP beta,
+        ReadOnlySpan<ChallengeResponsePair> proofs,
+        int firstValue)
+    {
         return _engine is not null
-            ? Compute(new Avx512MontgomeryArithmetic(_engine), key, prefix, alpha, beta, proofs, checkMembership: false, out _)
-            : Compute(new ScalarMontgomeryArithmetic(_context), key, prefix, alpha, beta, proofs, checkMembership: false, out _);
+            ? Compute(new Avx512MontgomeryArithmetic(_engine), key, prefix, alpha, beta, proofs, firstValue, checkMembership: false, out _)
+            : Compute(new ScalarMontgomeryArithmetic(_context), key, prefix, alpha, beta, proofs, firstValue, checkMembership: false, out _);
     }
 
     /// <summary>
@@ -122,8 +140,8 @@ internal sealed class RangeProofChallenge
         out bool componentsAreMembers)
     {
         return _engine is not null
-            ? Compute(new Avx512MontgomeryArithmetic(_engine), key, prefix, alpha, beta, proofs, checkMembership: true, out componentsAreMembers)
-            : Compute(new ScalarMontgomeryArithmetic(_context), key, prefix, alpha, beta, proofs, checkMembership: true, out componentsAreMembers);
+            ? Compute(new Avx512MontgomeryArithmetic(_engine), key, prefix, alpha, beta, proofs, firstValue: 0, checkMembership: true, out componentsAreMembers)
+            : Compute(new ScalarMontgomeryArithmetic(_context), key, prefix, alpha, beta, proofs, firstValue: 0, checkMembership: true, out componentsAreMembers);
     }
 
     /// <summary>Whether the active q allows the membership-checking overload of Compute.</summary>
@@ -136,6 +154,7 @@ internal sealed class RangeProofChallenge
         IntegerModP alpha,
         IntegerModP beta,
         ReadOnlySpan<ChallengeResponsePair> proofs,
+        int firstValue,
         bool checkMembership,
         out bool componentsAreMembers)
         where TArithmetic : struct, IMontgomeryArithmetic
@@ -210,8 +229,8 @@ internal sealed class RangeProofChallenge
                 arithmetic.WriteBigEndian(product, message.Slice(offset, ModPBytes));
                 offset += ModPBytes;
 
-                // b_j = K^w_j * beta^c_j, w_j = v_j - j * c_j
-                IntegerModQ w = proof.Response - j * proof.Challenge;
+                // b_j = K^w_j * beta^c_j, w_j = v_j - j * c_j (the value of proof j is firstValue + j)
+                IntegerModQ w = proof.Response - (firstValue + j) * proof.Challenge;
                 FixedBasePow(arithmetic, _kTable, kMontgomery, w, exponentBytes, product);
                 arithmetic.Multiply(product, betaPowers.Slice(j * s, s), product);
                 arithmetic.WriteBigEndian(product, message.Slice(offset, ModPBytes));
@@ -299,9 +318,147 @@ internal sealed class RangeProofChallenge
         return (new IntegerModP(arithmetic.FromMontgomery(alpha)), new IntegerModP(arithmetic.FromMontgomery(beta)));
     }
 
+    /// <summary>
+    /// The ciphertexts of a contest's selection-limit relations (Verification 7 with the
+    /// supplemental fields of §3.3.9; user decision Q15), from the encryption of s + w (the product
+    /// of <paramref name="sumTerms"/>, the options and the write-in count) and the declared fields
+    /// (null when not declared), with L = <paramref name="limit"/>:
+    /// <list type="bullet">
+    /// <item>Limit: s + w + L*overvote + undervote indicator (the selection-limit proof).</item>
+    /// <item>Difference: s + w + L*overvote + u, when u is declared (null otherwise).</item>
+    /// <item>NullVote: s + w + L*overvote + L*null, when the null-vote indicator is declared (null
+    /// otherwise; user decision Q17).</item>
+    /// </list>
+    /// Every L*overvote term is present only when the overvote indicator is declared. Computed in
+    /// one Montgomery representation: every input is converted in once, the power of the overvote
+    /// indicator is shared by all three, and each output is converted out once.
+    /// L is public and small, so the powers are short windows over its own bits. With no field
+    /// declared, Limit is <see cref="Aggregate"/> of the terms.
+    /// </summary>
+    public ContestRelationCiphertexts RelationCiphertexts(
+        IReadOnlyList<EncryptedValueWithProofs> sumTerms,
+        EncryptedValueWithProofs? overvote,
+        EncryptedValueWithProofs? undervote,
+        EncryptedValueWithProofs? difference,
+        EncryptedValueWithProofs? nullVote,
+        int limit)
+    {
+        if (overvote is null && undervote is null && difference is null && nullVote is null)
+        {
+            return new ContestRelationCiphertexts(Aggregate(sumTerms), null, null);
+        }
+
+        if (sumTerms.Count == 0)
+        {
+            throw new InvalidOperationException("Sequence contains no elements");
+        }
+
+        return _engine is not null
+            ? RelationCiphertexts(new Avx512MontgomeryArithmetic(_engine), sumTerms, overvote, undervote, difference, nullVote, limit)
+            : RelationCiphertexts(new ScalarMontgomeryArithmetic(_context), sumTerms, overvote, undervote, difference, nullVote, limit);
+    }
+
+    private static ContestRelationCiphertexts RelationCiphertexts<TArithmetic>(
+        TArithmetic arithmetic,
+        IReadOnlyList<EncryptedValueWithProofs> sumTerms,
+        EncryptedValueWithProofs? overvote,
+        EncryptedValueWithProofs? undervote,
+        EncryptedValueWithProofs? difference,
+        EncryptedValueWithProofs? nullVote,
+        int limit)
+        where TArithmetic : struct, IMontgomeryArithmetic
+    {
+        int s = arithmetic.Width;
+        Span<ulong> buffer = s <= MaxStackAllocWidth ? stackalloc ulong[6 * MaxStackAllocWidth] : new ulong[6 * s];
+        Span<ulong> sumAlpha = buffer.Slice(0, s);
+        Span<ulong> sumBeta = buffer.Slice(s, s);
+        Span<ulong> factor = buffer.Slice(2 * s, s);
+        Span<ulong> power = buffer.Slice(3 * s, s);
+        Span<ulong> alpha = buffer.Slice(4 * s, s);
+        Span<ulong> beta = buffer.Slice(5 * s, s);
+
+        // s + w
+        arithmetic.ToMontgomery(sumTerms[0].Alpha.ToBigInteger(), sumAlpha);
+        arithmetic.ToMontgomery(sumTerms[0].Beta.ToBigInteger(), sumBeta);
+        for (int i = 1; i < sumTerms.Count; i++)
+        {
+            arithmetic.ToMontgomery(sumTerms[i].Alpha.ToBigInteger(), factor);
+            arithmetic.Multiply(sumAlpha, factor, sumAlpha);
+            arithmetic.ToMontgomery(sumTerms[i].Beta.ToBigInteger(), factor);
+            arithmetic.Multiply(sumBeta, factor, sumBeta);
+        }
+
+        Span<byte> limitBytes = stackalloc byte[sizeof(int)];
+        BinaryPrimitives.WriteInt32BigEndian(limitBytes, limit);
+        ReadOnlySpan<byte> exponent = limitBytes[Math.Min(BitOperations.LeadingZeroCount((uint)limit) / 8, sizeof(int) - 1)..];
+
+        // s + w + L*overvote, in place in the sum: all three relations carry the term (the
+        // null-vote relation since user decision Q17).
+        if (overvote is not null)
+        {
+            MultiplyPower(arithmetic, sumAlpha, overvote.Alpha, exponent, factor, power, sumAlpha);
+            MultiplyPower(arithmetic, sumBeta, overvote.Beta, exponent, factor, power, sumBeta);
+        }
+
+        (IntegerModP Alpha, IntegerModP Beta)? nullVoteCiphertext = null;
+        if (nullVote is not null)
+        {
+            MultiplyPower(arithmetic, sumAlpha, nullVote.Alpha, exponent, factor, power, alpha);
+            MultiplyPower(arithmetic, sumBeta, nullVote.Beta, exponent, factor, power, beta);
+            nullVoteCiphertext = (new IntegerModP(arithmetic.FromMontgomery(alpha)), new IntegerModP(arithmetic.FromMontgomery(beta)));
+        }
+
+        (IntegerModP Alpha, IntegerModP Beta)? differenceCiphertext = null;
+        if (difference is not null)
+        {
+            arithmetic.ToMontgomery(difference.Alpha.ToBigInteger(), factor);
+            arithmetic.Multiply(sumAlpha, factor, alpha);
+            arithmetic.ToMontgomery(difference.Beta.ToBigInteger(), factor);
+            arithmetic.Multiply(sumBeta, factor, beta);
+            differenceCiphertext = (new IntegerModP(arithmetic.FromMontgomery(alpha)), new IntegerModP(arithmetic.FromMontgomery(beta)));
+        }
+
+        if (undervote is not null)
+        {
+            arithmetic.ToMontgomery(undervote.Alpha.ToBigInteger(), factor);
+            arithmetic.Multiply(sumAlpha, factor, sumAlpha);
+            arithmetic.ToMontgomery(undervote.Beta.ToBigInteger(), factor);
+            arithmetic.Multiply(sumBeta, factor, sumBeta);
+        }
+
+        var limitCiphertext = (new IntegerModP(arithmetic.FromMontgomery(sumAlpha)), new IntegerModP(arithmetic.FromMontgomery(sumBeta)));
+        return new ContestRelationCiphertexts(limitCiphertext, differenceCiphertext, nullVoteCiphertext);
+    }
+
+    /// <summary>result = accumulator * value^exponent, all in Montgomery form; result may alias accumulator.</summary>
+    private static void MultiplyPower<TArithmetic>(
+        TArithmetic arithmetic,
+        ReadOnlySpan<ulong> accumulator,
+        IntegerModP value,
+        ReadOnlySpan<byte> exponentBigEndian,
+        Span<ulong> factor,
+        Span<ulong> power,
+        Span<ulong> result)
+        where TArithmetic : struct, IMontgomeryArithmetic
+    {
+        arithmetic.ToMontgomery(value.ToBigInteger(), factor);
+        arithmetic.PowMontgomeryInto(factor, exponentBigEndian, power);
+        arithmetic.Multiply(accumulator, power, result);
+    }
+
     /// <summary>Writes a 4-byte big-endian integer, as <c>int.ToByteArray()</c> produces.</summary>
     public static void WriteIndex(Span<byte> destination, int index)
     {
         BinaryPrimitives.WriteInt32BigEndian(destination, index);
     }
 }
+
+/// <summary>
+/// The ciphertexts of a contest's selection-limit relations; see
+/// <see cref="RangeProofChallenge.RelationCiphertexts"/>. Difference and NullVote are null when the
+/// contest does not declare the field.
+/// </summary>
+internal readonly record struct ContestRelationCiphertexts(
+    (IntegerModP Alpha, IntegerModP Beta) Limit,
+    (IntegerModP Alpha, IntegerModP Beta)? Difference,
+    (IntegerModP Alpha, IntegerModP Beta)? NullVote);

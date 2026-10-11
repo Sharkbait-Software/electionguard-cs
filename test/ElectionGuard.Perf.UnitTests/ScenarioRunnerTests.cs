@@ -1,3 +1,4 @@
+using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.Models;
 using ElectionGuard.Perf.Cli.Configuration;
 using ElectionGuard.Perf.Cli.Results;
@@ -45,6 +46,31 @@ public class ScenarioRunnerTests
         var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest();
 
         var outcome = new ScenarioRunner(Scenario(), manifest).Run();
+
+        Assert.Equal(CorrectnessStatus.Passed, outcome.Correctness.Status);
+        Assert.Empty(outcome.Correctness.Mismatches);
+    }
+
+    /// <summary>
+    /// S5 (G10, G29): option selection limits above 1, every supplemental field declared and
+    /// write-ins that count toward the limit, verified, tallied and decrypted. The expected tally,
+    /// supplemental totals included, is accumulated by ExpectedTallyAccumulator's own reading of the
+    /// spec, and the generator emits values up to R and options above R, so a disagreement on the
+    /// overvote rule fails the run.
+    /// </summary>
+    [Theory]
+    [InlineData(1, 2)]
+    [InlineData(3, 3)]
+    [InlineData(2, 1)]
+    public void Run_WithEverySupplementalFieldAndOptionLimitsAboveOne_ProducesTheExpectedTally(int selectionLimit, int optionSelectionLimit)
+    {
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest(
+            selectionLimit: selectionLimit,
+            optionSelectionLimit: optionSelectionLimit,
+            supplementalFields: ElectionFixtureBuilder.AllSupplementalFields,
+            writeInFieldCount: 2);
+
+        var outcome = new ScenarioRunner(Scenario(ballotCount: 600, chunkSize: 300, ballotVerification: true, tallyVerification: true), manifest).Run();
 
         Assert.Equal(CorrectnessStatus.Passed, outcome.Correctness.Status);
         Assert.Empty(outcome.Correctness.Mismatches);
@@ -292,6 +318,40 @@ public class ScenarioRunnerTests
     }
 
     /// <summary>
+    /// Verifications 10 (the proof of correct decryption) and 11 (the tally's labels) run after a
+    /// successful decryption when tally verification is on, billed to their own phase: TallyComparer
+    /// checks the counts but cannot see the proof.
+    /// </summary>
+    [Fact]
+    public void Run_RunsVerifications10And11AfterDecryptionWhenTallyVerificationIsRequested()
+    {
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest();
+
+        var outcome = new ScenarioRunner(Scenario(tallyVerification: true), manifest).Run();
+
+        Assert.Equal(CorrectnessStatus.Passed, outcome.Correctness.Status);
+        Assert.Equal("ran", outcome.Notes["decryptionVerification"]);
+        var phase = outcome.Phases[PhaseNames.VerifyDecryption];
+        Assert.True(phase.WallMs > 0);
+        Assert.Equal(8, phase.BallotsProcessed);
+        Assert.False(phase.Aborted);
+        Assert.True(outcome.Phases.ContainsKey(PhaseNames.DecryptTally));
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void Run_OmitsVerifyDecryptionWithoutBothDecryptionAndTallyVerification(bool decrypt, bool tallyVerification)
+    {
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest();
+
+        var outcome = new ScenarioRunner(Scenario(decrypt: decrypt, tallyVerification: tallyVerification), manifest).Run();
+
+        Assert.False(outcome.Phases.ContainsKey(PhaseNames.VerifyDecryption));
+        Assert.False(outcome.Notes.ContainsKey("decryptionVerification"));
+    }
+
+    /// <summary>
     /// Verification 9 streams, so its budget is enforced at chunk boundaries like encryption's: the
     /// first chunk's accumulation exhausts it, the run stops there, and the final comparison never
     /// runs. 0.000000001 minutes is 60 nanoseconds (or rounds to zero), which no accumulation beats.
@@ -364,6 +424,106 @@ public class ScenarioRunnerTests
     }
 
     /// <summary>
+    /// S8 (G37): under simple chaining a ballot hashed with the wrong previous confirmation code is
+    /// rejected even though its own confirmation code is consistent with the chaining field it
+    /// carries (8.B passes): the 6th ballot is re-chained from the 4th ballot's code. The per-ballot
+    /// 8.E check of the serial chained verification catches it, before the device walk runs.
+    /// </summary>
+    [Fact]
+    public void Run_ChainedManifest_FailsABallotChainedFromTheWrongPreviousCode()
+    {
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest(chainingMode: ChainingMode.Simple);
+        var codes = new List<ConfirmationCode>();
+        var runner = new ScenarioRunner(Scenario(ballotCount: 8, chunkSize: 4, ballotVerification: true), manifest)
+        {
+            EncryptedBallotHookForTesting = (index, ballot) =>
+            {
+                codes.Add(ballot.ConfirmationCode);
+                if (index != 5)
+                {
+                    return ballot;
+                }
+
+                var field = ChainingField.FromCanonicalBytes([0, 0, 0, 1, .. (byte[])codes[3]]);
+                return new EncryptedBallot
+                {
+                    Id = ballot.Id,
+                    SelectionEncryptionIdentifier = ballot.SelectionEncryptionIdentifier,
+                    SelectionEncryptionIdentifierHash = ballot.SelectionEncryptionIdentifierHash,
+                    BallotStyleId = ballot.BallotStyleId,
+                    Contests = ballot.Contests,
+                    ConfirmationCode = new ConfirmationCode(ballot.SelectionEncryptionIdentifierHash, ballot.Contests.Select(x => x.ContestHash).ToList(), field),
+                    ChainingField = field,
+                    EncryptedBallotNonce = ballot.EncryptedBallotNonce,
+                    Weight = ballot.Weight,
+                    Status = ballot.Status,
+                    DeviceId = ballot.DeviceId,
+                };
+            },
+        };
+
+        var outcome = runner.Run();
+
+        Assert.Equal(CorrectnessStatus.Error, outcome.Correctness.Status);
+        Assert.Contains("VerificationFailedException", outcome.Notes["error"], StringComparison.Ordinal);
+        Assert.Contains("B_C,j = 0x00000001 || H_(j-1)", outcome.Notes["error"], StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// S8 review round 1: the once-per-device Verification 8 walk runs after the last chunk, over the
+    /// closed device record and every ballot's chain link. Only it checks the record's H_0 (8.F), its
+    /// chain close (8.G) and that it lists exactly the device's ballots (structure), so tampering
+    /// with the record alone fails the run with the walk's own message.
+    /// </summary>
+    [Theory]
+    [InlineData("closing hash", "The closing hash recorded for device")]
+    [InlineData("initial hash", "The initial hash code H_0 recorded for device")]
+    [InlineData("last ballot dropped from the list", "is not in its ordered list of ballots")]
+    public void Run_ChainedManifest_WalksTheClosedDeviceRecord(string variant, string expectedMessage)
+    {
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest(chainingMode: ChainingMode.Simple);
+        var runner = new ScenarioRunner(Scenario(ballotCount: 8, chunkSize: 4, ballotVerification: true), manifest)
+        {
+            DeviceChainRecordHookForTesting = record =>
+            {
+                byte[] hash = ((byte[])record.ClosingHash!.Value).ToArray();
+                hash[0] ^= 0x80;
+                return variant switch
+                {
+                    "closing hash" => record with { ClosingHash = new ConfirmationCode(hash) },
+                    "initial hash" => record with { InitialHash = record.ConfirmationCodes[0] },
+                    _ => record with { ConfirmationCodes = [.. record.ConfirmationCodes.Take(record.ConfirmationCodes.Count - 1)] },
+                };
+            },
+        };
+
+        var outcome = runner.Run();
+
+        Assert.Equal(CorrectnessStatus.Error, outcome.Correctness.Status);
+        Assert.Contains("VerificationFailedException", outcome.Notes["error"], StringComparison.Ordinal);
+        Assert.Contains(expectedMessage, outcome.Notes["error"], StringComparison.Ordinal);
+    }
+
+    /// <summary>An untampered run closes the chain over every ballot and passes the walk.</summary>
+    [Fact]
+    public void Run_ChainedManifest_ClosesTheDeviceChainOverEveryBallot()
+    {
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest(chainingMode: ChainingMode.Simple);
+        DeviceChainRecord? walked = null;
+        var runner = new ScenarioRunner(Scenario(ballotCount: 8, chunkSize: 4, ballotVerification: true), manifest)
+        {
+            DeviceChainRecordHookForTesting = record => walked = record,
+        };
+
+        var outcome = runner.Run();
+
+        Assert.Equal(CorrectnessStatus.Passed, outcome.Correctness.Status);
+        Assert.NotNull(walked);
+        Assert.Equal(8, walked.ConfirmationCodes.Count);
+        Assert.NotNull(walked.ClosingHash);
+    }
+
+    /// <summary>
     /// A failed run is data. An exception out of the measured work used to discard every
     /// measurement taken before it -- no record, no timings, not even the DKG figure, which the
     /// throw cannot possibly have invalidated.
@@ -407,6 +567,53 @@ public class ScenarioRunnerTests
         // excludes them instead of treating a future comparison's zero baseline as real.
         Assert.True(outcome.Phases[PhaseNames.EncryptBallots].Aborted);
         Assert.True(outcome.Phases[PhaseNames.Tally].Aborted);
+    }
+
+    /// <summary>
+    /// G13: Verification 5.A holds across the whole run, not per chunk. The first ballot of the
+    /// second chunk is replaced by the first chunk's first ballot, so the only fault is an id_B that
+    /// repeats one from an earlier chunk. A set of identifiers kept per chunk would pass this run.
+    /// </summary>
+    [Fact]
+    public void Run_FailsVerification5A_WhenALaterChunkRepeatsAnEarlierChunksIdentifier()
+    {
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest();
+        EncryptedBallot? first = null;
+        var runner = new ScenarioRunner(Scenario(ballotCount: 8, chunkSize: 4, ballotVerification: true), manifest)
+        {
+            EncryptedBallotHookForTesting = (index, ballot) =>
+            {
+                first ??= ballot;
+                return index == 4 ? first : ballot;
+            },
+        };
+
+        var outcome = runner.Run();
+
+        Assert.Equal(CorrectnessStatus.Error, outcome.Correctness.Status);
+        Assert.Contains("VerificationFailedException", outcome.Notes["error"], StringComparison.Ordinal);
+        Assert.Contains("Duplicate selection encryption identifier", outcome.Notes["error"], StringComparison.Ordinal);
+    }
+
+    /// <summary>The control for the test above: the same run with the hook leaving every ballot alone passes.</summary>
+    [Fact]
+    public void Run_PassesVerification5A_WhenTheHookChangesNothing()
+    {
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest();
+        var indices = new List<int>();
+        var runner = new ScenarioRunner(Scenario(ballotCount: 8, chunkSize: 4, ballotVerification: true), manifest)
+        {
+            EncryptedBallotHookForTesting = (index, ballot) =>
+            {
+                indices.Add(index);
+                return ballot;
+            },
+        };
+
+        var outcome = runner.Run();
+
+        Assert.Equal(CorrectnessStatus.Passed, outcome.Correctness.Status);
+        Assert.Equal(Enumerable.Range(0, 8), indices);
     }
 
     /// <summary>

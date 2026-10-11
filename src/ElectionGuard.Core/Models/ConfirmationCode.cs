@@ -10,6 +10,21 @@ public struct ConfirmationCode : IEquatable<ConfirmationCode>
         _value = bytes;
     }
 
+    /// <summary>
+    /// Strict decoding for a value read from a record: exactly 32 bytes. Throws
+    /// <see cref="Serialization.NonCanonicalEncodingException"/> otherwise; a field missing from a
+    /// document arrives here as null.
+    /// </summary>
+    public static ConfirmationCode FromCanonicalBytes(byte[]? bytes)
+    {
+        if (bytes is not { Length: EGHash.HashBytes })
+        {
+            throw new Serialization.NonCanonicalEncodingException($"A confirmation code is {EGHash.HashBytes} bytes; got {bytes?.Length ?? 0}.");
+        }
+
+        return new ConfirmationCode(bytes.ToArray());
+    }
+
     public ConfirmationCode(SelectionEncryptionIdentifierHash selectionEncryptionIdentifierHash, IEnumerable<ContestHash> contestHashes, ChainingField? chainingField)
         // §3.4.2 formula (71): HC = H(HI; 0x29, chi_1, ..., chi_mB, BC).
         : this(0x29, selectionEncryptionIdentifierHash, contestHashes, chainingField)
@@ -87,11 +102,23 @@ public struct ConfirmationCode : IEquatable<ConfirmationCode>
 
     public bool Equals(ConfirmationCode other)
     {
-        return _value.SequenceEqual(other._value);
+        return (_value ?? []).AsSpan().SequenceEqual(other._value ?? []);
     }
 
+    /// <summary>
+    /// Over the bytes, consistent with <see cref="Equals(ConfirmationCode)"/>, so that a code decoded
+    /// from a record finds the ballot it names in a dictionary (a device's ordered list references
+    /// its ballots by confirmation code; see <see cref="DeviceChainRecord"/>).
+    /// </summary>
     public override int GetHashCode()
     {
-        return HashCode.Combine(_value);
+        var hash = new HashCode();
+        hash.AddBytes(_value ?? []);
+        return hash.ToHashCode();
+    }
+
+    public override string ToString()
+    {
+        return Convert.ToHexString(_value ?? []);
     }
 }

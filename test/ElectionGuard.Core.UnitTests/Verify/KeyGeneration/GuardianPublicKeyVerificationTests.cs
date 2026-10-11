@@ -144,10 +144,132 @@ public class GuardianPublicKeyVerificationTests
         Assert.Equal("2.C", exception.SubSection);
     }
 
-    // Note: 2.B (GuardianPublicKeyVerification.cs lines 71-74) is an empty loop body in the
-    // current implementation -- it is a documented no-op ("Because all objects are already
-    // IntegerModQ, this is already true for the time being."). There is no reachable failure
-    // condition for it, so per the test plan we intentionally do not fabricate a failure case.
+    // 2.B: since S2 (audit G14) it requires exactly k + 1 responses per proof; see the
+    // response-count tests below. That each response is in Z_q holds by construction (IntegerModQ
+    // reduces), so that half has no reachable failure; strict parsing is audit G23 (stage S3).
+
+    [Fact]
+    public void Verify_ExtraVoteEncryptionCommitment_Throws_SubSection2A()
+    {
+        // G14: an extra, valid-looking commitment K_{i,k} is covered by no proof and would raise the
+        // degree of the guardian's polynomial, and with it the decryption threshold.
+        var guardianSet = ElectionFixtureBuilder.CreateGuardianSet();
+        var original = guardianSet.GuardianPublicViews[0];
+        var extra = IntegerModP.PowModP(EGParameters.G, new System.Numerics.BigInteger(5));
+        var tampered = Clone(original, voteEncryptionCommitments: [.. original.VoteEncryptionCommitments, extra]);
+
+        var exception = Assert.Throws<VerificationFailedException>(() => new GuardianPublicKeyVerification().Verify(tampered));
+
+        Assert.Equal("2.A", exception.SubSection);
+    }
+
+    [Fact]
+    public void Verify_ExtraOtherBallotDataCommitment_Throws_SubSection2A()
+    {
+        var guardianSet = ElectionFixtureBuilder.CreateGuardianSet();
+        var original = guardianSet.GuardianPublicViews[0];
+        var extra = IntegerModP.PowModP(EGParameters.G, new System.Numerics.BigInteger(5));
+        var tampered = Clone(original, otherBallotDataEncryptionCommitments: [.. original.OtherBallotDataEncryptionCommitments, extra]);
+
+        var exception = Assert.Throws<VerificationFailedException>(() => new GuardianPublicKeyVerification().Verify(tampered));
+
+        Assert.Equal("2.A", exception.SubSection);
+    }
+
+    [Fact]
+    public void Verify_TooFewCommitments_Throws_SubSection2A_NotIndexOutOfRange()
+    {
+        var guardianSet = ElectionFixtureBuilder.CreateGuardianSet();
+        var original = guardianSet.GuardianPublicViews[0];
+        var tampered = Clone(original, voteEncryptionCommitments: original.VoteEncryptionCommitments.Take(1).ToList());
+
+        var exception = Assert.Throws<VerificationFailedException>(() => new GuardianPublicKeyVerification().Verify(tampered));
+
+        Assert.Equal("2.A", exception.SubSection);
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(1)]
+    public void Verify_WrongNumberOfVoteEncryptionResponses_Throws_SubSection2B(int delta)
+    {
+        var guardianSet = ElectionFixtureBuilder.CreateGuardianSet();
+        var original = guardianSet.GuardianPublicViews[0];
+        var responses = original.VoteEncryptionProof.Responses;
+        var resized = delta < 0 ? responses[..^1] : [.. responses, responses[0]];
+        var tampered = Clone(original, voteEncryptionProof: original.VoteEncryptionProof with { Responses = resized });
+
+        var exception = Assert.Throws<VerificationFailedException>(() => new GuardianPublicKeyVerification().Verify(tampered));
+
+        Assert.Equal("2.B", exception.SubSection);
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(1)]
+    public void Verify_WrongNumberOfOtherDataEncryptionResponses_Throws_SubSection2B(int delta)
+    {
+        var guardianSet = ElectionFixtureBuilder.CreateGuardianSet();
+        var original = guardianSet.GuardianPublicViews[0];
+        var responses = original.OtherDataEncryptionProof.Responses;
+        var resized = delta < 0 ? responses[..^1] : [.. responses, responses[0]];
+        var tampered = Clone(original, otherDataEncryptionProof: original.OtherDataEncryptionProof with { Responses = resized });
+
+        var exception = Assert.Throws<VerificationFailedException>(() => new GuardianPublicKeyVerification().Verify(tampered));
+
+        Assert.Equal("2.B", exception.SubSection);
+    }
+
+    [Fact]
+    public void Verify_GuardianSetMissingAGuardian_Throws_SubSection2A()
+    {
+        // G25: "for each guardian G_i, 1 <= i <= n". A ceremony run with fewer guardians than H_P
+        // claims must not pass.
+        var guardianSet = ElectionFixtureBuilder.CreateGuardianSet();
+
+        var exception = Assert.Throws<VerificationFailedException>(() => new GuardianPublicKeyVerification().Verify(guardianSet.GuardianPublicViews.Take(2)));
+
+        Assert.Equal("2.A", exception.SubSection);
+    }
+
+    [Fact]
+    public void Verify_GuardianSetWithADuplicatedGuardian_Throws_SubSection2A()
+    {
+        var guardianSet = ElectionFixtureBuilder.CreateGuardianSet();
+        var views = guardianSet.GuardianPublicViews;
+
+        var exception = Assert.Throws<VerificationFailedException>(() => new GuardianPublicKeyVerification().Verify([views[0], views[1], views[1]]));
+
+        Assert.Equal("2.A", exception.SubSection);
+    }
+
+    [Fact]
+    public void Verify_GuardianSetWithAnIndexAboveN_Throws_SubSection2A()
+    {
+        var guardianSet = ElectionFixtureBuilder.CreateGuardianSet();
+        var views = guardianSet.GuardianPublicViews;
+        var renumbered = new GuardianPublicView
+        {
+            Index = new GuardianIndex(4),
+            VoteEncryptionCommitments = views[2].VoteEncryptionCommitments,
+            OtherBallotDataEncryptionCommitments = views[2].OtherBallotDataEncryptionCommitments,
+            CommunicationPublicKey = views[2].CommunicationPublicKey,
+            VoteEncryptionProof = views[2].VoteEncryptionProof,
+            OtherDataEncryptionProof = views[2].OtherDataEncryptionProof,
+        };
+
+        var exception = Assert.Throws<VerificationFailedException>(() => new GuardianPublicKeyVerification().Verify([views[0], views[1], renumbered]));
+
+        Assert.Equal("2.A", exception.SubSection);
+    }
+
+    [Fact]
+    public void Verify_EmptyGuardianSet_Throws_SubSection2A()
+    {
+        var exception = Assert.Throws<VerificationFailedException>(() => new GuardianPublicKeyVerification().Verify(new List<GuardianPublicView>()));
+
+        Assert.Equal("2.A", exception.SubSection);
+    }
 
     [Fact]
     public void Verify_LastVoteEncryptionCommitmentNotInSubgroup_Throws_SubSection2A()

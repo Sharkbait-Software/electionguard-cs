@@ -2,6 +2,7 @@ using ElectionGuard.Core.Models;
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 
 namespace ElectionGuard.Core.Crypto;
 
@@ -148,7 +149,14 @@ public static class SubgroupMembership
     /// Generic over the arithmetic (<see cref="IMontgomeryArithmetic"/>), with a struct constraint, so
     /// that the JIT compiles one copy per representation with the multiplications called directly
     /// rather than through an interface.
+    ///
+    /// AggressiveOptimization here and on the Jacobi helpers: Verification 7.A runs this once per
+    /// ballot, and a run of a few thousand ballots is too short for tiered compilation to promote
+    /// these loops past unoptimized code. Measured on smoke (1,000 ballots, 32 threads),
+    /// VerifyBallots took 0.76 ms/ballot without it and 0.47 ms/ballot with it; on xsmall the two
+    /// agree.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     private static bool BatchTest<TArithmetic>(IReadOnlyList<IntegerModP> values, TArithmetic arithmetic)
         where TArithmetic : struct, IMontgomeryArithmetic
     {
@@ -389,6 +397,7 @@ public static class SubgroupMembership
     /// not reached 1 within a budget far above the step counts seen in practice; it will also never
     /// reach 1 when gcd(x, y) > 1, which cannot happen for y = p and 0 &lt; x &lt; p.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     internal static bool TryJacobiDivsteps(ReadOnlySpan<ulong> x, ReadOnlySpan<ulong> y, out int symbol)
     {
         int lengthX = SignificantLimbs(x, x.Length);
@@ -462,6 +471,7 @@ public static class SubgroupMembership
     /// The matrix entries never exceed 2^62 and are all non-negative, because the positive variant
     /// only adds, shifts and swaps.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     private static long PosDivsteps62(long eta, ulong f0, ulong g0, out Transition transition, ref int jac)
     {
         ulong u = 1, v = 0, q = 0, r = 1;
@@ -533,6 +543,7 @@ public static class SubgroupMembership
     /// that both numerators are divisible by 2^62 exactly, and the positive variant guarantees
     /// neither result exceeds max(f, g), so both fit back in <paramref name="length"/> limbs.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     private static void ApplyTransition(Span<ulong> f, Span<ulong> g, int length, Transition t, Span<ulong> wideF, Span<ulong> wideG)
     {
         // Each product is below 2^62 * 2^64, so two of them plus a carry fit in a UInt128.

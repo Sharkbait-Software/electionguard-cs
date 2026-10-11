@@ -4,31 +4,54 @@ using ElectionGuard.Core.Models;
 namespace ElectionGuard.Testing.Common;
 
 /// <summary>
-/// The overvote/nullvote/undervote/write-in counters BallotEncryptor.EncryptContest embeds in a
-/// single contest of a single ballot, accumulated across every ballot contributing to an
-/// ExpectedTally.
+/// The totals of a contest's supplemental verifiable fields (§3.3.9) over every ballot contributing
+/// to an <see cref="ExpectedTally"/>, whether or not the contest declares the field (see
+/// <see cref="ExpectedTallyAccumulator"/> for the rules):
+/// <list type="bullet">
+/// <item><see cref="Overvotes"/>: ballots whose contest was overvoted.</item>
+/// <item><see cref="Nullvotes"/>: ballots with no selection and no write-in in the contest,
+/// overvotes excluded.</item>
+/// <item><see cref="Undervotes"/>: ballots whose selections and write-ins were below the selection
+/// limit, overvotes excluded.</item>
+/// <item><see cref="UndervoteDifference"/>: the sum over ballots of the undervote difference
+/// count.</item>
+/// <item><see cref="WriteIns"/>: write-in fields used, overvoted contests excluded.</item>
+/// </list>
 /// </summary>
-public sealed record ContestCounters(int Overvotes, int Nullvotes, int Undervotes, int WriteIns);
+public sealed record ContestCounters(int Overvotes, int Nullvotes, int Undervotes, int UndervoteDifference, int WriteIns)
+{
+    /// <summary>The total a field of <paramref name="kind"/> should decrypt to.</summary>
+    public int Get(SupplementalFieldKind kind) => kind switch
+    {
+        SupplementalFieldKind.OvervoteIndicator => Overvotes,
+        SupplementalFieldKind.NullVoteIndicator => Nullvotes,
+        SupplementalFieldKind.UndervoteIndicator => Undervotes,
+        SupplementalFieldKind.UndervoteDifferenceCount => UndervoteDifference,
+        SupplementalFieldKind.WriteInCount => WriteIns,
+        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
+    };
+}
 
 /// <summary>
-/// The per-choice vote counts a correct decryption of the encrypted tally must produce, plus the
-/// per-contest overvote/nullvote/undervote/write-in counters BallotEncryptor.EncryptContest embeds
-/// in each ballot. The vote counts are shaped to match DecryptedTally, which carries per-choice
-/// VoteCount and nothing else; the counters have no analogue to check against because
-/// EncryptedTally never aggregates them, so they document the generated corpus rather than verify
-/// it (see TallyComparer, which intentionally does not compare them).
+/// The per-option vote counts a correct decryption of the encrypted tally must produce, and the
+/// totals of each contest's supplemental fields (§3.3.9). Every supplemental field a contest
+/// declares is aggregated and decrypted like an option, so TallyComparer checks those totals too,
+/// under the field's label (<see cref="SupplementalFieldIds"/>).
 /// </summary>
 public sealed class ExpectedTally
 {
     private readonly Dictionary<string, Dictionary<string, int>> _votes;
     private readonly Dictionary<string, ContestCounters> _counters;
+    private readonly Dictionary<string, IReadOnlyList<(string FieldId, SupplementalFieldKind Kind)>> _fields;
 
     internal ExpectedTally(
         Dictionary<string, Dictionary<string, int>> votes,
-        Dictionary<string, ContestCounters> counters)
+        Dictionary<string, ContestCounters> counters,
+        Dictionary<string, IReadOnlyList<(string FieldId, SupplementalFieldKind Kind)>> fields)
     {
         _votes = votes;
         _counters = counters;
+        _fields = fields;
     }
 
     public IReadOnlyCollection<string> ContestIds => _votes.Keys;
@@ -42,20 +65,52 @@ public sealed class ExpectedTally
     public int GetVotes(string contestId, string choiceId) => _votes[contestId][choiceId];
 
     /// <summary>
-    /// The expected overvote/nullvote/undervote/write-in counters for a contest. Throws
+    /// The expected supplemental-field totals for a contest. Throws
     /// <see cref="KeyNotFoundException"/> for a contest not in the manifest.
     /// </summary>
     public ContestCounters GetCounters(string contestId) => _counters[contestId];
+
+    /// <summary>
+    /// The supplemental fields the manifest declares for the contest, by label and kind, in manifest
+    /// order. A decrypted tally holds a count for each.
+    /// </summary>
+    public IReadOnlyList<(string FieldId, SupplementalFieldKind Kind)> SupplementalFieldIds(string contestId) => _fields[contestId];
 }
 
 /// <summary>
 /// Accumulates the expected tally from plaintext ballots.
 ///
+/// The overvote rule and the supplemental-field values are derived here from the spec text and the
+/// user's S5 follow-up decisions as recorded in docs/spec-compliance/2026-10-04-fix-progress.md
+/// (Q11-Q16), not from BallotEncryptor's code, so that egperf's correctness gate is an independent
+/// check. With s the sum of the voter's selections, w the number of write-ins used and L the
+/// contest selection limit:
+/// <list type="bullet">
+/// <item>§3.1.3 p.17: a selection is a value in {0, ..., R}; L is "the maximal total value for the
+/// sum of all selections made in that contest".</item>
+/// <item>Q13: "Any write in should count towards the limit", "exactly like selections". The total
+/// every rule is judged on is s + w.</item>
+/// <item>§3.3.5 p.31: "When the number of selections made by the voter exceeds the contest selection
+/// limit or when the selection assigned to a single option in a contest exceeds its option
+/// selection limit, the votes in the contest become invalid as an overvote. To not affect the
+/// election tallies, all selectable options in the contest are set to zero." So: overvoted when
+/// s + w &gt; L or some option &gt; R.</item>
+/// <item>"Resulting values on an overvote: options 0, write-in count 0, overvote 1, undervote
+/// indicator 0, undervote difference 0, null 0" (Q11, Q12, Q3). The undervote difference count is
+/// 0 because Q15 proves "s + w + L·overvote + u = L"; a contest that does not track the overvote
+/// indicator has no such term (Q14: an untracked field "doesn't matter at all and presumably isn't
+/// included"), and there the relation gives u = L (user decision Q18: with no tracked overvote
+/// indicator nothing publishes an overvote, so the neutralized contest is a blank one).</item>
+/// <item>"On a null vote (s + w = 0, no overvote): undervote indicator 1, difference L, null 1."
+/// Otherwise (no overvote): undervote indicator 1 iff s + w &lt; L (§3.3.9 p.38 "strictly less
+/// than the contest selection limit"), difference L - (s + w), null 0 (Q13: "A ballot that uses a
+/// write-in is not a null vote").</item>
+/// </list>
+///
 /// IMPORTANT: Add(ballot) must be called BEFORE the ballot is encrypted.
 /// BallotEncryptor.EncryptContest mutates the ballot in place when it detects an overvote, zeroing
-/// every SelectionValue, so a ballot accumulated after encryption contributes zeros for a contest
-/// that should have contributed zeros anyway -- and contributes correctly for every other contest
-/// purely by luck. Relying on that is how a real mismatch gets masked.
+/// every SelectionValue, so a ballot accumulated afterwards would look like a null vote rather than
+/// an overvote.
 ///
 /// Not thread-safe. Accumulate a generated chunk serially before handing it to the encryptor.
 /// </summary>
@@ -73,47 +128,54 @@ public sealed class ExpectedTallyAccumulator
             contest => contest.Choices.ToDictionary(choice => choice.Id, _ => 0));
         _counters = manifest.Contests.ToDictionary(
             contest => contest.Id,
-            _ => new ContestCounters(0, 0, 0, 0));
+            _ => new ContestCounters(0, 0, 0, 0, 0));
     }
 
     public void Add(Ballot ballot)
     {
         foreach (var ballotContest in ballot.Contests)
         {
-            var manifestContest = _contestsById[ballotContest.Id];
+            var contest = _contestsById[ballotContest.Id];
+            int contestLimit = contest.SelectionLimit;      // L
+            int optionLimit = contest.OptionSelectionLimit; // R
 
-            var selectionTotal = ballotContest.Choices.Sum(choice => choice.SelectionValue);
-            var countOfSelections = ballotContest.Choices.Count(choice => choice.SelectionValue > 0);
+            long selections = ballotContest.Choices.Sum(choice => (long)choice.SelectionValue); // s
+            int writeIns = ballotContest.NumWriteinsSelected;                                    // w
+            bool someOptionAboveItsLimit = ballotContest.Choices.Any(choice => choice.SelectionValue > optionLimit);
+            bool overvoted = selections + writeIns > contestLimit || someOptionAboveItsLimit;
 
-            // Mirrors BallotEncryptor.EncryptContest's four flags EXACTLY, and in the same order:
-            // isOvervote, isNullVote, numUndervotes and numWriteIns are all computed from the
-            // ballot's ORIGINAL selection values, before the encryptor (or this accumulator) does
-            // anything about an overvote. The encryptor only zeroes SelectionValue -- and only
-            // after computing all four -- so isNullVote/numUndervotes must never be derived from
-            // post-zeroing values, or a contest that is both an overvote and would (pre-zeroing)
-            // have been a null/undervote reports the wrong counters. This re-derives the rule
-            // rather than calling into BallotEncryptor, deliberately: the expected tally is meant
-            // to be an independent check, not a circular one.
-            bool isOvervote = selectionTotal > manifestContest.SelectionLimit * manifestContest.OptionSelectionLimit;
-            bool isNullVote = ballotContest.Choices.All(choice => choice.SelectionValue == 0);
-            int numUndervotes = Math.Max(0, manifestContest.SelectionLimit - countOfSelections);
-            int numWriteIns = ballotContest.NumWriteinsSelected;
-
-            var currentCounters = _counters[ballotContest.Id];
-            _counters[ballotContest.Id] = currentCounters with
+            int overvotes, nullvotes, undervotes, undervoteDifference, writeInsCounted;
+            if (overvoted)
             {
-                Overvotes = currentCounters.Overvotes + (isOvervote ? 1 : 0),
-                Nullvotes = currentCounters.Nullvotes + (isNullVote ? 1 : 0),
-                Undervotes = currentCounters.Undervotes + numUndervotes,
-                WriteIns = currentCounters.WriteIns + numWriteIns,
+                bool overvoteTracked = contest.SupplementalFields.Any(field => field.Kind == SupplementalFieldKind.OvervoteIndicator);
+                overvotes = 1;
+                nullvotes = 0;
+                undervotes = 0;
+                undervoteDifference = overvoteTracked ? 0 : contestLimit;
+                writeInsCounted = 0;
+            }
+            else
+            {
+                int total = (int)selections + writeIns;
+                overvotes = 0;
+                nullvotes = total == 0 ? 1 : 0;
+                undervotes = total < contestLimit ? 1 : 0;
+                undervoteDifference = contestLimit - total;
+                writeInsCounted = writeIns;
+            }
+
+            var current = _counters[ballotContest.Id];
+            _counters[ballotContest.Id] = current with
+            {
+                Overvotes = current.Overvotes + overvotes,
+                Nullvotes = current.Nullvotes + nullvotes,
+                Undervotes = current.Undervotes + undervotes,
+                UndervoteDifference = current.UndervoteDifference + undervoteDifference,
+                WriteIns = current.WriteIns + writeInsCounted,
             };
 
-            // Mirrors BallotEncryptor.EncryptContest: an overvote is a selection total exceeding
-            // SelectionLimit * OptionSelectionLimit, and the encryptor responds by encrypting a
-            // zero for every choice in the contest. So the contest contributes nothing to the
-            // per-choice vote counts (the counters above were already recorded, matching the
-            // encryptor, which computes them before zeroing anything).
-            if (isOvervote)
+            // What the tally sees: nothing at all from an overvoted contest.
+            if (overvoted)
             {
                 continue;
             }
@@ -131,5 +193,10 @@ public sealed class ExpectedTallyAccumulator
             _votes.ToDictionary(
                 contest => contest.Key,
                 contest => contest.Value.ToDictionary(choice => choice.Key, choice => choice.Value)),
-            new Dictionary<string, ContestCounters>(_counters));
+            new Dictionary<string, ContestCounters>(_counters),
+            _contestsById.ToDictionary(
+                contest => contest.Key,
+                contest => (IReadOnlyList<(string FieldId, SupplementalFieldKind Kind)>)contest.Value.SupplementalFields
+                    .Select(field => (field.Id, field.Kind))
+                    .ToList()));
 }

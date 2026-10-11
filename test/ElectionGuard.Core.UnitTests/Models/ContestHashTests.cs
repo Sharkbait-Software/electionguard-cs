@@ -34,16 +34,14 @@ public class ContestHashTests
         return (encryptedBallot.Contests[0], encryptedBallot.SelectionEncryptionIdentifierHash, manifest.Contests[0].Index);
     }
 
-    private static ContestHash BuildHash(EncryptedContest contest, SelectionEncryptionIdentifierHash selIdHash, int contestIndex, EncryptedData? contestData)
+    private static ContestHash BuildHash(EncryptedContest contest, SelectionEncryptionIdentifierHash selIdHash, int contestIndex, EncryptedContestData? contestData)
     {
         return new ContestHash(
             selIdHash,
             contestIndex,
-            contest.Choices,
-            contest.OvervoteCount,
-            contest.NullvoteCount,
-            contest.UndervoteCount,
-            contest.WriteInVoteCount,
+            // Eq. (70): the options, then the supplemental fields the manifest declares, in manifest
+            // order (G8). The encryptor lists both in that order.
+            contest.Choices.Concat<EncryptedValueWithProofs>(contest.SupplementalFields),
             contestData);
     }
 
@@ -110,17 +108,10 @@ public class ContestHashTests
     // VotingDeviceInformationHash, EncryptionNonce, ConfirmationCode), ContestHashTests had no
     // "HandComputed_MatchesDirectEGHashCall" test pinning the exact field order/marker byte fed
     // into EGHash.Hash. These two fixture-based tests reproduce the full field ordering (marker
-    // 0x28, contest index, per-choice alpha/beta pairs, then overvote/nullvote/undervote/write-in
-    // alpha/beta pairs, and -- when present -- contest data C0/C1/Challenge/Response).
-    //
-    // Note: against ElectionFixtureBuilder's default single-selection ballot, a same-source-order
-    // swap between OvervoteCount and NullvoteCount specifically does NOT fail these two tests --
-    // both fields encrypt plaintext 0 via EncryptContestValue(0, ..., contestIndex, choiceIndex:
-    // null), and since EncryptionNonce depends only on (selIdHash, ballotNonce, contestIndex,
-    // choiceIndex) with no per-field-type marker, identical (value, nonce) inputs produce
-    // byte-identical Alpha/Beta ciphertexts for both fields in that scenario. See
-    // FullCtor_HandComputed_WithDistinctFieldValues_MatchesExactFieldOrder below, which uses
-    // directly-constructed (non-colliding) field values specifically to close that gap.
+    // 0x28, contest index, per-choice alpha/beta pairs, then the declared supplemental fields'
+    // alpha/beta pairs in manifest order, and -- when present -- contest data
+    // C0/C1/Challenge/Response). Each supplemental field now has its own nonce xi_{i,j} (G3), so
+    // no two of them share a ciphertext. The KAT's contest_hash family pins the digest itself.
     [Fact]
     public void FullCtor_WithoutContestData_HandComputed_MatchesDirectEGHashCall()
     {
@@ -134,14 +125,11 @@ public class ContestHashTests
             bytesToHash.Add(choice.Alpha);
             bytesToHash.Add(choice.Beta);
         }
-        bytesToHash.Add(contest.OvervoteCount.Alpha);
-        bytesToHash.Add(contest.OvervoteCount.Beta);
-        bytesToHash.Add(contest.NullvoteCount.Alpha);
-        bytesToHash.Add(contest.NullvoteCount.Beta);
-        bytesToHash.Add(contest.UndervoteCount.Alpha);
-        bytesToHash.Add(contest.UndervoteCount.Beta);
-        bytesToHash.Add(contest.WriteInVoteCount.Alpha);
-        bytesToHash.Add(contest.WriteInVoteCount.Beta);
+        foreach (var field in contest.SupplementalFields)
+        {
+            bytesToHash.Add(field.Alpha);
+            bytesToHash.Add(field.Beta);
+        }
 
         var expected = EGHash.Hash(selIdHash, bytesToHash.ToArray());
 
@@ -162,14 +150,11 @@ public class ContestHashTests
             bytesToHash.Add(choice.Alpha);
             bytesToHash.Add(choice.Beta);
         }
-        bytesToHash.Add(contest.OvervoteCount.Alpha);
-        bytesToHash.Add(contest.OvervoteCount.Beta);
-        bytesToHash.Add(contest.NullvoteCount.Alpha);
-        bytesToHash.Add(contest.NullvoteCount.Beta);
-        bytesToHash.Add(contest.UndervoteCount.Alpha);
-        bytesToHash.Add(contest.UndervoteCount.Beta);
-        bytesToHash.Add(contest.WriteInVoteCount.Alpha);
-        bytesToHash.Add(contest.WriteInVoteCount.Beta);
+        foreach (var field in contest.SupplementalFields)
+        {
+            bytesToHash.Add(field.Alpha);
+            bytesToHash.Add(field.Beta);
+        }
         bytesToHash.Add(contest.ContestData!.C0);
         bytesToHash.Add(contest.ContestData!.C1);
         bytesToHash.Add(contest.ContestData!.Challenge);
@@ -180,11 +165,9 @@ public class ContestHashTests
         Assert.Equal(expected, (byte[])hash);
     }
 
-    // Closes the gap noted above: every Alpha/Beta pair here is a distinct hand-built IntegerModP
-    // value (no shared plaintext/nonce collisions like the fixture-based tests have), so this test
-    // fails under a mutation that reorders, drops, or duplicates any field -- including specifically
-    // the OvervoteCount/NullvoteCount adjacent-pair swap that FullCtor_WithoutContestData_/
-    // FullCtor_WithContestData_HandComputed_MatchesDirectEGHashCall above cannot detect.
+    // Every Alpha/Beta pair here is a distinct hand-built IntegerModP value, so this test fails
+    // under a mutation that reorders, drops, or duplicates any entry of the ordered list (options,
+    // then four supplemental fields) or the contest data.
     [Fact]
     public void FullCtor_HandComputed_WithDistinctFieldValues_MatchesExactFieldOrder()
     {
@@ -210,9 +193,9 @@ public class ContestHashTests
         var nullVoteCount = Field(40);
         var underVoteCount = Field(50);
         var writeInVoteCount = Field(60);
-        var contestData = new EncryptedData
+        var contestData = new EncryptedContestData
         {
-            C0 = new byte[] { 0x70 },
+            C0 = new IntegerModP(0x70),
             C1 = new byte[] { 0x71 },
             Challenge = new IntegerModQ(72),
             Response = new IntegerModQ(73),
@@ -222,11 +205,7 @@ public class ContestHashTests
         var hash = new ContestHash(
             selIdHash,
             contestIndex,
-            choices,
-            overVoteCount,
-            nullVoteCount,
-            underVoteCount,
-            writeInVoteCount,
+            choices.Concat<EncryptedValueWithProofs>(new[] { overVoteCount, nullVoteCount, underVoteCount, writeInVoteCount }),
             contestData);
 
         var bytesToHash = new List<byte[]> { new byte[] { 0x28 }, contestIndex.ToByteArray() };
@@ -283,15 +262,16 @@ public class ContestHashTests
         var nullVoteCount = Field(new IntegerModP(p - 3), 4);
         var underVoteCount = Field(5, 6);
         var writeInVoteCount = Field(7, 8);
-        var contestData = new EncryptedData
+        var contestData = new EncryptedContestData
         {
-            C0 = Enumerable.Range(0, 600).Select(i => (byte)(i * 7)).ToArray(),
+            // C_0 is hashed as b(C_0, 512) (eq. 70), padded like every other element of Z_p.
+            C0 = new IntegerModP(p - 5),
             C1 = Array.Empty<byte>(),
             Challenge = new IntegerModQ(0),
             Response = new IntegerModQ(EGParameters.CryptographicParameters.Q - 1),
         };
 
-        var hash = new ContestHash(selIdHash, 12, LazyChoices(), overVoteCount, nullVoteCount, underVoteCount, writeInVoteCount, contestData);
+        var hash = new ContestHash(selIdHash, 12, LazyChoices().Concat<EncryptedValueWithProofs>(new[] { overVoteCount, nullVoteCount, underVoteCount, writeInVoteCount }), contestData);
 
         var bytesToHash = new List<byte[]> { new byte[] { 0x28 }, 12.ToByteArray() };
         foreach (var choice in LazyChoices())

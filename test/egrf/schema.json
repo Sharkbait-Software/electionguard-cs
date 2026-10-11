@@ -1,0 +1,1830 @@
+{
+  "package": "electionguard.egrf.v2",
+  "note": "Generated from proto/electionguard/egrf/v2/egrf.proto by EgrfSchemaLintTests; do not edit by hand.",
+  "messages": [
+    {
+      "name": "SegmentHeader",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "magic",
+          "type": "string",
+          "label": "optional"
+        },
+        {
+          "number": 2,
+          "name": "format_major",
+          "type": "uint32",
+          "label": "optional"
+        },
+        {
+          "number": 3,
+          "name": "section_type",
+          "type": "enum",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.SectionType"
+        },
+        {
+          "number": 4,
+          "name": "key",
+          "type": "bytes",
+          "label": "optional"
+        },
+        {
+          "number": 5,
+          "name": "first_ordinal",
+          "type": "uint64",
+          "label": "optional"
+        }
+      ]
+    },
+    {
+      "name": "RecordItem",
+      "reserved": [
+        100,
+        2047
+      ],
+      "fields": [
+        {
+          "number": 1,
+          "name": "record_header",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.RecordHeader",
+          "oneof": "item"
+        },
+        {
+          "number": 2,
+          "name": "parameters",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.Parameters",
+          "oneof": "item"
+        },
+        {
+          "number": 3,
+          "name": "manifest_file",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.ManifestFile",
+          "oneof": "item"
+        },
+        {
+          "number": 4,
+          "name": "guardian_public_key",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.GuardianPublicKey",
+          "oneof": "item"
+        },
+        {
+          "number": 5,
+          "name": "election_keys",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.ElectionKeys",
+          "oneof": "item"
+        },
+        {
+          "number": 10,
+          "name": "device_header",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.DeviceHeader",
+          "oneof": "item"
+        },
+        {
+          "number": 11,
+          "name": "encrypted_ballot",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.EncryptedBallot",
+          "oneof": "item"
+        },
+        {
+          "number": 12,
+          "name": "pre_encrypted_cast_ballot",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.PreEncryptedCastBallot",
+          "oneof": "item"
+        },
+        {
+          "number": 13,
+          "name": "pre_encrypted_uncast_ballot",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.PreEncryptedUncastBallot",
+          "oneof": "item"
+        },
+        {
+          "number": 14,
+          "name": "device_close",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.DeviceClose",
+          "oneof": "item"
+        },
+        {
+          "number": 15,
+          "name": "device_attestation",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.SignedStatement",
+          "oneof": "item"
+        },
+        {
+          "number": 16,
+          "name": "pre_encrypted_compact_uncast_ballot",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.PreEncryptedCompactUncastBallot",
+          "oneof": "item"
+        },
+        {
+          "number": 20,
+          "name": "encrypted_tally_header",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.EncryptedTallyHeader",
+          "oneof": "item"
+        },
+        {
+          "number": 21,
+          "name": "encrypted_tally_contest",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.EncryptedTallyContest",
+          "oneof": "item"
+        },
+        {
+          "number": 22,
+          "name": "contest_data_request",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.ContestDataRequest",
+          "oneof": "item"
+        },
+        {
+          "number": 30,
+          "name": "decrypted_tally_contest",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.DecryptedTallyContest",
+          "oneof": "item"
+        },
+        {
+          "number": 31,
+          "name": "challenged_ballot_decryption",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.ChallengedBallotDecryption",
+          "oneof": "item"
+        },
+        {
+          "number": 32,
+          "name": "contest_data_decryption",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.ContestDataDecryption",
+          "oneof": "item"
+        },
+        {
+          "number": 33,
+          "name": "uncast_nonce_release",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.UncastNonceRelease",
+          "oneof": "item"
+        },
+        {
+          "number": 40,
+          "name": "chain_close_statement",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.ChainCloseStatement",
+          "oneof": "item"
+        },
+        {
+          "number": 41,
+          "name": "section_seal_statement",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.SectionSealStatement",
+          "oneof": "item"
+        },
+        {
+          "number": 42,
+          "name": "prefix_checkpoint_statement",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.PrefixCheckpointStatement",
+          "oneof": "item"
+        },
+        {
+          "number": 43,
+          "name": "record_statement",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.RecordStatement",
+          "oneof": "item"
+        },
+        {
+          "number": 44,
+          "name": "record_signature",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.SignedStatement",
+          "oneof": "item"
+        },
+        {
+          "number": 50,
+          "name": "toc_entry",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.TocEntry",
+          "oneof": "item"
+        },
+        {
+          "number": 51,
+          "name": "confirmation_code_leaf",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.ConfirmationCodeLeaf",
+          "oneof": "item"
+        }
+      ]
+    },
+    {
+      "name": "RecordHeader",
+      "reserved": [
+        3
+      ],
+      "fields": [
+        {
+          "number": 1,
+          "name": "format_major",
+          "type": "uint32",
+          "label": "optional"
+        },
+        {
+          "number": 2,
+          "name": "format_minor",
+          "type": "uint32",
+          "label": "optional"
+        }
+      ]
+    },
+    {
+      "name": "Parameters",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "version",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        },
+        {
+          "number": 2,
+          "name": "p",
+          "type": "bytes",
+          "label": "optional",
+          "width": 512
+        },
+        {
+          "number": 3,
+          "name": "q",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        },
+        {
+          "number": 4,
+          "name": "r",
+          "type": "bytes",
+          "label": "optional",
+          "width": 512
+        },
+        {
+          "number": 5,
+          "name": "g",
+          "type": "bytes",
+          "label": "optional",
+          "width": 512
+        },
+        {
+          "number": 6,
+          "name": "n",
+          "type": "uint32",
+          "label": "optional"
+        },
+        {
+          "number": 7,
+          "name": "k",
+          "type": "uint32",
+          "label": "optional"
+        },
+        {
+          "number": 8,
+          "name": "h_p",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        }
+      ]
+    },
+    {
+      "name": "ManifestFile",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "media_type",
+          "type": "string",
+          "label": "optional"
+        },
+        {
+          "number": 2,
+          "name": "content",
+          "type": "bytes",
+          "label": "optional"
+        },
+        {
+          "number": 3,
+          "name": "h_b",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        }
+      ]
+    },
+    {
+      "name": "GuardianPublicKey",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "index",
+          "type": "uint32",
+          "label": "optional"
+        },
+        {
+          "number": 2,
+          "name": "vote_commitments",
+          "type": "bytes",
+          "label": "optional",
+          "widthMultiple": 512
+        },
+        {
+          "number": 3,
+          "name": "data_commitments",
+          "type": "bytes",
+          "label": "optional",
+          "widthMultiple": 512
+        },
+        {
+          "number": 4,
+          "name": "kappa",
+          "type": "bytes",
+          "label": "optional",
+          "width": 512
+        },
+        {
+          "number": 5,
+          "name": "vote_proof",
+          "type": "bytes",
+          "label": "optional",
+          "widthMultiple": 32
+        },
+        {
+          "number": 6,
+          "name": "data_proof",
+          "type": "bytes",
+          "label": "optional",
+          "widthMultiple": 32
+        }
+      ]
+    },
+    {
+      "name": "ElectionKeys",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "k",
+          "type": "bytes",
+          "label": "optional",
+          "width": 512
+        },
+        {
+          "number": 2,
+          "name": "k_hat",
+          "type": "bytes",
+          "label": "optional",
+          "width": 512
+        },
+        {
+          "number": 3,
+          "name": "h_e",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        }
+      ]
+    },
+    {
+      "name": "DeviceHeader",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "kind",
+          "type": "enum",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.DeviceKind"
+        },
+        {
+          "number": 2,
+          "name": "device_id",
+          "type": "string",
+          "label": "optional"
+        },
+        {
+          "number": 3,
+          "name": "h_di",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        },
+        {
+          "number": 4,
+          "name": "chaining_mode",
+          "type": "uint32",
+          "label": "optional"
+        },
+        {
+          "number": 5,
+          "name": "initial_hash",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32,
+          "omittable": true
+        }
+      ]
+    },
+    {
+      "name": "HashedCiphertext",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "c0",
+          "type": "bytes",
+          "label": "optional",
+          "width": 512
+        },
+        {
+          "number": 2,
+          "name": "c1",
+          "type": "bytes",
+          "label": "optional",
+          "widthMultiple": 32
+        },
+        {
+          "number": 3,
+          "name": "c2",
+          "type": "bytes",
+          "label": "optional",
+          "width": 64
+        }
+      ]
+    },
+    {
+      "name": "EncryptedField",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "alpha",
+          "type": "bytes",
+          "label": "optional",
+          "width": 512
+        },
+        {
+          "number": 2,
+          "name": "beta",
+          "type": "bytes",
+          "label": "optional",
+          "width": 512
+        },
+        {
+          "number": 3,
+          "name": "range_proof",
+          "type": "bytes",
+          "label": "optional",
+          "widthMultiple": 64
+        }
+      ]
+    },
+    {
+      "name": "EncryptedContest",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "index",
+          "type": "uint32",
+          "label": "optional"
+        },
+        {
+          "number": 2,
+          "name": "fields",
+          "type": "message",
+          "label": "repeated",
+          "typeName": ".electionguard.egrf.v2.EncryptedField"
+        },
+        {
+          "number": 3,
+          "name": "limit_proof",
+          "type": "bytes",
+          "label": "optional",
+          "widthMultiple": 64
+        },
+        {
+          "number": 4,
+          "name": "undervote_difference_proof",
+          "type": "bytes",
+          "label": "optional",
+          "widthMultiple": 64,
+          "omittable": true
+        },
+        {
+          "number": 5,
+          "name": "null_vote_proof",
+          "type": "bytes",
+          "label": "optional",
+          "widthMultiple": 64,
+          "omittable": true
+        },
+        {
+          "number": 6,
+          "name": "contest_data",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.HashedCiphertext"
+        },
+        {
+          "number": 7,
+          "name": "contest_hash",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        }
+      ]
+    },
+    {
+      "name": "EncryptedBallot",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "id_b",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        },
+        {
+          "number": 2,
+          "name": "h_i",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        },
+        {
+          "number": 3,
+          "name": "ballot_style",
+          "type": "string",
+          "label": "optional"
+        },
+        {
+          "number": 4,
+          "name": "status",
+          "type": "enum",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.BallotStatus"
+        },
+        {
+          "number": 5,
+          "name": "weight",
+          "type": "uint32",
+          "label": "optional"
+        },
+        {
+          "number": 6,
+          "name": "encrypted_at",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".google.protobuf.Timestamp"
+        },
+        {
+          "number": 7,
+          "name": "contests",
+          "type": "message",
+          "label": "repeated",
+          "typeName": ".electionguard.egrf.v2.EncryptedContest"
+        },
+        {
+          "number": 8,
+          "name": "confirmation_code",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        },
+        {
+          "number": 9,
+          "name": "chaining_field",
+          "type": "bytes",
+          "label": "optional",
+          "width": 36
+        },
+        {
+          "number": 10,
+          "name": "encrypted_ballot_nonce",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.HashedCiphertext"
+        },
+        {
+          "number": 11,
+          "name": "ballot_ref",
+          "type": "string",
+          "label": "optional"
+        }
+      ]
+    },
+    {
+      "name": "SelectedVector",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "vector",
+          "type": "bytes",
+          "label": "optional",
+          "widthMultiple": 1024
+        },
+        {
+          "number": 2,
+          "name": "psi",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        },
+        {
+          "number": 3,
+          "name": "short_code",
+          "type": "string",
+          "label": "optional"
+        }
+      ]
+    },
+    {
+      "name": "PreEncryptedCastContest",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "contest",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.EncryptedContest"
+        },
+        {
+          "number": 2,
+          "name": "selection_hashes",
+          "type": "bytes",
+          "label": "optional",
+          "widthMultiple": 32
+        },
+        {
+          "number": 3,
+          "name": "selected",
+          "type": "message",
+          "label": "repeated",
+          "typeName": ".electionguard.egrf.v2.SelectedVector"
+        }
+      ]
+    },
+    {
+      "name": "PreEncryptedCastBallot",
+      "reserved": [
+        4
+      ],
+      "fields": [
+        {
+          "number": 1,
+          "name": "id_b",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        },
+        {
+          "number": 2,
+          "name": "h_i",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        },
+        {
+          "number": 3,
+          "name": "ballot_style",
+          "type": "string",
+          "label": "optional"
+        },
+        {
+          "number": 5,
+          "name": "weight",
+          "type": "uint32",
+          "label": "optional"
+        },
+        {
+          "number": 6,
+          "name": "encrypted_at",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".google.protobuf.Timestamp"
+        },
+        {
+          "number": 7,
+          "name": "contests",
+          "type": "message",
+          "label": "repeated",
+          "typeName": ".electionguard.egrf.v2.PreEncryptedCastContest"
+        },
+        {
+          "number": 8,
+          "name": "confirmation_code",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        },
+        {
+          "number": 9,
+          "name": "chaining_field",
+          "type": "bytes",
+          "label": "optional",
+          "width": 36
+        },
+        {
+          "number": 10,
+          "name": "encrypted_ballot_nonce",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.HashedCiphertext"
+        },
+        {
+          "number": 11,
+          "name": "ballot_ref",
+          "type": "string",
+          "label": "optional"
+        }
+      ]
+    },
+    {
+      "name": "UncastSelection",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "selection_index",
+          "type": "uint32",
+          "label": "optional"
+        },
+        {
+          "number": 2,
+          "name": "option_label",
+          "type": "string",
+          "label": "optional"
+        },
+        {
+          "number": 3,
+          "name": "vector",
+          "type": "bytes",
+          "label": "optional",
+          "widthMultiple": 1024
+        },
+        {
+          "number": 4,
+          "name": "psi",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        },
+        {
+          "number": 5,
+          "name": "short_code",
+          "type": "string",
+          "label": "optional"
+        }
+      ]
+    },
+    {
+      "name": "UncastContest",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "index",
+          "type": "uint32",
+          "label": "optional"
+        },
+        {
+          "number": 2,
+          "name": "label",
+          "type": "string",
+          "label": "optional"
+        },
+        {
+          "number": 3,
+          "name": "selections",
+          "type": "message",
+          "label": "repeated",
+          "typeName": ".electionguard.egrf.v2.UncastSelection"
+        },
+        {
+          "number": 4,
+          "name": "contest_hash",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        }
+      ]
+    },
+    {
+      "name": "PreEncryptedUncastBallot",
+      "reserved": [
+        4,
+        5,
+        6
+      ],
+      "fields": [
+        {
+          "number": 1,
+          "name": "id_b",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        },
+        {
+          "number": 2,
+          "name": "h_i",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        },
+        {
+          "number": 3,
+          "name": "ballot_style",
+          "type": "string",
+          "label": "optional"
+        },
+        {
+          "number": 7,
+          "name": "contests",
+          "type": "message",
+          "label": "repeated",
+          "typeName": ".electionguard.egrf.v2.UncastContest"
+        },
+        {
+          "number": 8,
+          "name": "confirmation_code",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        },
+        {
+          "number": 9,
+          "name": "chaining_field",
+          "type": "bytes",
+          "label": "optional",
+          "width": 36
+        },
+        {
+          "number": 10,
+          "name": "encrypted_ballot_nonce",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.HashedCiphertext"
+        },
+        {
+          "number": 11,
+          "name": "ballot_ref",
+          "type": "string",
+          "label": "optional"
+        }
+      ]
+    },
+    {
+      "name": "CompactUncastContest",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "index",
+          "type": "uint32",
+          "label": "optional"
+        },
+        {
+          "number": 2,
+          "name": "contest_hash",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        }
+      ]
+    },
+    {
+      "name": "PreEncryptedCompactUncastBallot",
+      "reserved": [
+        4,
+        5,
+        6
+      ],
+      "fields": [
+        {
+          "number": 1,
+          "name": "id_b",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        },
+        {
+          "number": 2,
+          "name": "h_i",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        },
+        {
+          "number": 3,
+          "name": "ballot_style",
+          "type": "string",
+          "label": "optional"
+        },
+        {
+          "number": 7,
+          "name": "contests",
+          "type": "message",
+          "label": "repeated",
+          "typeName": ".electionguard.egrf.v2.CompactUncastContest"
+        },
+        {
+          "number": 8,
+          "name": "confirmation_code",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        },
+        {
+          "number": 9,
+          "name": "chaining_field",
+          "type": "bytes",
+          "label": "optional",
+          "width": 36
+        },
+        {
+          "number": 10,
+          "name": "encrypted_ballot_nonce",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.HashedCiphertext"
+        },
+        {
+          "number": 11,
+          "name": "ballot_ref",
+          "type": "string",
+          "label": "optional"
+        }
+      ]
+    },
+    {
+      "name": "DeviceClose",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "ballot_count",
+          "type": "uint64",
+          "label": "optional"
+        },
+        {
+          "number": 2,
+          "name": "closing_chaining_field",
+          "type": "bytes",
+          "label": "optional",
+          "width": 36,
+          "omittable": true
+        },
+        {
+          "number": 3,
+          "name": "closing_hash",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32,
+          "omittable": true
+        },
+        {
+          "number": 4,
+          "name": "closed_at",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".google.protobuf.Timestamp"
+        }
+      ]
+    },
+    {
+      "name": "SignedStatement",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "statement",
+          "type": "bytes",
+          "label": "optional"
+        },
+        {
+          "number": 2,
+          "name": "algorithm",
+          "type": "string",
+          "label": "optional"
+        },
+        {
+          "number": 3,
+          "name": "key_id",
+          "type": "bytes",
+          "label": "optional"
+        },
+        {
+          "number": 4,
+          "name": "signer_key",
+          "type": "bytes",
+          "label": "optional"
+        },
+        {
+          "number": 5,
+          "name": "signature",
+          "type": "bytes",
+          "label": "optional"
+        },
+        {
+          "number": 6,
+          "name": "timestamp_token",
+          "type": "bytes",
+          "label": "optional"
+        }
+      ]
+    },
+    {
+      "name": "EncryptedTallyHeader",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "cast_ballot_count",
+          "type": "uint64",
+          "label": "optional"
+        },
+        {
+          "number": 2,
+          "name": "total_cast_weight",
+          "type": "uint64",
+          "label": "optional"
+        }
+      ]
+    },
+    {
+      "name": "EncryptedTallyContest",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "index",
+          "type": "uint32",
+          "label": "optional"
+        },
+        {
+          "number": 2,
+          "name": "fields",
+          "type": "bytes",
+          "label": "optional",
+          "widthMultiple": 1024
+        },
+        {
+          "number": 3,
+          "name": "cast_weight",
+          "type": "uint64",
+          "label": "optional"
+        }
+      ]
+    },
+    {
+      "name": "BallotLocator",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "kind",
+          "type": "enum",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.DeviceKind"
+        },
+        {
+          "number": 2,
+          "name": "h_di",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        },
+        {
+          "number": 3,
+          "name": "position",
+          "type": "uint64",
+          "label": "optional"
+        }
+      ]
+    },
+    {
+      "name": "ContestDataRequest",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "ballot",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.BallotLocator"
+        },
+        {
+          "number": 2,
+          "name": "h_i",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        },
+        {
+          "number": 3,
+          "name": "contest_index",
+          "type": "uint32",
+          "label": "optional"
+        }
+      ]
+    },
+    {
+      "name": "DecryptedTallyField",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "index",
+          "type": "uint32",
+          "label": "optional"
+        },
+        {
+          "number": 2,
+          "name": "label",
+          "type": "string",
+          "label": "optional"
+        },
+        {
+          "number": 3,
+          "name": "tally",
+          "type": "uint64",
+          "label": "optional"
+        },
+        {
+          "number": 4,
+          "name": "encoded_tally",
+          "type": "bytes",
+          "label": "optional",
+          "width": 512
+        },
+        {
+          "number": 5,
+          "name": "proof",
+          "type": "bytes",
+          "label": "optional",
+          "width": 64
+        }
+      ]
+    },
+    {
+      "name": "DecryptedTallyContest",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "index",
+          "type": "uint32",
+          "label": "optional"
+        },
+        {
+          "number": 2,
+          "name": "label",
+          "type": "string",
+          "label": "optional"
+        },
+        {
+          "number": 3,
+          "name": "fields",
+          "type": "message",
+          "label": "repeated",
+          "typeName": ".electionguard.egrf.v2.DecryptedTallyField"
+        }
+      ]
+    },
+    {
+      "name": "DecryptedField",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "index",
+          "type": "uint32",
+          "label": "optional"
+        },
+        {
+          "number": 2,
+          "name": "label",
+          "type": "string",
+          "label": "optional"
+        },
+        {
+          "number": 3,
+          "name": "value",
+          "type": "uint32",
+          "label": "optional"
+        },
+        {
+          "number": 4,
+          "name": "nonce",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        }
+      ]
+    },
+    {
+      "name": "ReleasedContestData",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "nonce",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        },
+        {
+          "number": 2,
+          "name": "data",
+          "type": "bytes",
+          "label": "optional",
+          "widthMultiple": 32
+        }
+      ]
+    },
+    {
+      "name": "DecryptedContest",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "index",
+          "type": "uint32",
+          "label": "optional"
+        },
+        {
+          "number": 2,
+          "name": "label",
+          "type": "string",
+          "label": "optional"
+        },
+        {
+          "number": 3,
+          "name": "fields",
+          "type": "message",
+          "label": "repeated",
+          "typeName": ".electionguard.egrf.v2.DecryptedField"
+        },
+        {
+          "number": 4,
+          "name": "contest_data",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.ReleasedContestData"
+        }
+      ]
+    },
+    {
+      "name": "ChallengedBallotDecryption",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "ballot",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.BallotLocator"
+        },
+        {
+          "number": 2,
+          "name": "h_i",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        },
+        {
+          "number": 3,
+          "name": "contests",
+          "type": "message",
+          "label": "repeated",
+          "typeName": ".electionguard.egrf.v2.DecryptedContest"
+        }
+      ]
+    },
+    {
+      "name": "ContestDataDecryption",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "ballot",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.BallotLocator"
+        },
+        {
+          "number": 2,
+          "name": "h_i",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        },
+        {
+          "number": 3,
+          "name": "contest_index",
+          "type": "uint32",
+          "label": "optional"
+        },
+        {
+          "number": 4,
+          "name": "beta",
+          "type": "bytes",
+          "label": "optional",
+          "width": 512
+        },
+        {
+          "number": 5,
+          "name": "proof",
+          "type": "bytes",
+          "label": "optional",
+          "width": 64
+        },
+        {
+          "number": 6,
+          "name": "data",
+          "type": "bytes",
+          "label": "optional",
+          "widthMultiple": 32
+        }
+      ]
+    },
+    {
+      "name": "UncastContestNonces",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "index",
+          "type": "uint32",
+          "label": "optional"
+        },
+        {
+          "number": 2,
+          "name": "nonces",
+          "type": "bytes",
+          "label": "optional",
+          "widthMultiple": 32
+        }
+      ]
+    },
+    {
+      "name": "UncastNonceRelease",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "ballot",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.BallotLocator"
+        },
+        {
+          "number": 2,
+          "name": "h_i",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        },
+        {
+          "number": 3,
+          "name": "contests",
+          "type": "message",
+          "label": "repeated",
+          "typeName": ".electionguard.egrf.v2.UncastContestNonces"
+        },
+        {
+          "number": 4,
+          "name": "ballot_nonce",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32,
+          "omittable": true
+        }
+      ]
+    },
+    {
+      "name": "ChainCloseStatement",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "h_e",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        },
+        {
+          "number": 2,
+          "name": "device_key",
+          "type": "bytes",
+          "label": "optional",
+          "width": 33
+        },
+        {
+          "number": 3,
+          "name": "device_id",
+          "type": "string",
+          "label": "optional"
+        },
+        {
+          "number": 4,
+          "name": "chaining_mode",
+          "type": "uint32",
+          "label": "optional"
+        },
+        {
+          "number": 5,
+          "name": "ballot_count",
+          "type": "uint64",
+          "label": "optional"
+        },
+        {
+          "number": 6,
+          "name": "codes_root",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        },
+        {
+          "number": 7,
+          "name": "closing_hash",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32,
+          "omittable": true
+        },
+        {
+          "number": 8,
+          "name": "closed_at",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".google.protobuf.Timestamp"
+        }
+      ]
+    },
+    {
+      "name": "SectionSealStatement",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "h_e",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        },
+        {
+          "number": 2,
+          "name": "device_key",
+          "type": "bytes",
+          "label": "optional",
+          "width": 33
+        },
+        {
+          "number": 3,
+          "name": "item_count",
+          "type": "uint64",
+          "label": "optional"
+        },
+        {
+          "number": 4,
+          "name": "section_root",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        }
+      ]
+    },
+    {
+      "name": "PrefixCheckpointStatement",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "h_e",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        },
+        {
+          "number": 2,
+          "name": "device_key",
+          "type": "bytes",
+          "label": "optional",
+          "width": 33
+        },
+        {
+          "number": 3,
+          "name": "ballot_count",
+          "type": "uint64",
+          "label": "optional"
+        },
+        {
+          "number": 4,
+          "name": "codes_root",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        },
+        {
+          "number": 5,
+          "name": "at",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".google.protobuf.Timestamp"
+        }
+      ]
+    },
+    {
+      "name": "RecordStatement",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "phase",
+          "type": "enum",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.RecordPhase"
+        },
+        {
+          "number": 2,
+          "name": "root",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        },
+        {
+          "number": 3,
+          "name": "h_e",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        },
+        {
+          "number": 4,
+          "name": "format_major",
+          "type": "uint32",
+          "label": "optional"
+        },
+        {
+          "number": 5,
+          "name": "format_minor",
+          "type": "uint32",
+          "label": "optional"
+        },
+        {
+          "number": 6,
+          "name": "signed_at",
+          "type": "message",
+          "label": "optional",
+          "typeName": ".google.protobuf.Timestamp"
+        },
+        {
+          "number": 7,
+          "name": "signer_role",
+          "type": "string",
+          "label": "optional"
+        }
+      ]
+    },
+    {
+      "name": "TocEntry",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "section_type",
+          "type": "enum",
+          "label": "optional",
+          "typeName": ".electionguard.egrf.v2.SectionType"
+        },
+        {
+          "number": 2,
+          "name": "key",
+          "type": "bytes",
+          "label": "optional"
+        },
+        {
+          "number": 3,
+          "name": "critical",
+          "type": "bool",
+          "label": "optional"
+        },
+        {
+          "number": 4,
+          "name": "item_count",
+          "type": "uint64",
+          "label": "optional"
+        },
+        {
+          "number": 5,
+          "name": "root",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        }
+      ]
+    },
+    {
+      "name": "ConfirmationCodeLeaf",
+      "reserved": [],
+      "fields": [
+        {
+          "number": 1,
+          "name": "code",
+          "type": "bytes",
+          "label": "optional",
+          "width": 32
+        }
+      ]
+    }
+  ],
+  "enums": [
+    {
+      "name": "SectionType",
+      "values": [
+        {
+          "number": 0,
+          "name": "SECTION_TYPE_UNSPECIFIED"
+        },
+        {
+          "number": 1,
+          "name": "SECTION_TYPE_HEADER"
+        },
+        {
+          "number": 2,
+          "name": "SECTION_TYPE_PARAMETERS"
+        },
+        {
+          "number": 3,
+          "name": "SECTION_TYPE_MANIFEST"
+        },
+        {
+          "number": 4,
+          "name": "SECTION_TYPE_GUARDIANS"
+        },
+        {
+          "number": 5,
+          "name": "SECTION_TYPE_ELECTION_KEYS"
+        },
+        {
+          "number": 257,
+          "name": "SECTION_TYPE_DEVICE"
+        },
+        {
+          "number": 258,
+          "name": "SECTION_TYPE_DEVICE_ATTESTATIONS"
+        },
+        {
+          "number": 513,
+          "name": "SECTION_TYPE_ENCRYPTED_TALLY"
+        },
+        {
+          "number": 514,
+          "name": "SECTION_TYPE_CONTEST_DATA_REQUESTS"
+        },
+        {
+          "number": 769,
+          "name": "SECTION_TYPE_DECRYPTED_TALLY"
+        },
+        {
+          "number": 770,
+          "name": "SECTION_TYPE_CHALLENGED_BALLOT_DECRYPTIONS"
+        },
+        {
+          "number": 771,
+          "name": "SECTION_TYPE_CONTEST_DATA_DECRYPTIONS"
+        },
+        {
+          "number": 772,
+          "name": "SECTION_TYPE_UNCAST_NONCE_RELEASES"
+        },
+        {
+          "number": 65534,
+          "name": "SECTION_TYPE_TOC"
+        },
+        {
+          "number": 65535,
+          "name": "SECTION_TYPE_SIGNATURES"
+        }
+      ]
+    },
+    {
+      "name": "DeviceKind",
+      "values": [
+        {
+          "number": 0,
+          "name": "DEVICE_KIND_UNSPECIFIED"
+        },
+        {
+          "number": 1,
+          "name": "DEVICE_KIND_REGULAR"
+        },
+        {
+          "number": 2,
+          "name": "DEVICE_KIND_PRE_ENCRYPTING"
+        }
+      ]
+    },
+    {
+      "name": "BallotStatus",
+      "values": [
+        {
+          "number": 0,
+          "name": "BALLOT_STATUS_UNSPECIFIED"
+        },
+        {
+          "number": 1,
+          "name": "BALLOT_STATUS_CAST"
+        },
+        {
+          "number": 2,
+          "name": "BALLOT_STATUS_CHALLENGED"
+        },
+        {
+          "number": 3,
+          "name": "BALLOT_STATUS_SPOILED"
+        }
+      ]
+    },
+    {
+      "name": "RecordPhase",
+      "values": [
+        {
+          "number": 0,
+          "name": "RECORD_PHASE_UNSPECIFIED"
+        },
+        {
+          "number": 1,
+          "name": "RECORD_PHASE_SETUP"
+        },
+        {
+          "number": 2,
+          "name": "RECORD_PHASE_SEALED"
+        },
+        {
+          "number": 3,
+          "name": "RECORD_PHASE_AGGREGATED"
+        },
+        {
+          "number": 4,
+          "name": "RECORD_PHASE_FINAL"
+        }
+      ]
+    }
+  ]
+}

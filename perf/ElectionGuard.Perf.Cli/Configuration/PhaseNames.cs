@@ -22,5 +22,13 @@ public static class PhaseNames
 
     public const string DecryptTally = "DecryptTally";
 
-    public static readonly IReadOnlyList<string> All = [EncryptBallots, VerifyBallots, Tally, VerifyTally, DecryptTally];
+    /// <summary>
+    /// Verifications 10 (the proof of correct decryption of every option) and 11 (the decrypted
+    /// tally's labels against the manifest), run once after a successful decryption when tally
+    /// verification is on. Absent from records made before stage S4 and from runs that did not reach
+    /// it; readers treat a missing key as "did not run", as for <see cref="VerifyTally"/>.
+    /// </summary>
+    public const string VerifyDecryption = "VerifyDecryption";
+
+    public static readonly IReadOnlyList<string> All = [EncryptBallots, VerifyBallots, Tally, VerifyTally, DecryptTally, VerifyDecryption];
 }

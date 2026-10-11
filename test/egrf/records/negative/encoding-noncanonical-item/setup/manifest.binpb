@@ -1,0 +1,4 @@
+
+
+EGRF´±
+4application/vnd.electionguard.manifest+json;format=1Ö{"electionId":"test-election-1","contests":[{"id":"contest-1","name":"Test Contest","selectionLimit":1,"optionSelectionLimit":1,"index":1,"choices":[{"id":"choice-1","name":"Choice 1","index":1},{"id":"choice-2","name":"Choice 2","index":2}],"supplementalFields":[{"kind":"OvervoteIndicator","id":"overvotes","name":"OvervoteIndicator","index":3},{"kind":"NullVoteIndicator","id":"null-votes","name":"NullVoteIndicator","index":4},{"kind":"UndervoteIndicator","id":"undervotes","name":"UndervoteIndicator","index":5},{"kind":"UndervoteDifferenceCount","id":"undervote-difference","name":"UndervoteDifferenceCount","index":6},{"kind":"WriteInCount","id":"write-ins","name":"WriteInCount","index":7}],"writeInFieldCount":1,"contestDataBlocks":2}],"ballotStyles":[{"id":"ballot-style-1","name":"Ballot Style 1","contestIds":["contest-1"]}],"chainingMode":1} ÚÊŒà8ËAxCbäEÝëš_”èŒÍµÄNpƒº%ŒØ°

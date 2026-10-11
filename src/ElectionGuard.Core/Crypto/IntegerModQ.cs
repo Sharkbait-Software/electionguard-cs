@@ -1,5 +1,6 @@
 using ElectionGuard.Core.Extensions;
 using ElectionGuard.Core.Models;
+using ElectionGuard.Core.Serialization;
 using System.Diagnostics;
 using System.Numerics;
 
@@ -23,9 +24,36 @@ public struct IntegerModQ : IEquatable<IntegerModQ>
         }
     }
 
+    /// <summary>
+    /// Reduces the big-endian value of <paramref name="bytes"/>, of any length, mod q. For internal
+    /// arithmetic only: anything read from a record or ballot goes through
+    /// <see cref="FromCanonicalBytes"/>, which rejects what this would silently reduce.
+    /// </summary>
     public IntegerModQ(byte[] bytes) : this(new BigInteger(bytes, true, true))
     {
 
+    }
+
+    /// <summary>
+    /// Strict decoding for published values (§5.1.2): exactly 32 big-endian bytes whose value is
+    /// below q. Throws <see cref="NonCanonicalEncodingException"/> otherwise, where the reducing
+    /// constructor would accept, say, a challenge c + q as c. This is what keeps the Z_q-range
+    /// halves of Verifications 2.B, 6.B/6.C and 7.B/7.C meaningful for decoded records.
+    /// </summary>
+    public static IntegerModQ FromCanonicalBytes(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length != ByteLength)
+        {
+            throw new NonCanonicalEncodingException($"An element of Z_q must be encoded in exactly {ByteLength} bytes; got {bytes.Length}.");
+        }
+
+        var value = new BigInteger(bytes, isUnsigned: true, isBigEndian: true);
+        if (value >= EGParameters.Q)
+        {
+            throw new NonCanonicalEncodingException("An encoded element of Z_q is not below q.");
+        }
+
+        return new IntegerModQ(value);
     }
 
     private readonly BigInteger _i;

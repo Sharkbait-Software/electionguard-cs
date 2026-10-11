@@ -4,8 +4,20 @@ namespace ElectionGuard.Core.KeyGeneration;
 
 public class GuardianIndex : IEquatable<GuardianIndex?>
 {
+    /// <summary>
+    /// A guardian's sequence number. §3.2.1 numbers the guardians G_1..G_n, and every share is
+    /// P_i(l) for 1 <= l <= n (§3.2.2): an index of 0 would be handed P_i(0) = a_{i,0} = s_i, the
+    /// guardian's secret key itself, so indices below 1 are rejected here. The upper bound n is
+    /// election state, checked where it is known (the <see cref="Guardian"/> constructor and the
+    /// key-ceremony checks).
+    /// </summary>
     public GuardianIndex(int index)
     {
+        if (index < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(index), index, "Guardian indices are 1-based (§3.2.1): an index must be at least 1.");
+        }
+
         Index = index;
     }
 

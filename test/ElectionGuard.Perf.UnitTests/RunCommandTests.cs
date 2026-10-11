@@ -84,21 +84,16 @@ public class RunCommandTests : IDisposable
         const string brokenManifest = """
         {
           "electionId": "broken-manifest-election",
-          "optionalContestDataMaxLength": 0,
-          "includeOvervotes": true,
-          "includeNullvotes": true,
-          "includeUndervotes": true,
-          "includeWriteins": true,
           "chainingMode": 0,
           "contests": [
             {
               "id": "1",
               "name": "Single Contest",
-              "index": 0,
+              "index": 1,
               "selectionLimit": 1,
               "optionSelectionLimit": 1,
               "choices": [
-                { "id": "1", "name": "Choice One", "index": 0 }
+                { "id": "1", "name": "Choice One", "index": 1 }
               ]
             }
           ],
@@ -154,21 +149,16 @@ public class RunCommandTests : IDisposable
         const string brokenManifest = """
         {
           "electionId": "broken-manifest-election",
-          "optionalContestDataMaxLength": 0,
-          "includeOvervotes": true,
-          "includeNullvotes": true,
-          "includeUndervotes": true,
-          "includeWriteins": true,
           "chainingMode": 0,
           "contests": [
             {
               "id": "1",
               "name": "Single Contest",
-              "index": 0,
+              "index": 1,
               "selectionLimit": 1,
               "optionSelectionLimit": 1,
               "choices": [
-                { "id": "1", "name": "Choice One", "index": 0 }
+                { "id": "1", "name": "Choice One", "index": 1 }
               ]
             }
           ],

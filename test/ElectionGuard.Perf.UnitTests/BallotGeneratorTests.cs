@@ -12,7 +12,6 @@ public class BallotGeneratorTests
         var manifest = new Manifest
         {
             ElectionId = "duplicate-choice-id-election",
-            OptionalContestDataMaxLength = 0,
             Contests = new List<Contest>
             {
                 new Contest
@@ -21,11 +20,11 @@ public class BallotGeneratorTests
                     Name = "Test Contest",
                     SelectionLimit = 1,
                     OptionSelectionLimit = 1,
-                    Index = 0,
+                    Index = 1,
                     Choices = new List<Choice>
                     {
-                        new Choice { Id = "choice-1", Name = "Choice 1", Index = 0 },
-                        new Choice { Id = "choice-1", Name = "Choice 1 (duplicate id)", Index = 1 },
+                        new Choice { Id = "choice-1", Name = "Choice 1", Index = 1 },
+                        new Choice { Id = "choice-1", Name = "Choice 1 (duplicate id)", Index = 2 },
                     },
                 },
             },
@@ -44,7 +43,6 @@ public class BallotGeneratorTests
         var manifest = new Manifest
         {
             ElectionId = "multiple-duplicate-choice-ids-election",
-            OptionalContestDataMaxLength = 0,
             Contests = new List<Contest>
             {
                 new Contest
@@ -53,13 +51,13 @@ public class BallotGeneratorTests
                     Name = "Test Contest",
                     SelectionLimit = 1,
                     OptionSelectionLimit = 1,
-                    Index = 0,
+                    Index = 1,
                     Choices = new List<Choice>
                     {
-                        new Choice { Id = "choice-1", Name = "Choice 1", Index = 0 },
-                        new Choice { Id = "choice-1", Name = "Choice 1 (duplicate)", Index = 1 },
-                        new Choice { Id = "choice-2", Name = "Choice 2", Index = 2 },
-                        new Choice { Id = "choice-2", Name = "Choice 2 (duplicate)", Index = 3 },
+                        new Choice { Id = "choice-1", Name = "Choice 1", Index = 1 },
+                        new Choice { Id = "choice-1", Name = "Choice 1 (duplicate)", Index = 2 },
+                        new Choice { Id = "choice-2", Name = "Choice 2", Index = 3 },
+                        new Choice { Id = "choice-2", Name = "Choice 2 (duplicate)", Index = 4 },
                     },
                 },
             },
@@ -81,7 +79,6 @@ public class BallotGeneratorTests
         var manifest = new Manifest
         {
             ElectionId = "null-contests-election",
-            OptionalContestDataMaxLength = 0,
             Contests = null!,
             BallotStyles = new List<BallotStyle>(),
         };
@@ -98,7 +95,6 @@ public class BallotGeneratorTests
         var manifest = new Manifest
         {
             ElectionId = "null-choices-election",
-            OptionalContestDataMaxLength = 0,
             Contests = new List<Contest>
             {
                 new Contest
@@ -107,7 +103,7 @@ public class BallotGeneratorTests
                     Name = "Test Contest",
                     SelectionLimit = 1,
                     OptionSelectionLimit = 1,
-                    Index = 0,
+                    Index = 1,
                     Choices = null!,
                 },
             },
@@ -214,6 +210,66 @@ public class BallotGeneratorTests
                 });
             }
         }
+    }
+
+    [Fact]
+    public void Generate_WithOptionLimitAboveOne_UsesValuesUpToR_AndSometimesOvervotesAnOption()
+    {
+        // S5 (G10): with R > 1 the corpus exercises values in 2..R, and an option above R, which is
+        // an overvote of its own; otherwise the egperf gate never sees the R > 1 overvote rule.
+        var (manifest, _) = ElectionFixtureBuilder.CreateMinimalManifest(selectionLimit: 3, optionSelectionLimit: 3);
+        var generator = new BallotGenerator(manifest, seed: 55);
+
+        var values = Enumerable.Range(0, 2000)
+            .SelectMany(i => generator.Generate(i).Contests.SelectMany(c => c.Choices).Select(x => x.SelectionValue))
+            .ToList();
+
+        Assert.Contains(values, value => value is 2 or 3);
+        Assert.Contains(values, value => value == 4);
+        Assert.DoesNotContain(values, value => value > 4 || value < 0);
+    }
+
+    [Fact]
+    public void Generate_UsesWriteInsOnlyInContestsThatOfferThem_WithinTheWriteInFieldCount()
+    {
+        var (without, _) = ElectionFixtureBuilder.CreateMinimalManifest();
+        var (with, _) = ElectionFixtureBuilder.CreateMinimalManifest(includeWriteIns: true, writeInFieldCount: 3);
+
+        var noWriteIns = Enumerable.Range(0, 500).Select(i => new BallotGenerator(without, seed: 9).Generate(i).Contests[0].NumWriteinsSelected);
+        var writeIns = Enumerable.Range(0, 500).Select(i => new BallotGenerator(with, seed: 9).Generate(i).Contests[0].NumWriteinsSelected).ToList();
+
+        Assert.All(noWriteIns, n => Assert.Equal(0, n));
+        Assert.Contains(writeIns, n => n > 0);
+        Assert.All(writeIns, n => Assert.InRange(n, 0, 3));
+    }
+
+    /// <summary>
+    /// S6: a contest that declares contest data (b_Λ) gets write-in text exactly on the ballots that
+    /// use a write-in field, encoded to 32·b_Λ bytes (the encryptor fills the others with an empty
+    /// field). The text comes from the ballot index, not the random stream, so it moves nothing else:
+    /// the same seed gives the same selections with or without contest data declared.
+    /// </summary>
+    [Fact]
+    public void Generate_WritesWriteInTextIntoTheContestDataOfBallotsThatUseAWriteIn()
+    {
+        var (with, _) = ElectionFixtureBuilder.CreateMinimalManifest(includeWriteIns: true);
+        var (withoutData, _) = ElectionFixtureBuilder.CreateMinimalManifest(includeWriteIns: true, contestDataBlocks: 0);
+        Assert.Equal(ElectionFixtureBuilder.DefaultContestDataBlocks, with.Contests[0].ContestDataBlocks);
+
+        var contests = Enumerable.Range(0, 500).Select(i => new BallotGenerator(with, seed: 9).Generate(i).Contests[0]).ToList();
+        var plain = Enumerable.Range(0, 500).Select(i => new BallotGenerator(withoutData, seed: 9).Generate(i).Contests[0]).ToList();
+
+        Assert.Contains(contests, c => c.ContestData is not null);
+        Assert.All(contests, c => Assert.Equal(c.NumWriteinsSelected > 0, c.ContestData is not null));
+        Assert.All(contests.Where(c => c.ContestData is not null), c =>
+        {
+            Assert.Equal(32 * ElectionFixtureBuilder.DefaultContestDataBlocks, c.ContestData!.Length);
+            Assert.StartsWith("Write-in ", ContestDataEncoding.Decode(c.ContestData));
+        });
+        Assert.All(plain, c => Assert.Null(c.ContestData));
+        Assert.Equal(
+            plain.Select(c => (c.NumWriteinsSelected, string.Join(",", c.Choices.Select(x => x.SelectionValue)))),
+            contests.Select(c => (c.NumWriteinsSelected, string.Join(",", c.Choices.Select(x => x.SelectionValue)))));
     }
 
     [Fact]

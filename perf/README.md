@@ -111,7 +111,7 @@ Two knobs matter most:
 
 - **`phases`** — which optional phases run.
 - **`budgets`** — per-phase wall-clock allowance in minutes, keyed by phase name: `EncryptBallots`,
-  `VerifyBallots`, `Tally`, `VerifyTally`, `DecryptTally`. A phase that exhausts its budget stops
+  `VerifyBallots`, `Tally`, `VerifyTally`, `DecryptTally`, `VerifyDecryption`. A phase that exhausts its budget stops
   at the next chunk boundary and is recorded as `aborted:budgetExceeded`; the run still produces a
   record.
 
@@ -131,6 +131,86 @@ made a million-ballot decryption impossible inside `large`'s 30-minute budget. I
 count with a baby-step giant-step search sharing one table across choices, about
 2·sqrt(choices x BallotsCast) multiplies in all, and `xsmall`'s decryption fell from 28.5 s to about
 50 ms; the budget stays as a backstop.
+
+Since stage S4 of the spec-compliance work, `DecryptTally` is the verifiable decryption of §3.6.5:
+the k guardians' three rounds (partial decryptions with commitment hashes, commitment reveals,
+responses), the administrator's check of the proof before it publishes, and the search, whose bound
+is now the largest option's `MaximumCount` (weights and `OptionSelectionLimit` included) rather than
+`BallotsCast`. The proof costs a few exponentiations per option, so `DecryptTally` grew from about
+20 to 30 ms on `smoke` and from 50 to 90 ms on `xsmall`; its ms/ballot column is a per-option cost
+divided by the ballot count. A sixth phase, `VerifyDecryption`, runs Verifications 10 (the proof)
+and 11 (the tally's labels against the manifest) once after a successful decryption, when
+`tallyVerification` is on, and is absent otherwise (`notes.decryptionVerification` = `ran`). A
+failure there makes the run an `error`: `TallyComparer` checks the counts but cannot see the proof.
+Its budget key is accepted but not enforced: it runs once, on an already decrypted tally.
+
+**`compare` against a pre-S4 record fails on `DecryptTally` allocation, deliberately.** The proof is
+new required work, so its allocation cannot stay within 2% of a decryption that had none: the eq.
+(88) and (90) hash inputs are built in pooled buffers; the remainder (not profiled) is in the proof's
+exponentiations: the `MontgomeryModP.PowModP` outputs and `BigInteger` intermediates of each guardian's
+commitments and partial decryption and of the administrator's combination and proof check. Measured on
+this machine against S3 records: `smoke` 101 B/ballot -> 259 B/ballot (median of 5), `xsmall`
+1,280 B/ballot -> 4,361 B/ballot (1.3 MB -> 4.2 MB per run; 10.2 MB before the hash inputs were
+pooled), and `compare` exits 1 with `DecryptTally allocBytesPerBallot ... REGRESSION`; every other
+phase's allocation stays within 2%. Rebaseline on a post-S4 record. `compare` also warns that
+`VerifyDecryption` ran only in the candidate, which is expected for the same reason.
+
+Since stage S5, supplemental fields (overvote, null-vote and undervote indicators, undervote
+difference count, write-in count) are declared per contest in the manifest and are encrypted, proved,
+verified, tallied and decrypted like options. The committed manifests changed with it, so `compare`
+reports every pre-S5 record as incomparable (its manifest hash differs); rebaseline. `smoke`'s
+manifest declares all five kinds, so each ballot carries
+nine range proofs instead of four options' plus four unverified counters, and an undervote difference
+proof: on this machine `VerifyBallots` went from 0.46 to 0.90 ms/ballot and `EncryptBallots` from
+0.20 to 0.21 ms/ballot (135 to 152 MB). On the same corpus with no supplemental fields declared,
+`VerifyBallots` is 0.46 ms/ballot, as at S4: the per-proof cost did not move. `famous-names-large`
+declares the four kinds the old election-wide flags produced (overvote, null vote, undervote difference
+count, write-in count). The correctness check now compares every declared field's decrypted total
+too, against `ExpectedTallyAccumulator`, which applies the spec's overvote rule (selections plus
+write-ins above L, or one option above R) and the user's S5 follow-up decisions on its own; `BallotGenerator` emits values up to R, options above R, and write-ins only
+where a contest offers write-in fields (on half of the overvoted contests that do, too, so the gate sees
+an overvote zero the write-in count).
+
+Stage S5b applied the user's follow-up decisions: there is no per-field counts-toward-limit flag (a
+field is declared or not), write-ins always count toward the limit, and on an overvote the undervote
+indicator and the undervote difference count are 0. Each contest that declares the null-vote indicator
+also carries a null-vote proof (a range proof over 0..L of s + w + L*null; S5c added L*overvote where
+that indicator is declared, user decision Q17), so `smoke`'s
+`VerifyBallots` rose from 0.90 to about 1.0 ms/ballot; its allocation fell from 15.0 to 12.4 MB because
+Verification 7 now builds its relation ciphertexts in one Montgomery representation. The committed
+manifests dropped the `countsTowardSelectionLimit` key, so `compare` reports S5 records as incomparable.
+
+Stage S6 replaced the election-wide `optionalContestDataMaxLength` with a per-contest
+`contestDataBlocks` (b_Λ, §3.3.10; user decision Q7). Every committed manifest declares 2 blocks
+(64 bytes) on each contest that offers write-in fields, and such a contest carries an encrypted contest
+data field on every ballot, filled or not, so each ballot of `smoke` costs three more full-width
+exponentiations (g^ξ, K-hat^ξ, g^u; g and K-hat have tables): `EncryptBallots` went from about 0.236
+to 0.24-0.25 ms/ballot and 168.7 to 171.0 MB, and `VerifyBallots` did not move (no verification of a
+ballot checks the field's Schnorr proof; only the guardians do, before decrypting it). `BallotGenerator`
+writes text into the field of each contest whose voter used a write-in, derived from the ballot index
+so that no other generated value moved. Contest data decryption (§3.6.6) has no egperf phase: the
+harness streams and discards ballots, and decrypting a field is per ballot contest; the unit tests and
+the console pipeline exercise it. The manifests' hashes changed, so `compare` reports S5c records as
+incomparable; rebaseline.
+
+`smoke`'s contest has L = 1 and R = 1, where "sum above L or an option above R" and the old "sum above
+L x R" rule agree, so `smoke` cannot tell them apart. The `limits` scenario (`test/data/option-limits`,
+2,000 ballots) can: its four contests (L/R = 1/2, 3/3, 3/3 without an overvote indicator, 2/1) offer two
+write-in fields each, and all but the third declare every supplemental field. Encrypting with the old
+threshold fails its ballot verification (`Sum of challenge values did not equal c.`), as does an
+encryptor that sets the undervote indicator on an overvote, while `smoke` passes. The third contest
+covers the relations without the overvote term (there an overvoted contest's undervote difference
+count is L; user decision Q18 keeps that manifest valid). Run it after touching the overvote rule or the supplemental fields; the unit-level
+coverage is `ScenarioRunnerTests`' R > 1 theory in `ElectionGuard.Perf.UnitTests`.
+
+Every other committed manifest uses no chaining. The `chained` scenario (`test/data/single-contest-chained`,
+`smoke`'s manifest with `chainingMode` 1, 300 ballots) exercises simple chaining (§3.4.4): each ballot chains from
+the previous one's confirmation code, so encryption and ballot verification run serially (`parallelism:
+forced:1:chainingMode`), and after the last chunk the runner closes the device's chain (eqs. 77/78) and walks its
+record against the published ballots (Verification 8.C-8.G, billed to `VerifyBallots` without adding to its ballot
+count). That walk keeps one confirmation code and one (id, device, H_C, B_C) link per ballot, so it runs only under
+chaining; under no chaining every ballot's B_C is checked on its own (8.D). Its numbers measure the serial path, not
+the library's throughput.
 
 ## Why the harness streams
 
@@ -214,12 +294,17 @@ today can publish to GitHub Pages from CI later.
       "overvotes": 0,
       "nullvotes": 0,
       "undervotes": 0,
+      "undervoteDifference": 0,
       "writeIns": 0,
       "choices": { "<choiceId>": 0 }
     }
   }
 }
 ```
+
+The counters are the totals of §3.3.9's supplemental fields, computed whether or not the manifest
+declares them: ballots overvoted, null votes, ballots with an undervote, the sum of the undervote
+differences (L minus the sum of selections), and write-ins used outside overvoted contests.
 
 `test/ElectionGuard.Testing.Cli` is a thin CLI over the same `ElectionGuard.Testing.Common` library
 this harness uses for ballot generation and expected-tally accounting -- its only unique job is
@@ -228,7 +313,12 @@ exactly this shape, so a consumer sees one schema regardless of which tool produ
 
 Writes the manifest, the plaintext ballots and the expected tally. Encryptors in other languages
 consume these files; because the corpus and an in-memory run share a generator and a seed, they are
-provably the same workload. `corpus` clears stale ballot files left over from a previous, larger run
+provably the same workload. The manifest is written in Core's manifest format
+(`ManifestSerializer`, compact; S10a), the bytes the harness hashes into H_B, so an encryptor that
+hashes the file computes the same H_B. Manifests are read through the same strict reader (members
+are case-sensitive camelCase; an unknown or repeated member is refused). For every committed
+manifest the written bytes are the ones the harness hashed before S10a, so `manifestHash` did not
+change and S9c records stay comparable. `corpus` clears stale ballot files left over from a previous, larger run
 at the same output directory before writing, so a non-.NET consumer globbing the ballots directory
 never picks up orphaned files from an earlier ballot count. Do not commit a corpus — regenerate it
 from the seed.

@@ -44,6 +44,27 @@ public struct SelectionHash : IEquatable<SelectionHash>, IComparable<SelectionHa
 
     private readonly byte[] _value;
 
+    /// <summary>The length of a selection hash: a hash value of H (§5.2), 32 bytes.</summary>
+    public const int ByteLength = EGHash.HashBytes;
+
+    /// <summary>Whether this holds exactly <see cref="ByteLength"/> bytes (a default value holds none).</summary>
+    public bool IsWellFormed => _value is { Length: ByteLength };
+
+    /// <summary>
+    /// A selection hash from its bytes as published, which must be exactly <see cref="ByteLength"/>
+    /// long; the decoders use this. Throws <see cref="Serialization.NonCanonicalEncodingException"/>
+    /// otherwise.
+    /// </summary>
+    public static SelectionHash FromCanonicalBytes(byte[]? bytes)
+    {
+        if (bytes is not { Length: ByteLength })
+        {
+            throw new Serialization.NonCanonicalEncodingException($"A selection hash is {ByteLength} bytes (§4.1.1); got {bytes?.Length ?? 0}.");
+        }
+
+        return new SelectionHash(bytes);
+    }
+
     public static implicit operator byte[](SelectionHash i)
     {
         return i._value;

@@ -1,7 +1,8 @@
-using ElectionGuard.Core.BallotEncryption;
+﻿using ElectionGuard.Core.BallotEncryption;
 using ElectionGuard.Core.KeyGeneration;
 using ElectionGuard.Core.Models;
 using ElectionGuard.Core.PreEncryption;
+using ElectionGuard.Core.Serialization;
 using ElectionGuard.Core.Tally;
 using System.Text.Json;
 
@@ -49,11 +50,19 @@ public static class ElectionFixtureBuilder
     /// Bootstraps a full N-of-K guardian set: generates keys for each guardian, exchanges and
     /// decrypts secret shares across the full set, builds the resulting ElectionPublicKeys, and
     /// verifies the resulting GuardianRecord from every guardian's perspective (mirrors
-    /// Program.cs lines 30-73). GuardianParameters is hardcoded to N=3/K=2 (see CLAUDE.md), so the
-    /// defaults here match that; do not pass values GuardianParameters doesn't support.
+    /// Program.cs). n and k must match EGParameters.GuardianParameters, which the guardians and
+    /// Verification 1 read (the defaults match the default 3-of-2 parameters).
+    ///
+    /// The guardian record carries the manifest file and H_B, because each guardian checks H_B
+    /// (Verification 1.F) and keys its comparison hash H_G with it (§3.2.2 step 1). Pass the
+    /// election's manifest file; without one, CreateMinimalManifest()'s is used. A test that then
+    /// builds an encryption record over a different manifest gets a guardian record and an
+    /// encryption record that disagree about H_B; nothing in the library compares the two.
     /// </summary>
-    public static GuardianSetResult CreateGuardianSet(int n = 3, int k = 2)
+    public static GuardianSetResult CreateGuardianSet(int n = 3, int k = 2, ManifestFile? manifestFile = null)
     {
+        manifestFile ??= CreateMinimalManifest().ManifestFile;
+
         var guardians = new List<Guardian>();
         for (int i = 1; i <= n; i++)
         {
@@ -94,13 +103,15 @@ public static class ElectionFixtureBuilder
             CryptographicParameters = EGParameters.CryptographicParameters,
             GuardianParameters = EGParameters.GuardianParameters,
             ParameterBaseHash = EGParameters.ParameterBaseHash,
+            ManifestFile = manifestFile,
+            ElectionBaseHash = new ElectionBaseHash(EGParameters.ParameterBaseHash, manifestFile),
             Guardians = guardianPublicViews,
             ElectionPublicKeys = electionPublicKeys,
         };
 
         foreach (var guardian in guardians)
         {
-            guardian.Verify(guardianRecord);
+            guardian.Verify(guardianRecord, manifestFile);
         }
 
         return new GuardianSetResult
@@ -115,17 +126,90 @@ public static class ElectionFixtureBuilder
     }
 
     /// <summary>
+    /// The supplemental fields <see cref="CreateMinimalManifest"/> declares by default: the overvote,
+    /// null-vote and undervote indicators and the undervote difference count (§3.3.9).
+    /// </summary>
+    public static readonly IReadOnlyList<SupplementalFieldKind> DefaultSupplementalFields =
+    [
+        SupplementalFieldKind.OvervoteIndicator,
+        SupplementalFieldKind.NullVoteIndicator,
+        SupplementalFieldKind.UndervoteIndicator,
+        SupplementalFieldKind.UndervoteDifferenceCount,
+    ];
+
+    /// <summary>
+    /// b_Λ that <see cref="CreateMinimalManifest"/> declares for a contest with write-ins: 2 blocks,
+    /// 64 bytes, room for 60 UTF-8 bytes of text after the 4-byte length.
+    /// </summary>
+    public const int DefaultContestDataBlocks = 2;
+
+    /// <summary>Every supplemental field kind of §3.3.9, in declaration order.</summary>
+    public static readonly IReadOnlyList<SupplementalFieldKind> AllSupplementalFields =
+    [
+        SupplementalFieldKind.OvervoteIndicator,
+        SupplementalFieldKind.NullVoteIndicator,
+        SupplementalFieldKind.UndervoteIndicator,
+        SupplementalFieldKind.UndervoteDifferenceCount,
+        SupplementalFieldKind.WriteInCount,
+    ];
+
+    /// <summary>
+    /// Supplemental field declarations for a contest with <paramref name="optionCount"/> options, in
+    /// the order given, with option indices continuing after the options (§3.1.3 p.19).
+    /// </summary>
+    public static List<SupplementalField> SupplementalFields(int optionCount, IEnumerable<SupplementalFieldKind> kinds)
+    {
+        return kinds.Select((kind, position) => new SupplementalField
+        {
+            Id = SupplementalFieldId(kind),
+            Name = kind.ToString(),
+            Index = optionCount + position + 1,
+            Kind = kind,
+        }).ToList();
+    }
+
+    /// <summary>The label the fixtures give a supplemental field of <paramref name="kind"/>.</summary>
+    public static string SupplementalFieldId(SupplementalFieldKind kind) => kind switch
+    {
+        SupplementalFieldKind.OvervoteIndicator => "overvotes",
+        SupplementalFieldKind.NullVoteIndicator => "null-votes",
+        SupplementalFieldKind.UndervoteIndicator => "undervotes",
+        SupplementalFieldKind.UndervoteDifferenceCount => "undervote-difference",
+        SupplementalFieldKind.WriteInCount => "write-ins",
+        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
+    };
+
+    /// <summary>
     /// Builds a small deterministic (non-Bogus) 1-contest, 2-choice manifest plus its serialized
-    /// ManifestFile bytes. Pass includeWriteIns: true and a non-null ContestData string on the
-    /// ballot (see CreateBallot) to exercise the write-in / contest-data path.
+    /// ManifestFile bytes. The contest declares <paramref name="supplementalFields"/>, by default
+    /// <see cref="DefaultSupplementalFields"/> (none when <paramref name="hashTrimmingFunction"/> is
+    /// set: a pre-encrypted election declares none), plus the write-in count when
+    /// <paramref name="includeWriteIns"/>. Pass includeWriteIns: true and a non-null contestData
+    /// string on the ballot (see CreateBallot) to exercise the write-in / contest-data path; the
+    /// contest then offers <paramref name="writeInFieldCount"/> write-in fields (1 by default) and
+    /// declares <paramref name="contestDataBlocks"/> blocks of contest data (b_Λ, §3.3.10), by
+    /// default <see cref="DefaultContestDataBlocks"/> with write-ins and none without.
     /// </summary>
     public static (Manifest Manifest, ManifestFile ManifestFile) CreateMinimalManifest(
         bool includeWriteIns = false,
         ChainingMode chainingMode = ChainingMode.None,
         int optionSelectionLimit = 1,
         int selectionLimit = 1,
-        HashTrimmingFunction? hashTrimmingFunction = null)
+        HashTrimmingFunction? hashTrimmingFunction = null,
+        IReadOnlyList<SupplementalFieldKind>? supplementalFields = null,
+        int? writeInFieldCount = null,
+        int? contestDataBlocks = null)
     {
+        // An election that uses pre-encrypted ballots (a hash-trimming function) cannot declare
+        // supplemental fields (Manifest.Validate, S9), so its default is none.
+        var kinds = (supplementalFields ?? (hashTrimmingFunction is null ? DefaultSupplementalFields : [])).ToList();
+        if (includeWriteIns && !kinds.Contains(SupplementalFieldKind.WriteInCount))
+        {
+            kinds.Add(SupplementalFieldKind.WriteInCount);
+        }
+
+        int writeInFields = writeInFieldCount ?? (kinds.Contains(SupplementalFieldKind.WriteInCount) || includeWriteIns ? 1 : 0);
+
         var manifest = new Manifest
         {
             ElectionId = "test-election-1",
@@ -137,12 +221,16 @@ public static class ElectionFixtureBuilder
                     Name = "Test Contest",
                     SelectionLimit = selectionLimit,
                     OptionSelectionLimit = optionSelectionLimit,
-                    Index = 0,
+                    // §3.1.3: indices are 1-based list positions.
+                    Index = 1,
                     Choices = new List<Choice>
                     {
-                        new Choice { Id = "choice-1", Name = "Choice 1", Index = 0 },
-                        new Choice { Id = "choice-2", Name = "Choice 2", Index = 1 },
+                        new Choice { Id = "choice-1", Name = "Choice 1", Index = 1 },
+                        new Choice { Id = "choice-2", Name = "Choice 2", Index = 2 },
                     },
+                    SupplementalFields = SupplementalFields(2, kinds),
+                    WriteInFieldCount = writeInFields,
+                    ContestDataBlocks = contestDataBlocks ?? (includeWriteIns ? DefaultContestDataBlocks : 0),
                 },
             },
             BallotStyles = new List<BallotStyle>
@@ -154,30 +242,37 @@ public static class ElectionFixtureBuilder
                     ContestIds = new List<string> { "contest-1" },
                 },
             },
-            OptionalContestDataMaxLength = 256,
-            IncludeOvervotes = true,
-            IncludeNullvotes = true,
-            IncludeUndervotes = true,
-            IncludeWriteins = includeWriteIns,
             ChainingMode = chainingMode,
             HashTrimmingFunction = hashTrimmingFunction,
         };
 
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(manifest);
-        var manifestFile = new ManifestFile { Bytes = bytes };
+        // The library's manifest format (ManifestSerializer), which an EncryptionRecord parses its
+        // Manifest from.
+        var manifestFile = ManifestSerializer.ToManifestFile(manifest);
 
         return (manifest, manifestFile);
     }
 
     /// <summary>
     /// Builds the ElectionBaseHash/ExtendedBaseHash/EncryptionRecord layer for a given guardian set
-    /// and manifest (mirrors Program.cs lines 80-100).
+    /// and manifest (mirrors Program.cs). The record parses its manifest from
+    /// <paramref name="manifestFile"/>; <paramref name="manifest"/> is the caller's copy, and must
+    /// be what the file holds (compared in the library's written form), so a test cannot build a
+    /// record over one manifest while reasoning about another. A test that changes its manifest
+    /// object after building the file must build the file again
+    /// (<see cref="ManifestSerializer.ToManifestFile"/>). <c>record.Manifest</c> is the record's own
+    /// parse and is treated as read-only; only a test probing that misuse changes it.
     /// </summary>
     public static EncryptionRecordResult CreateEncryptionRecord(
         GuardianSetResult guardianSet,
         Manifest manifest,
         ManifestFile manifestFile)
     {
+        if (!ManifestSerializer.Serialize(manifest).AsSpan().SequenceEqual(ManifestSerializer.Serialize(ManifestSerializer.Deserialize(manifestFile))))
+        {
+            throw new ArgumentException("The manifest object is not the manifest the manifest file holds; build the file from the manifest (ManifestSerializer.ToManifestFile).", nameof(manifest));
+        }
+
         var electionBaseHash = new ElectionBaseHash(EGParameters.ParameterBaseHash, manifestFile);
         var extendedBaseHash = new ExtendedBaseHash(electionBaseHash, guardianSet.ElectionPublicKeys);
 
@@ -185,10 +280,12 @@ public static class ElectionFixtureBuilder
         {
             CryptographicParameters = EGParameters.CryptographicParameters,
             GuardianParameters = EGParameters.GuardianParameters,
+            ParameterBaseHash = EGParameters.ParameterBaseHash,
+            ManifestFile = manifestFile,
+            ElectionBaseHash = electionBaseHash,
             Guardians = guardianSet.GuardianPublicViews,
             ElectionPublicKeys = guardianSet.ElectionPublicKeys,
             ExtendedBaseHash = extendedBaseHash,
-            Manifest = manifest,
         };
 
         return new EncryptionRecordResult
@@ -203,7 +300,9 @@ public static class ElectionFixtureBuilder
     /// Builds a minimal deterministic Ballot/BallotContest/BallotChoice graph matching the manifest
     /// produced by CreateMinimalManifest (single contest). Supply selectionValuesByChoiceId to mark
     /// specific choices, or leave null/empty for a nullvote. Set numWriteinsSelected/contestData to
-    /// exercise the write-in path.
+    /// exercise the write-in path: <paramref name="contestData"/> is encoded with
+    /// <see cref="ContestDataEncoding.Encode"/> to the contest's b_Λ, so the contest must declare
+    /// contest data.
     /// </summary>
     public static Ballot CreateBallot(
         Manifest manifest,
@@ -233,30 +332,59 @@ public static class ElectionFixtureBuilder
                     Id = contest.Id,
                     Choices = choices,
                     NumWriteinsSelected = numWriteinsSelected,
-                    ContestData = contestData,
+                    ContestData = contestData is null ? null : ContestDataEncoding.Encode(contestData, contest.ContestDataBlocks),
                 },
             },
         };
     }
 
     /// <summary>
-    /// Encrypts a ballot (mirrors Program.cs lines 105-133). Pass previousConfirmationCode to chain
-    /// from a prior ballot on the same device (ChainingMode.Simple); pass null for the first ballot.
+    /// A well-shaped but meaningless encrypted ballot nonce (C_ξB,0 = 1, C_ξB,1 = 32 zero bytes,
+    /// c = v = 0) for hand-built ballots whose tests never decrypt the nonce. Every ballot carries the
+    /// field (§3.3.4); this one would fail the guardians' eq. (38) check.
+    /// </summary>
+    public static EncryptedBallotNonce PlaceholderBallotNonce => new()
+    {
+        C0 = 1,
+        C1 = new byte[BallotNonceEncryption.NonceBytes],
+        Challenge = 0,
+        Response = 0,
+    };
+
+    /// <summary>
+    /// A well-shaped but meaningless chaining field B_C (36 zero bytes: the no-chaining identifier
+    /// and a zero hash) for hand-built ballots whose tests never check a confirmation code. Every
+    /// ballot carries the field (§3.4.4); this one would fail Verification 8.B and 8.D.
+    /// </summary>
+    public static ChainingField PlaceholderChainingField => ChainingField.FromCanonicalBytes(new byte[ChainingField.ByteLength]);
+
+    /// <summary>
+    /// Encrypts a ballot and records it as submitted with <paramref name="status"/> (cast, by
+    /// default), as Program.cs does. Pass previousConfirmationCode to chain from a prior ballot on
+    /// the same device (ChainingMode.Simple); pass null for the first ballot. Pass
+    /// <see cref="BallotStatus.Unrecorded"/> to get the encryptor's output untouched.
     /// </summary>
     public static EncryptedBallot CreateEncryptedBallot(
         EncryptionRecord encryptionRecord,
         string deviceId,
         VotingDeviceInformationHash deviceHash,
         Ballot ballot,
-        ConfirmationCode? previousConfirmationCode = null)
+        ConfirmationCode? previousConfirmationCode = null,
+        BallotStatus status = BallotStatus.Cast)
     {
         var encryptor = new BallotEncryptor(encryptionRecord, deviceId, deviceHash);
-        return encryptor.Encrypt(ballot, previousConfirmationCode);
+        var encryptedBallot = encryptor.Encrypt(ballot, previousConfirmationCode);
+        if (status != BallotStatus.Unrecorded)
+        {
+            encryptedBallot.RecordStatus(status);
+        }
+
+        return encryptedBallot;
     }
 
     /// <summary>
     /// Builds an EncryptedTally for the given manifest and accumulates the given encrypted ballots
-    /// into it (mirrors Program.cs lines 183-187).
+    /// into it (mirrors Program.cs). Only cast ballots are counted.
     /// </summary>
     public static EncryptedTally CreateEncryptedTally(Manifest manifest, params EncryptedBallot[] ballots)
     {
@@ -267,5 +395,29 @@ public static class ElectionFixtureBuilder
         }
 
         return tally;
+    }
+
+    /// <summary>
+    /// Decrypts <paramref name="tally"/> with the first <paramref name="guardianCount"/> guardians of
+    /// <paramref name="guardianSet"/> (k, by default: the realistic and cheapest quorum), through the
+    /// three rounds of the §3.6.5 protocol, as Program.cs and the perf harness do.
+    /// </summary>
+    public static DecryptedTally DecryptTally(
+        GuardianSetResult guardianSet,
+        EncryptedTally tally,
+        EncryptionRecord encryptionRecord,
+        int? guardianCount = null,
+        int maxDegreeOfParallelism = -1)
+    {
+        return new TallyAdmin().Decrypt(TallyGuardians(guardianSet, guardianCount), tally, encryptionRecord, maxDegreeOfParallelism);
+    }
+
+    /// <summary>The first <paramref name="guardianCount"/> (default k) guardians of the set, ready to decrypt.</summary>
+    public static List<TallyGuardian> TallyGuardians(GuardianSetResult guardianSet, int? guardianCount = null)
+    {
+        return guardianSet.Guardians
+            .Take(guardianCount ?? EGParameters.GuardianParameters.K)
+            .Select(guardian => new TallyGuardian(guardian.Index, guardianSet.SecretShares[guardian.Index]))
+            .ToList();
     }
 }

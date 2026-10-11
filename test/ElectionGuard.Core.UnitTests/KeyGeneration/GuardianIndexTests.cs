@@ -56,6 +56,16 @@ public class GuardianIndexTests
         Assert.Equal(3, value);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(int.MinValue)]
+    public void Constructor_IndexBelowOne_Throws(int index)
+    {
+        // §3.2.1: guardians are G_1..G_n. A share for index 0 would be P_i(0) = s_i (audit G5).
+        Assert.Throws<ArgumentOutOfRangeException>(() => new GuardianIndex(index));
+    }
+
     [Fact]
     public void GetHashCode_IsConsistentWithEquals()
     {

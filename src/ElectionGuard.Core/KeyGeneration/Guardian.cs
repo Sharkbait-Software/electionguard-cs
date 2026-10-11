@@ -12,9 +12,13 @@ public class Guardian
 {
     public Guardian(GuardianIndex index)
     {
-        if (index < 0 || index > EGParameters.GuardianParameters.N)
+        ArgumentNullException.ThrowIfNull(index);
+
+        // §3.2.1: guardians are G_1..G_n. GuardianIndex already rejects anything below 1, which
+        // matters most: the share sent to index 0 would be P_i(0) = s_i, the secret key itself.
+        if (index.Index < 1 || index.Index > EGParameters.GuardianParameters.N)
         {
-            throw new ArgumentOutOfRangeException(nameof(index), $"Guardian index must be between 0 and N ({EGParameters.GuardianParameters.N}).");
+            throw new ArgumentOutOfRangeException(nameof(index), index.Index, $"Guardian index must be between 1 and n ({EGParameters.GuardianParameters.N}).");
         }
 
         Index = index;
@@ -64,6 +68,13 @@ public class Guardian
         return _keys;
     }
 
+    /// <summary>
+    /// §3.2.2 share encryption: encrypts P_i(l) and P-hat_i(l) to "each other guardian G_l
+    /// (1 &lt;= l &lt;= n, l != i)". <paramref name="guardians"/> must therefore be exactly the other
+    /// n - 1 guardians, each once. A share is a point on this guardian's secret polynomials, so
+    /// evaluating at an index outside that set is refused outright: index 0 would give away s_i,
+    /// and k extra points would give away the whole polynomial.
+    /// </summary>
     public List<GuardianEncryptedShare> EncryptShares(List<GuardianPublicView> guardians)
     {
         if (_keys == null)
@@ -71,7 +82,12 @@ public class Guardian
             throw new Exception("Keys not generated.");
         }
 
-        _guardians = guardians;
+        ArgumentNullException.ThrowIfNull(guardians);
+        RequireOtherGuardians(guardians.Select(x => x.Index), nameof(guardians), "guardian view");
+
+        // A copy: this guardian's own view of the other guardians' key data, compared with the
+        // guardian record in Verify. The caller's list is left as it was.
+        _guardians = new List<GuardianPublicView>(guardians);
 
         List<GuardianEncryptedShare> encryptedShares = new List<GuardianEncryptedShare>();
 
@@ -82,14 +98,7 @@ public class Guardian
             IntegerModP alpha = keyPair.PublicKey;
 
             IntegerModP beta = MontgomeryModP.PowModP(guardian.CommunicationPublicKey, epsilon);
-            var symmetricKey = EGHash.Hash(EGParameters.ParameterBaseHash,
-                [0x11],
-                Index,
-                guardian.Index,
-                guardian.CommunicationPublicKey,
-                alpha,
-                beta
-                );
+            var symmetricKey = ComputeShareSecretKey(EGParameters.ParameterBaseHash, Index, guardian.Index, guardian.CommunicationPublicKey, alpha, beta);
 
             (byte[] k1, byte[] k2) = ComputeShareEncryptionKeys(symmetricKey, Index, guardian.Index);
 
@@ -128,12 +137,28 @@ public class Guardian
         return encryptedShares;
     }
 
+    /// <summary>
+    /// §3.2.2 share decryption and eq. (24): z_i is the sum of exactly n shares, one from each
+    /// guardian. <paramref name="encryptedShares"/> must therefore hold exactly one share from each
+    /// of the other n - 1 guardians, all addressed to this guardian; a missing or repeated share
+    /// would otherwise give a wrong z_i here and an unattributable decryption failure much later.
+    /// </summary>
     public GuardianSecretShares DecryptShares(List<GuardianEncryptedShare> encryptedShares)
     {
         if (_keys == null)
         {
             throw new Exception("Keys not generated.");
         }
+
+        ArgumentNullException.ThrowIfNull(encryptedShares);
+        foreach (var encryptedShare in encryptedShares)
+        {
+            if (encryptedShare.DestinationIndex != Index)
+            {
+                throw new ArgumentException($"The share from guardian {encryptedShare.SourceIndex.Index} is addressed to guardian {encryptedShare.DestinationIndex.Index}, not to this guardian ({Index.Index}).", nameof(encryptedShares));
+            }
+        }
+        RequireOtherGuardians(encryptedShares.Select(x => x.SourceIndex), nameof(encryptedShares), "share");
 
         _voteEncryptionSharePolynomials = new List<SharePolynomial>();
         _otherBallotDataEncryptionSharePolynomials = new List<SharePolynomial>();
@@ -152,22 +177,16 @@ public class Guardian
 
             if (cBar != encryptedShare.Challenge)
             {
-                throw new InvalidOperationException($"Could not decrypt guardian {encryptedShare.SourceIndex} shares.");
+                throw new InvalidOperationException($"Could not decrypt guardian {encryptedShare.SourceIndex.Index} shares.");
             }
 
             var alpha = new IntegerModP(encryptedShare.C0);
             var beta = MontgomeryModP.PowModP(alpha, _keys.CommunicationKeyPair.SecretKey);
 
-            var k = EGHash.HashModQ(EGParameters.ParameterBaseHash,
-                [0x11],
-                encryptedShare.SourceIndex,
-                encryptedShare.DestinationIndex,
-                _keys.CommunicationKeyPair.PublicKey,
-                alpha,
-                beta
-                ).ToByteArray();
+            // l in eqs. (16)-(18) is this guardian's own index; DestinationIndex was checked equal to it above.
+            var k = ComputeShareSecretKey(EGParameters.ParameterBaseHash, encryptedShare.SourceIndex, Index, _keys.CommunicationKeyPair.PublicKey, alpha, beta);
 
-            (byte[] k1, byte[] k2) = ComputeShareEncryptionKeys(k, encryptedShare.SourceIndex, encryptedShare.DestinationIndex);
+            (byte[] k1, byte[] k2) = ComputeShareEncryptionKeys(k, encryptedShare.SourceIndex, Index);
             byte[] pphPolynomials = encryptedShare.C1.XOR(k1.Concat(k2).ToArray());
             IntegerModQ p = new IntegerModQ(pphPolynomials[..32]);
             IntegerModQ pHat = new IntegerModQ(pphPolynomials[32..]);
@@ -189,79 +208,185 @@ public class Guardian
         };
     }
 
-    public void Verify(GuardianRecord record)
+    /// <summary>
+    /// §3.2.2 "Share verification and the guardian record": this guardian's checks of the
+    /// preliminary guardian record, in the spec's order.
+    /// <list type="number">
+    /// <item>Verification 1 (1.A-1.F), which checks H_P and H_B, then the comparison of the record's
+    /// key data with this guardian's own view through H_G (eq. 27), keyed with H_B.</item>
+    /// <item>Verification 2 for every guardian.</item>
+    /// <item>Verification 3.</item>
+    /// <item>Every share P_i(l) and P-hat_i(l), 1 &lt;= i &lt;= n, against G_i's commitments (eqs. 28, 29).</item>
+    /// </list>
+    /// Verification 1 and steps 2 and 3 throw <see cref="VerificationFailedException"/>; the H_G
+    /// comparison and step 4 throw <see cref="KeyCeremonyException"/>, naming the guardian at fault
+    /// where one can be named.
+    /// </summary>
+    /// <param name="record">The preliminary guardian record the administrator presents.</param>
+    /// <param name="manifestFile">
+    /// This guardian's own copy of the manifest file, if it holds one. Its H_B then keys the
+    /// own-view side of H_G, so a record built over a different manifest fails step 1. Without it,
+    /// both sides are keyed with the record's H_B, which Verification 1.F has just checked against
+    /// the record's manifest file.
+    /// </param>
+    public void Verify(GuardianRecord record, ManifestFile? manifestFile = null)
     {
-        if (_guardians == null || _voteEncryptionSharePolynomials == null || _otherBallotDataEncryptionSharePolynomials == null)
+        if (_keys == null || _guardians == null || _voteEncryptionSharePolynomials == null || _otherBallotDataEncryptionSharePolynomials == null)
         {
             throw new Exception("Don't have original guardian data to compare against the guardian record.");
         }
 
-        // 1. Verify that the guardian record matches original data we received.
-        var originalGuardianViews = _guardians.OrderBy(x => (int)x.Index);
-        var originalElectionPublicKeys = new ElectionPublicKeys(originalGuardianViews.Select(x => x.VoteEncryptionCommitments[0]), originalGuardianViews.Select(x => x.OtherBallotDataEncryptionCommitments[0]));
-        List<byte[]> originalValuesToHash = [
-            [0x13],
-            originalElectionPublicKeys.VoteEncryptionKey,
-            originalElectionPublicKeys.OtherBallotDataEncryptionKey,
-        ];
-        originalValuesToHash.AddRange(originalGuardianViews.SelectMany(x => x.VoteEncryptionCommitments).Select(x => x.ToByteArray()));
-        originalValuesToHash.AddRange(originalGuardianViews.SelectMany(x => x.OtherBallotDataEncryptionCommitments).Select(x => x.ToByteArray()));
-        originalValuesToHash.AddRange(originalGuardianViews.Select(x => x.CommunicationPublicKey.ToByteArray()));
-        var originalValuesHash = EGHash.Hash(EGParameters.ParameterBaseHash, originalValuesToHash.ToArray());
+        ArgumentNullException.ThrowIfNull(record);
 
-        var guardians = record.Guardians.OrderBy(x => (int)x.Index);
-        List<byte[]> valuesToHash = [
-            [0x13],
-            record.ElectionPublicKeys.VoteEncryptionKey,
-            record.ElectionPublicKeys.OtherBallotDataEncryptionKey,
-        ];
-        valuesToHash.AddRange(guardians.SelectMany(x => x.VoteEncryptionCommitments).Select(x => x.ToByteArray()));
-        valuesToHash.AddRange(guardians.SelectMany(x => x.OtherBallotDataEncryptionCommitments).Select(x => x.ToByteArray()));
-        valuesToHash.AddRange(guardians.Select(x => x.CommunicationPublicKey.ToByteArray()));
-        var valuesHash = EGHash.Hash(EGParameters.ParameterBaseHash, valuesToHash.ToArray());
+        // Step 1, second half: "Guardian G_l also verifies the correctness of the base hash H_B by
+        // performing Verification 1." Done first, so that H_B is known good before it keys H_G, and
+        // so that a wrong H_B is reported as 1.F rather than as a key-data mismatch.
+        var parameterVerification = new ParameterVerification();
+        parameterVerification.Verify(record);
 
-        if (!originalValuesHash.SequenceEqual(valuesHash))
+        // Step 1: compare all key data in the record with this guardian's own view, as H_G (eq. 27).
+        // _guardians holds every guardian's public view as this guardian received it, its own included.
+        byte[] ownElectionBaseHash = manifestFile is null
+            ? record.ElectionBaseHash
+            : ElectionBaseHash.Compute(EGParameters.ParameterBaseHash, manifestFile.Bytes);
+        var ownGuardianViews = _guardians.OrderBy(x => x.Index.Index).ToList();
+        foreach (var view in ownGuardianViews)
         {
-            throw new Exception("Original guardian values did not match values in the guardian record.");
+            RequireOwnViewShape(view);
         }
 
-        // Verification 1
-        var parameterVerification = new ParameterVerification();
-        parameterVerification.Verify(record.CryptographicParameters, record.GuardianParameters, record.ParameterBaseHash);
+        var ownElectionPublicKeys = new ElectionPublicKeys(
+            ownGuardianViews.Select(x => x.VoteEncryptionCommitments[0]),
+            ownGuardianViews.Select(x => x.OtherBallotDataEncryptionCommitments[0]));
+        var ownRecordHash = ComputeGuardianRecordHash(ownElectionBaseHash, ownElectionPublicKeys, ownGuardianViews);
+        var recordHash = ComputeGuardianRecordHash(record.ElectionBaseHash, record.ElectionPublicKeys, record.Guardians);
 
-        // Verification 2
+        if (!ownRecordHash.SequenceEqual(recordHash))
+        {
+            throw new KeyCeremonyException(1, null, "Original guardian values did not match values in the guardian record.");
+        }
+
+        // Step 2: Verification 2, which also requires the record to hold exactly G_1..G_n.
         var guardianVerification = new GuardianPublicKeyVerification();
         guardianVerification.Verify(record.Guardians);
 
-        // Verification 3
+        // Step 3: Verification 3.
         var electionKeyVerification = new ElectionPublicKeyVerification();
         electionKeyVerification.Verify(record.Guardians, record.ElectionPublicKeys);
 
-        // Verify decrypted shares against that guardians' commitments.
-        foreach (var polynomial in _voteEncryptionSharePolynomials)
+        // Step 4: every share against its sender's commitments, "for all 1 <= i <= n" (eqs. 28, 29),
+        // this guardian's own P_l(l) included. DecryptShares took exactly one share from each other
+        // guardian and Verification 2 has just required one record entry per guardian, so each
+        // lookup below finds exactly one.
+        for (int i = 1; i <= EGParameters.GuardianParameters.N; i++)
         {
-            IntegerModP p = MontgomeryModP.PowModP(EGParameters.G, polynomial.Value);
-            IntegerModP p2 = guardians.Single(x => x.Index == polynomial.SourceIndex)
-                .VoteEncryptionCommitments
-                    .Select((x, j) => IntegerModP.PowModP(x, BigInteger.Pow(Index.Index, j)))
-                .Product();
-            if (p != p2)
+            var source = new GuardianIndex(i);
+            var sender = record.Guardians.Single(x => x.Index == source);
+
+            var share = _voteEncryptionSharePolynomials.Single(x => x.SourceIndex == source);
+            if (MontgomeryModP.PowModP(EGParameters.G, share.Value) != EvaluateCommitments(sender.VoteEncryptionCommitments, Index))
             {
-                throw new Exception($"Could not verify vote encryption polynomial against commitments for index: {polynomial.SourceIndex.Index}.");
+                throw new KeyCeremonyException(4, source, $"Could not verify vote encryption polynomial against commitments for index: {i}.");
+            }
+
+            var shareHat = _otherBallotDataEncryptionSharePolynomials.Single(x => x.SourceIndex == source);
+            if (MontgomeryModP.PowModP(EGParameters.G, shareHat.Value) != EvaluateCommitments(sender.OtherBallotDataEncryptionCommitments, Index))
+            {
+                throw new KeyCeremonyException(4, source, $"Could not verify other ballot data encryption polynomial against commitments for index: {i}.");
             }
         }
+    }
 
-        foreach (var polynomial in _otherBallotDataEncryptionSharePolynomials)
+    /// <summary>
+    /// Step 1 compares key data of a fixed shape: k commitments K_{i,0..k-1} and k commitments
+    /// K-hat_{i,0..k-1} per guardian (eqs. 9, 10, 27). EncryptShares reads only a peer view's index
+    /// and communication key, so a view of any other shape reaches Verify unchecked. It is reported
+    /// here, against the guardian whose view it is, before K = prod K_{i,0} indexes into it; the
+    /// record's own shape is Verification 2's to check (2.A).
+    /// </summary>
+    private static void RequireOwnViewShape(GuardianPublicView view)
+    {
+        int k = EGParameters.GuardianParameters.K;
+        int voteCount = view.VoteEncryptionCommitments?.Count ?? 0;
+        int ballotDataCount = view.OtherBallotDataEncryptionCommitments?.Count ?? 0;
+
+        if (voteCount != k || ballotDataCount != k)
         {
-            IntegerModP p = MontgomeryModP.PowModP(EGParameters.G, polynomial.Value);
-            IntegerModP p2 = guardians.Single(x => x.Index == polynomial.SourceIndex)
-                .OtherBallotDataEncryptionCommitments
-                    .Select((x, j) => IntegerModP.PowModP(x, BigInteger.Pow(Index.Index, j)))
-                .Product();
-            if (p != p2)
+            throw new KeyCeremonyException(1, view.Index, $"The view this guardian received of guardian {view.Index.Index} has {voteCount} vote encryption and {ballotDataCount} other ballot data encryption commitments; k = {k} of each are required.");
+        }
+    }
+
+    /// <summary>
+    /// Eq. (14): g^{P_i(l)} = prod_j K_{i,j}^(l^j) mod p, from the published commitments alone. The
+    /// exponents l^j are small public values (Note 3.3), so this is a plain ModPow.
+    /// </summary>
+    private static IntegerModP EvaluateCommitments(List<IntegerModP> commitments, int l)
+    {
+        return commitments
+            .Select((x, j) => IntegerModP.PowModP(x, BigInteger.Pow(l, j)))
+            .Product();
+    }
+
+    /// <summary>
+    /// §3.2.2 eq. (27): H_G = H(H_B; 0x13, K, K-hat, K_{1,0}, ..., K_{n,k-1}, K-hat_{1,0}, ...,
+    /// K-hat_{n,k-1}, kappa_1, ..., kappa_n), the comparison hash of a guardian record's key data,
+    /// 1 + (2 + 2nk + n) * 512 bytes hashed (§5.5.2). Guardians are taken in index order whatever
+    /// order <paramref name="guardians"/> lists them in, and each guardian's commitments in list
+    /// order (j = 0..k-1). It hashes what it is given; the shape of the set is Verification 2's to
+    /// check.
+    /// </summary>
+    internal static byte[] ComputeGuardianRecordHash(byte[] electionBaseHash, ElectionPublicKeys electionPublicKeys, IEnumerable<GuardianPublicView> guardians)
+    {
+        var ordered = guardians.OrderBy(x => x.Index.Index).ToList();
+
+        List<byte[]> valuesToHash = [
+            [0x13],
+            electionPublicKeys.VoteEncryptionKey,
+            electionPublicKeys.OtherBallotDataEncryptionKey,
+        ];
+        valuesToHash.AddRange(ordered.SelectMany(x => x.VoteEncryptionCommitments).Select(x => x.ToByteArray()));
+        valuesToHash.AddRange(ordered.SelectMany(x => x.OtherBallotDataEncryptionCommitments).Select(x => x.ToByteArray()));
+        valuesToHash.AddRange(ordered.Select(x => x.CommunicationPublicKey.ToByteArray()));
+
+        return EGHash.Hash(electionBaseHash, valuesToHash.ToArray());
+    }
+
+    /// <summary>
+    /// Requires <paramref name="indices"/> to be exactly {1..n} minus this guardian's own index, each
+    /// once: one entry for every other guardian G_l, 1 &lt;= l &lt;= n, l != i (§3.2.2).
+    /// </summary>
+    private void RequireOtherGuardians(IEnumerable<GuardianIndex> indices, string parameterName, string what)
+    {
+        int n = EGParameters.GuardianParameters.N;
+        var seen = new bool[n + 1];
+        int count = 0;
+
+        foreach (var index in indices)
+        {
+            int l = index.Index;
+            if (l < 1 || l > n)
             {
-                throw new Exception($"Could not verify other ballot data encryption polynomial against commitments for index: {polynomial.SourceIndex.Index}.");
+                throw new ArgumentException($"A {what} for guardian {l} was given, but guardian indices run from 1 to n ({n}).", parameterName);
             }
+
+            if (l == Index.Index)
+            {
+                throw new ArgumentException($"A {what} for this guardian itself ({l}) was given; only the other guardians take part here.", parameterName);
+            }
+
+            if (seen[l])
+            {
+                throw new ArgumentException($"More than one {what} for guardian {l} was given.", parameterName);
+            }
+
+            seen[l] = true;
+            count++;
+        }
+
+        if (count != n - 1)
+        {
+            var missing = Enumerable.Range(1, n).Where(l => l != Index.Index && !seen[l]);
+            throw new ArgumentException($"Expected a {what} from each of the other {n - 1} guardians; missing guardian(s) {string.Join(", ", missing)}.", parameterName);
         }
     }
 
@@ -278,6 +403,24 @@ public class Guardian
         }
         return result;
         //return keyPairs.Select((x, j) => new IntegerModQ(x.SecretKey * BigInteger.Pow(destinationGuardianIndex, j))).Sum();
+    }
+
+    /// <summary>
+    /// §3.2.2 eq. (16): the secret key k_{i,l} = H(H_P; 0x11, b(i, 4), b(l, 4), kappa_l, alpha, beta)
+    /// from which guardian i's share encryption keys for guardian l are derived, 1545 bytes hashed
+    /// (§5.5.2). It is a full 32-byte H, not H_q: both the encrypting and the decrypting guardian
+    /// come through here so that they cannot derive it differently.
+    /// </summary>
+    internal static byte[] ComputeShareSecretKey(byte[] parameterBaseHash, int sourceIndex, int destinationIndex, IntegerModP destinationCommunicationKey, IntegerModP alpha, IntegerModP beta)
+    {
+        return EGHash.Hash(parameterBaseHash,
+            [0x11],
+            sourceIndex.ToByteArray(),
+            destinationIndex.ToByteArray(),
+            destinationCommunicationKey,
+            alpha,
+            beta
+            );
     }
 
     private (byte[] k1, byte[] k2) ComputeShareEncryptionKeys(byte[] symmetricKey, GuardianIndex sourceIndex, GuardianIndex destinationIndex)
